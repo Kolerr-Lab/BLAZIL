@@ -1,0 +1,28 @@
+[package]
+name = "blazil-ledger"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# Gate the real TigerBeetle client behind a feature flag so that
+# `cargo check/test` does not require downloading and compiling
+# TigerBeetle (a Zig-based build) on every developer machine.
+# Enable with: cargo build --features blazil-ledger/tigerbeetle-client
+tigerbeetle-client = ["dep:tigerbeetle-unofficial"]
+
+[dependencies]
+blazil-common = { path = "../common" }
+tokio = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+async-trait = "0.1"
+rust_decimal = { version = "1", features = ["serde"] }
+iso_currency = "0.4"
+
+[dependencies.tigerbeetle-unofficial]
+version = "0.14"
+optional = true

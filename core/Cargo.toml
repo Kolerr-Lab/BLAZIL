@@ -1,0 +1,9 @@
+[workspace]
+resolver = "2"
+members = [
+    "engine",
+    "transport",
+    "ledger",
+    "risk",
+    "common",
+]

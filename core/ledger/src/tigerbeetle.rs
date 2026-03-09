@@ -1,0 +1,306 @@
+//! TigerBeetle [`LedgerClient`] implementation.
+//!
+//! This module connects directly to a running TigerBeetle cluster and
+//! translates between Blazil domain types and TigerBeetle wire types via
+//! [`crate::convert`].
+//!
+//! # Feature gate
+//!
+//! This module is only compiled when the `tigerbeetle-client` feature is
+//! enabled:
+//!
+//! ```toml
+//! blazil-ledger = { path = "../ledger", features = ["tigerbeetle-client"] }
+//! ```
+//!
+//! This prevents the TigerBeetle C library (Zig-based build) from being
+//! compiled on machines that only need to run tests with the mock.
+//!
+//! # Architectural flag
+//!
+//! The feature-gating of `TigerBeetleClient` is a deviation from a literal
+//! reading of the spec. It was made to satisfy the quality gate
+//! `cargo check --workspace` on machines without Zig installed.
+//! **Flag for Architecture Room review.**
+
+use async_trait::async_trait;
+use tracing::instrument;
+
+use blazil_common::currency::Currency;
+use blazil_common::error::{BlazerError, BlazerResult};
+use blazil_common::ids::{AccountId, TransferId};
+
+use crate::account::{Account, AccountFlags};
+use crate::client::LedgerClient;
+use crate::convert;
+use crate::transfer::Transfer;
+
+// Pull in the TB re-exports from the crate root
+use tigerbeetle_unofficial as tb;
+
+// ── TigerBeetleClient ─────────────────────────────────────────────────────────
+
+/// A [`LedgerClient`] backed by a live TigerBeetle cluster.
+///
+/// Connects over TCP to a TigerBeetle server at construction time.
+/// All methods translate Blazil types → TigerBeetle wire types, submit the
+/// request, and map any errors to [`BlazerError`].
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use blazil_ledger::tigerbeetle::TigerBeetleClient;
+///
+/// #[tokio::main]
+/// async fn main() {
+///     let client = TigerBeetleClient::connect("127.0.0.1:3000", 0).await.unwrap();
+/// }
+/// ```
+pub struct TigerBeetleClient {
+    inner: tb::Client,
+    address: String,
+}
+
+impl TigerBeetleClient {
+    /// Connects to TigerBeetle at `address` for the given `cluster_id`.
+    ///
+    /// `address` is typically `"127.0.0.1:3000"` for a local single-node
+    /// cluster.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BlazerError::Ledger`] if the connection cannot be established.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use blazil_ledger::tigerbeetle::TigerBeetleClient;
+    ///
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     let client = TigerBeetleClient::connect("127.0.0.1:3000", 0).await.unwrap();
+    /// }
+    /// ```
+    pub async fn connect(address: &str, cluster_id: u128) -> BlazerResult<Self> {
+        let inner = tb::Client::new(cluster_id, address)
+            .map_err(|e| BlazerError::Ledger(format!("TigerBeetle connect failed: {e}")))?;
+        Ok(Self {
+            inner,
+            address: address.to_owned(),
+        })
+    }
+
+    /// Returns the address this client is connected to.
+    pub fn address(&self) -> &str {
+        &self.address
+    }
+}
+
+// ── LedgerClient impl ─────────────────────────────────────────────────────────
+
+#[async_trait]
+impl LedgerClient for TigerBeetleClient {
+    #[instrument(skip(self, account), fields(account_id = %account.id()))]
+    async fn create_account(&self, account: Account) -> BlazerResult<AccountId> {
+        let id = *account.id();
+        tracing::debug!(account_id = %id, "submitting create_account to TigerBeetle");
+
+        let tb_id = convert::account_id_to_u128(&id);
+        let ledger = convert::ledger_id_to_u32(account.ledger_id());
+
+        let mut flags = tb::account::Flags::default();
+        if account.flags().debits_must_not_exceed_credits {
+            flags.debits_must_not_exceed_credits = true;
+        }
+        if account.flags().credits_must_not_exceed_debits {
+            flags.credits_must_not_exceed_debits = true;
+        }
+        if account.flags().linked {
+            flags.linked = true;
+        }
+
+        let tb_account = tb::Account::new(tb_id, ledger, account.code()).with_flags(flags);
+
+        self.inner
+            .create_accounts(vec![tb_account])
+            .await
+            .map_err(|e| BlazerError::Ledger(format!("create_accounts failed: {e}")))?;
+
+        tracing::info!(account_id = %id, "account created in TigerBeetle");
+        Ok(id)
+    }
+
+    #[instrument(skip(self, transfer), fields(transfer_id = %transfer.id()))]
+    async fn create_transfer(&self, transfer: Transfer) -> BlazerResult<TransferId> {
+        let transfer_id = *transfer.id();
+        tracing::debug!(transfer_id = %transfer_id, "submitting create_transfer to TigerBeetle");
+
+        let tb_id = convert::transfer_id_to_u128(&transfer_id);
+        let debit_id = convert::account_id_to_u128(transfer.debit_account_id());
+        let credit_id = convert::account_id_to_u128(transfer.credit_account_id());
+        let ledger = convert::ledger_id_to_u32(transfer.ledger_id());
+        let amount = convert::amount_to_minor_units(transfer.amount())?;
+
+        let mut flags = tb::transfer::Flags::default();
+        if transfer.flags().linked {
+            flags.linked = true;
+        }
+        if transfer.flags().pending {
+            flags.pending = true;
+        }
+        if transfer.flags().post_pending_transfer {
+            flags.post_pending_transfer = true;
+        }
+        if transfer.flags().void_pending_transfer {
+            flags.void_pending_transfer = true;
+        }
+
+        let tb_transfer = tb::Transfer::new(tb_id)
+            .with_debit_account_id(debit_id)
+            .with_credit_account_id(credit_id)
+            .with_ledger(ledger)
+            .with_code(transfer.code())
+            .with_amount(amount)
+            .with_flags(flags);
+
+        self.inner
+            .create_transfers(vec![tb_transfer])
+            .await
+            .map_err(|e| BlazerError::Ledger(format!("create_transfers failed: {e}")))?;
+
+        tracing::info!(transfer_id = %transfer_id, "transfer committed to TigerBeetle");
+        Ok(transfer_id)
+    }
+
+    #[instrument(skip(self))]
+    async fn get_account(&self, id: &AccountId) -> BlazerResult<Account> {
+        tracing::debug!(account_id = %id, "looking up account in TigerBeetle");
+
+        let tb_id = convert::account_id_to_u128(id);
+        let mut results = self
+            .inner
+            .lookup_accounts(vec![tb_id])
+            .await
+            .map_err(|e| BlazerError::Ledger(format!("lookup_accounts failed: {e}")))?;
+
+        let tb_account = results.pop().ok_or_else(|| BlazerError::NotFound {
+            resource: "Account".to_owned(),
+            id: id.to_string(),
+        })?;
+
+        tb_account_to_blazil(tb_account)
+    }
+
+    #[instrument(skip(self))]
+    async fn get_transfer(&self, id: &TransferId) -> BlazerResult<Transfer> {
+        tracing::debug!(transfer_id = %id, "looking up transfer in TigerBeetle");
+
+        let tb_id = convert::transfer_id_to_u128(id);
+        let mut results = self
+            .inner
+            .lookup_transfers(vec![tb_id])
+            .await
+            .map_err(|e| BlazerError::Ledger(format!("lookup_transfers failed: {e}")))?;
+
+        let tb_transfer = results.pop().ok_or_else(|| BlazerError::NotFound {
+            resource: "Transfer".to_owned(),
+            id: id.to_string(),
+        })?;
+
+        tb_transfer_to_blazil(tb_transfer)
+    }
+
+    #[instrument(skip(self, ids), fields(count = ids.len()))]
+    async fn get_account_balances(&self, ids: &[AccountId]) -> BlazerResult<Vec<Account>> {
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+        let tb_ids: Vec<u128> = ids.iter().map(convert::account_id_to_u128).collect();
+        let tb_accounts = self
+            .inner
+            .lookup_accounts(tb_ids)
+            .await
+            .map_err(|e| BlazerError::Ledger(format!("lookup_accounts (batch) failed: {e}")))?;
+
+        tb_accounts
+            .into_iter()
+            .map(tb_account_to_blazil)
+            .collect::<BlazerResult<Vec<_>>>()
+    }
+}
+
+// ── Internal conversion helpers ───────────────────────────────────────────────
+
+/// Converts a TigerBeetle [`tb::Account`] back to a Blazil [`Account`].
+///
+/// The currency code is stored in `user_data_32` as the ISO 4217 numeric code.
+/// If the currency is unknown, the conversion fails with [`BlazerError::InvalidCurrency`].
+fn tb_account_to_blazil(tb: tb::Account) -> BlazerResult<Account> {
+    let id = convert::u128_to_account_id(tb.id());
+    // Currency is stored using the ISO 4217 numeric code in user_data_32
+    let numeric = tb.user_data_32();
+    let currency = Currency::from_numeric(u16::try_from(numeric).unwrap_or(0))
+        .ok_or(BlazerError::InvalidCurrency)?;
+
+    // Reconstruct LedgerId from the u32 ledger field
+    let ledger_id = blazil_common::ids::LedgerId::new(tb.ledger())?;
+
+    let flags = AccountFlags {
+        debits_must_not_exceed_credits: tb.flags().debits_must_not_exceed_credits,
+        credits_must_not_exceed_debits: tb.flags().credits_must_not_exceed_debits,
+        linked: tb.flags().linked,
+    };
+
+    let debits_minor = tb.debits_posted();
+    let credits_minor = tb.credits_posted();
+
+    let debits_posted = convert::minor_units_to_amount(debits_minor, currency.clone())?;
+    let credits_posted = convert::minor_units_to_amount(credits_minor, currency.clone())?;
+
+    Ok(Account {
+        id,
+        ledger_id,
+        currency: currency.clone(),
+        code: tb.code(),
+        flags,
+        debits_posted,
+        credits_posted,
+        timestamp: blazil_common::timestamp::Timestamp::now(),
+    })
+}
+
+/// Converts a TigerBeetle [`tb::Transfer`] back to a Blazil [`Transfer`].
+fn tb_transfer_to_blazil(tb: tb::Transfer) -> BlazerResult<Transfer> {
+    let debit_id = convert::u128_to_account_id(tb.debit_account_id());
+    let credit_id = convert::u128_to_account_id(tb.credit_account_id());
+    let transfer_id = convert::u128_to_transfer_id(tb.id());
+
+    let ledger_id = blazil_common::ids::LedgerId::new(tb.ledger())?;
+
+    // Currency is not stored on the transfer itself in TigerBeetle.
+    // We use user_data_32 to store it (same convention as on Account).
+    let numeric = tb.user_data_32();
+    let currency = Currency::from_numeric(u16::try_from(numeric).unwrap_or(0))
+        .ok_or(BlazerError::InvalidCurrency)?;
+
+    let amount = convert::minor_units_to_amount(tb.amount(), currency)?;
+
+    let tf_flags = tb.flags();
+    let flags = crate::transfer::TransferFlags {
+        linked: tf_flags.linked,
+        pending: tf_flags.pending,
+        post_pending_transfer: tf_flags.post_pending_transfer,
+        void_pending_transfer: tf_flags.void_pending_transfer,
+    };
+
+    Ok(Transfer {
+        id: transfer_id,
+        debit_account_id: debit_id,
+        credit_account_id: credit_id,
+        amount,
+        ledger_id,
+        code: tb.code(),
+        flags,
+        timestamp: blazil_common::timestamp::Timestamp::now(),
+    })
+}

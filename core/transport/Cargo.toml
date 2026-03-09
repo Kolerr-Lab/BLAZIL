@@ -1,0 +1,20 @@
+[package]
+name = "blazil-transport"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+blazil-common  = { path = "../common" }
+blazil-engine  = { path = "../engine" }
+tokio          = { workspace = true }
+serde          = { workspace = true }
+tracing        = { workspace = true }
+thiserror      = { workspace = true }
+async-trait    = "0.1"
+rmp-serde      = "1"
+rust_decimal   = { version = "1", features = ["serde"] }
+
+[dev-dependencies]
+blazil-ledger  = { path = "../ledger" }

@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members = [
+    "core/engine",
+    "core/transport",
+    "core/ledger",
+    "core/risk",
+    "core/common",
+    "bench",
+]
+
+[workspace.package]
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/blazil/blazil"
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+anyhow = "1"
+bytes = "1"
+uuid = { version = "1", features = ["v4"] }
+criterion = "0.5"

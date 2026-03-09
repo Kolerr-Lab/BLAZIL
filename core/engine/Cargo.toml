@@ -1,0 +1,15 @@
+[package]
+name = "blazil-engine"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+blazil-common = { path = "../common" }
+blazil-ledger  = { path = "../ledger" }
+tokio          = { workspace = true }
+serde          = { workspace = true }
+thiserror      = { workspace = true }
+tracing        = { workspace = true }
+rust_decimal   = { version = "1", features = ["serde"] }

@@ -1,0 +1,37 @@
+version: '3.9'
+
+networks:
+  blazil-test:
+    driver: bridge
+
+services:
+  tigerbeetle:
+    image: ghcr.io/tigerbeetle/tigerbeetle:latest
+    container_name: blazil-test-tigerbeetle
+    networks:
+      - blazil-test
+    ports:
+      - "3010:3000"
+    command: start --addresses=0.0.0.0:3000 /data/0_0.tigerbeetle
+    tmpfs:
+      - /data
+
+  redpanda:
+    image: redpandadata/redpanda:latest
+    container_name: blazil-test-redpanda
+    networks:
+      - blazil-test
+    ports:
+      - "9192:9092"
+    command:
+      - redpanda
+      - start
+      - --kafka-addr internal://0.0.0.0:9092
+      - --advertise-kafka-addr internal://redpanda:9092
+      - --rpc-addr redpanda:33145
+      - --advertise-rpc-addr redpanda:33145
+      - --smp 1
+      - --memory 512M
+      - --mode dev-container
+    tmpfs:
+      - /var/lib/redpanda/data

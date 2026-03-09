@@ -1,0 +1,45 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'blazil-dev'
+    environment: 'development'
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: 'otel-collector'
+    static_configs:
+      - targets: ['otel-collector:8888']
+
+  - job_name: 'blazil-gateway'
+    static_configs:
+      - targets: ['gateway:8080']
+    metrics_path: '/metrics'
+
+  - job_name: 'blazil-payments'
+    static_configs:
+      - targets: ['payments:8080']
+    metrics_path: '/metrics'
+
+  - job_name: 'blazil-banking'
+    static_configs:
+      - targets: ['banking:8080']
+    metrics_path: '/metrics'
+
+  - job_name: 'blazil-trading'
+    static_configs:
+      - targets: ['trading:8080']
+    metrics_path: '/metrics'
+
+  - job_name: 'blazil-crypto'
+    static_configs:
+      - targets: ['crypto:8080']
+    metrics_path: '/metrics'
+
+  - job_name: 'blazil-compliance'
+    static_configs:
+      - targets: ['compliance:8080']
+    metrics_path: '/metrics'
