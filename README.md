@@ -9,7 +9,7 @@
 
 > **Open-source financial infrastructure at the speed of fire**
 
-[![Build Status](https://github.com/blazil/blazil/actions/workflows/ci.yml/badge.svg)](https://github.com/blazil/blazil/actions)
+[![Build Status](https://github.com/Kolerr-Lab/BLAZIL/actions/workflows/ci.yml/badge.svg)](https://github.com/Kolerr-Lab/BLAZIL/actions)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-stable%20%7C%202021-orange.svg)](https://www.rust-lang.org)
 [![Go](https://img.shields.io/badge/go-1.22+-00ADD8.svg)](https://go.dev)
@@ -116,8 +116,8 @@ cargo build --workspace && cd services && go build ./...
 
 ```bash
 # Clone and setup
-git clone https://github.com/blazil/blazil.git
-cd blazil
+git clone https://github.com/Kolerr-Lab/BLAZIL.git
+cd BLAZIL
 ./scripts/setup.sh
 ```
 

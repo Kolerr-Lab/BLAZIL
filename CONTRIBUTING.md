@@ -22,8 +22,8 @@ By participating in this project, you agree to treat all contributors with respe
 1. Fork the repository on GitHub
 2. Clone your fork locally:
    ```bash
-   git clone https://github.com/YOUR_USERNAME/blazil.git
-   cd blazil
+   git clone https://github.com/YOUR_USERNAME/BLAZIL.git
+   cd BLAZIL
    ```
 3. Set up the development environment:
    ```bash
