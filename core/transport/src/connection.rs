@@ -262,11 +262,18 @@ fn build_response(request_id: &str, result: TransactionResult) -> TransactionRes
 
 /// Constructs an error rejection response.
 fn error_response(request_id: &str, err: &BlazerError) -> TransactionResponse {
+    let error_message = match err {
+        BlazerError::RingBufferFull { retry_after_ms } => {
+            format!("server busy, retry after {}ms", retry_after_ms)
+        }
+        _ => err.to_string(),
+    };
+
     TransactionResponse {
         request_id: request_id.to_owned(),
         committed: false,
         transfer_id: None,
-        error: Some(err.to_string()),
+        error: Some(error_message),
         timestamp_ns: Timestamp::now().as_nanos(),
     }
 }

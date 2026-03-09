@@ -45,7 +45,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use blazil_common::error::BlazerResult;
+use blazil_common::error::{BlazerError, BlazerResult};
 use tracing::instrument;
 
 use crate::event::TransactionEvent;
@@ -193,6 +193,11 @@ impl Pipeline {
     /// cause data races.
     #[instrument(skip(self, event), fields(transaction_id = %event.transaction_id))]
     pub fn publish_event(&self, event: TransactionEvent) -> BlazerResult<i64> {
+        // Check if ring buffer has capacity before claiming a slot.
+        if !self.ring_buffer.has_available_capacity() {
+            return Err(BlazerError::RingBufferFull { retry_after_ms: 1 });
+        }
+
         let seq = self.ring_buffer.next_sequence();
 
         // SAFETY: single producer — we just claimed `seq` via `next_sequence()`.
@@ -264,6 +269,9 @@ impl PipelineRunner {
                             handler.on_event(event, consumer_seq, end_of_batch);
                         }
                     }
+                    // Update the gating sequence to allow the producer to advance.
+                    // This prevents the producer from lapping the consumer.
+                    self.ring_buffer.gating_sequence().set(consumer_seq);
                 } else if self.shutdown.load(Ordering::Acquire) {
                     // Check shutdown only when idle to avoid splitting a batch.
                     break;

@@ -85,6 +85,14 @@ pub struct RingBuffer {
     /// the slot has been fully written (Release store), establishing a
     /// happens-before with any subsequent Acquire load by the runner.
     cursor: Arc<Sequence>,
+    /// The slowest consumer's sequence position (gating sequence).
+    ///
+    /// Used to prevent the producer from lapping consumers. When
+    /// (claim - gating_sequence) >= capacity, the ring buffer is full
+    /// and publish_event must return RingBufferFull.
+    ///
+    /// Wrapped in `Arc` so the consumer (PipelineRunner) can update it.
+    gating_sequence: Arc<Sequence>,
 }
 
 // SAFETY: RingBuffer uses the single-writer principle enforced at the call
@@ -125,6 +133,7 @@ impl RingBuffer {
         let mask = capacity - 1;
         let claim = Sequence::new(Sequence::INITIAL_VALUE);
         let cursor = Arc::new(Sequence::new(Sequence::INITIAL_VALUE));
+        let gating_sequence = Arc::new(Sequence::new(Sequence::INITIAL_VALUE));
 
         // Pre-allocate all slots. Use `with_capacity` + extend to avoid
         // excess reallocation. Each slot contains a default TransactionEvent.
@@ -140,6 +149,7 @@ impl RingBuffer {
             mask,
             claim,
             cursor,
+            gating_sequence,
         })
     }
 
@@ -236,6 +246,46 @@ impl RingBuffer {
     #[inline]
     pub fn cursor(&self) -> &Arc<Sequence> {
         &self.cursor
+    }
+
+    /// Returns a reference to the gating sequence `Arc<Sequence>`.
+    ///
+    /// The gating sequence represents the slowest consumer's position.
+    /// Consumers (PipelineRunner) update this as they process events to
+    /// prevent the producer from lapping them.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use blazil_engine::ring_buffer::RingBuffer;
+    /// use blazil_engine::sequence::Sequence;
+    ///
+    /// let rb = RingBuffer::new(64).unwrap();
+    /// assert_eq!(rb.gating_sequence().get(), Sequence::INITIAL_VALUE);
+    /// ```
+    #[inline]
+    pub fn gating_sequence(&self) -> &Arc<Sequence> {
+        &self.gating_sequence
+    }
+
+    /// Checks if the ring buffer has available capacity for the producer
+    /// to claim a new slot without lapping the slowest consumer.
+    ///
+    /// Returns `true` if there is space, `false` if the buffer is full.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use blazil_engine::ring_buffer::RingBuffer;
+    ///
+    /// let rb = RingBuffer::new(64).unwrap();
+    /// assert!(rb.has_available_capacity()); // empty buffer has capacity
+    /// ```
+    #[inline]
+    pub fn has_available_capacity(&self) -> bool {
+        let next_claim = self.claim.get() + 1;
+        let gate = self.gating_sequence.get();
+        (next_claim - gate) < self.capacity as i64
     }
 
     /// Returns the ring buffer capacity.

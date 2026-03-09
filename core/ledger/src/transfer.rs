@@ -167,6 +167,34 @@ impl Transfer {
         Ok(transfer)
     }
 
+    /// Creates a Transfer from raw ledger data. Used when reconstructing a
+    /// Transfer returned by TigerBeetle, where the data was already validated
+    /// on write and flags may include non-default values.
+    ///
+    /// TigerBeetle guarantees that stored data satisfies all structural
+    /// invariants, so validation is intentionally skipped here.
+    #[cfg(feature = "tigerbeetle-client")]
+    pub(crate) fn from_ledger(
+        id: TransferId,
+        debit_account_id: AccountId,
+        credit_account_id: AccountId,
+        amount: Amount,
+        ledger_id: LedgerId,
+        code: u16,
+        flags: TransferFlags,
+    ) -> Self {
+        Self {
+            id,
+            debit_account_id,
+            credit_account_id,
+            amount,
+            ledger_id,
+            code,
+            flags,
+            timestamp: Timestamp::now(),
+        }
+    }
+
     /// Creates a transfer **without** validation. Only for internal test helpers
     /// that need to construct invalid transfers (e.g. self-transfers) to verify
     /// that downstream validators reject them correctly.

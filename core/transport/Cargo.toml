@@ -17,4 +17,4 @@ rmp-serde      = "1"
 rust_decimal   = { version = "1", features = ["serde"] }
 
 [dev-dependencies]
-blazil-ledger  = { path = "../ledger" }
+blazil-ledger  = { path = "../ledger", features = ["tigerbeetle-client"] }

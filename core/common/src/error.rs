@@ -107,6 +107,11 @@ pub enum BlazerError {
     #[error("Transport error: {0}")]
     Transport(String),
 
+    /// Ring buffer is at capacity.
+    /// Client should retry after the specified delay.
+    #[error("Ring buffer full — retry after {retry_after_ms}ms")]
+    RingBufferFull { retry_after_ms: u64 },
+
     // ── Ledger errors ────────────────────────────────────────────────────────
     /// An error was returned from the TigerBeetle ledger layer.
     #[error("Ledger error: {0}")]
