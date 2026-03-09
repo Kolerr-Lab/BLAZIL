@@ -290,8 +290,8 @@ impl<'de> serde::Deserialize<'de> for Amount {
 
         let value = Decimal::from_str(&helper.value).map_err(serde::de::Error::custom)?;
 
-        let currency = crate::currency::parse_currency(&helper.currency)
-            .map_err(serde::de::Error::custom)?;
+        let currency =
+            crate::currency::parse_currency(&helper.currency).map_err(serde::de::Error::custom)?;
 
         Amount::new(value, currency).map_err(serde::de::Error::custom)
     }
@@ -360,7 +360,7 @@ mod tests {
     #[test]
     fn checked_add_same_currency_returns_correct_result() {
         let a = Amount::new(Decimal::new(10_000, 2), usd()).unwrap(); // 100.00
-        let b = Amount::new(Decimal::new(5_000, 2), usd()).unwrap();  //  50.00
+        let b = Amount::new(Decimal::new(5_000, 2), usd()).unwrap(); //  50.00
         let sum = a.checked_add(b).unwrap();
         assert_eq!(sum.value(), Decimal::new(15_000, 2)); // 150.00
         assert_eq!(*sum.currency(), usd());
@@ -383,7 +383,7 @@ mod tests {
     #[test]
     fn checked_sub_with_sufficient_funds_returns_correct_result() {
         let a = Amount::new(Decimal::new(10_000, 2), usd()).unwrap(); // 100.00
-        let b = Amount::new(Decimal::new(3_000, 2), usd()).unwrap();  //  30.00
+        let b = Amount::new(Decimal::new(3_000, 2), usd()).unwrap(); //  30.00
         let diff = a.checked_sub(b).unwrap();
         assert_eq!(diff.value(), Decimal::new(7_000, 2)); // 70.00
     }
@@ -398,7 +398,7 @@ mod tests {
 
     #[test]
     fn checked_sub_with_insufficient_funds_returns_error() {
-        let a = Amount::new(Decimal::new(5_000, 2), usd()).unwrap();  //  50.00
+        let a = Amount::new(Decimal::new(5_000, 2), usd()).unwrap(); //  50.00
         let b = Amount::new(Decimal::new(10_000, 2), usd()).unwrap(); // 100.00
         let err = a.checked_sub(b).unwrap_err();
         assert!(
@@ -443,8 +443,10 @@ mod tests {
         let json = serde_json::to_string(&a).unwrap();
 
         // value must be a string (not a float) to preserve precision
-        assert!(json.contains("\"123456789E-8\"") || json.contains("\"1.23456789\""),
-            "value should be a decimal string: {json}");
+        assert!(
+            json.contains("\"123456789E-8\"") || json.contains("\"1.23456789\""),
+            "value should be a decimal string: {json}"
+        );
 
         let deserialized: Amount = serde_json::from_str(&json).unwrap();
 
@@ -461,7 +463,10 @@ mod tests {
     fn serde_currency_serialized_as_code_string() {
         let a = Amount::new(Decimal::new(10_000, 2), usd()).unwrap();
         let json = serde_json::to_string(&a).unwrap();
-        assert!(json.contains("\"USD\""), "currency not serialized as string: {json}");
+        assert!(
+            json.contains("\"USD\""),
+            "currency not serialized as string: {json}"
+        );
     }
 
     #[test]
@@ -469,6 +474,9 @@ mod tests {
         let a = Amount::new(Decimal::new(10_000, 2), usd()).unwrap();
         let json = serde_json::to_string(&a).unwrap();
         // The value field must be a JSON string, not a JSON number
-        assert!(json.contains("\"100.00\""), "value should be \"100.00\": {json}");
+        assert!(
+            json.contains("\"100.00\""),
+            "value should be \"100.00\": {json}"
+        );
     }
 }

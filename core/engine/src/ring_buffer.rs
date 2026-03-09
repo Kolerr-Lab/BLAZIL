@@ -123,7 +123,7 @@ impl RingBuffer {
         }
 
         let mask = capacity - 1;
-        let claim  = Sequence::new(Sequence::INITIAL_VALUE);
+        let claim = Sequence::new(Sequence::INITIAL_VALUE);
         let cursor = Arc::new(Sequence::new(Sequence::INITIAL_VALUE));
 
         // Pre-allocate all slots. Use `with_capacity` + extend to avoid

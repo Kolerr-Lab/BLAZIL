@@ -65,8 +65,10 @@ const RESULT_TIMEOUT: Duration = Duration::from_millis(100);
 /// Returns [`BlazerError::Transport`] if the initial handshake fails. Most
 /// per-request errors are handled internally (rejection response sent,
 /// loop continues).
-#[instrument(skip(stream, pipeline, ring_buffer, active_connections),
-             fields(remote_addr))]
+#[instrument(
+    skip(stream, pipeline, ring_buffer, active_connections),
+    fields(remote_addr)
+)]
 pub async fn handle_connection(
     mut stream: TcpStream,
     pipeline: Arc<Pipeline>,
@@ -160,22 +162,24 @@ pub async fn handle_connection(
 /// Parses a [`TransactionRequest`] into a [`TransactionEvent`].
 fn build_event(req: TransactionRequest) -> BlazerResult<TransactionEvent> {
     // Parse debit account ID.
-    let debit_account_id = AccountId::from_str(&req.debit_account_id)
-        .map_err(|_| BlazerError::ValidationError(
-            format!("invalid debit_account_id: {}", req.debit_account_id)
-        ))?;
+    let debit_account_id = AccountId::from_str(&req.debit_account_id).map_err(|_| {
+        BlazerError::ValidationError(format!(
+            "invalid debit_account_id: {}",
+            req.debit_account_id
+        ))
+    })?;
 
     // Parse credit account ID.
-    let credit_account_id = AccountId::from_str(&req.credit_account_id)
-        .map_err(|_| BlazerError::ValidationError(
-            format!("invalid credit_account_id: {}", req.credit_account_id)
-        ))?;
+    let credit_account_id = AccountId::from_str(&req.credit_account_id).map_err(|_| {
+        BlazerError::ValidationError(format!(
+            "invalid credit_account_id: {}",
+            req.credit_account_id
+        ))
+    })?;
 
     // Parse amount decimal.
     let decimal = Decimal::from_str(&req.amount)
-        .map_err(|_| BlazerError::ValidationError(
-            format!("invalid amount: {}", req.amount)
-        ))?;
+        .map_err(|_| BlazerError::ValidationError(format!("invalid amount: {}", req.amount)))?;
 
     // Parse currency.
     let currency = parse_currency(&req.currency)?;

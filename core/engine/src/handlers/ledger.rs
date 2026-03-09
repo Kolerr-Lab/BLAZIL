@@ -50,12 +50,7 @@ impl<C: LedgerClient> LedgerHandler<C> {
 }
 
 impl<C: LedgerClient + 'static> EventHandler for LedgerHandler<C> {
-    fn on_event(
-        &mut self,
-        event: &mut TransactionEvent,
-        sequence: i64,
-        _end_of_batch: bool,
-    ) {
+    fn on_event(&mut self, event: &mut TransactionEvent, sequence: i64, _end_of_batch: bool) {
         // Rule 1: skip if already rejected.
         if event.result.is_some() {
             return;

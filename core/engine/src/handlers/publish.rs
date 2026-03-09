@@ -54,12 +54,7 @@ impl Default for PublishHandler {
 }
 
 impl EventHandler for PublishHandler {
-    fn on_event(
-        &mut self,
-        event: &mut TransactionEvent,
-        sequence: i64,
-        _end_of_batch: bool,
-    ) {
+    fn on_event(&mut self, event: &mut TransactionEvent, sequence: i64, _end_of_batch: bool) {
         if event.flags.skip_publish {
             return;
         }

@@ -338,7 +338,10 @@ mod tests {
         let mut client = TcpStream::connect(addr).await.unwrap();
         // Write a header claiming 2 MiB (> MAX_FRAME_SIZE)
         let oversized_len = (MAX_FRAME_SIZE + 1) as u32;
-        client.write_all(&oversized_len.to_be_bytes()).await.unwrap();
+        client
+            .write_all(&oversized_len.to_be_bytes())
+            .await
+            .unwrap();
 
         let result = server.await.unwrap();
         assert!(

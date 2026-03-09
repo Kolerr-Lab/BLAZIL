@@ -316,13 +316,31 @@ mod tests {
         let usd = parse_currency("USD").expect("USD");
 
         let debit_id = rt.block_on(async {
-            let acc = Account::new(AccountId::new(), LedgerId::USD, usd, 1, AccountFlags::default());
-            client.create_account(acc).await.expect("create debit account")
+            let acc = Account::new(
+                AccountId::new(),
+                LedgerId::USD,
+                usd,
+                1,
+                AccountFlags::default(),
+            );
+            client
+                .create_account(acc)
+                .await
+                .expect("create debit account")
         });
         let credit_id = rt.block_on(async {
             let usd2 = parse_currency("USD").expect("USD");
-            let acc = Account::new(AccountId::new(), LedgerId::USD, usd2, 1, AccountFlags::default());
-            client.create_account(acc).await.expect("create credit account")
+            let acc = Account::new(
+                AccountId::new(),
+                LedgerId::USD,
+                usd2,
+                1,
+                AccountFlags::default(),
+            );
+            client
+                .create_account(acc)
+                .await
+                .expect("create credit account")
         });
 
         (client, debit_id, credit_id, rt)
@@ -331,7 +349,14 @@ mod tests {
     fn make_event(debit_id: AccountId, credit_id: AccountId) -> TransactionEvent {
         let usd = parse_currency("USD").expect("USD");
         let amount = Amount::new(Decimal::new(100_00, 2), usd).expect("amount");
-        TransactionEvent::new(TransactionId::new(), debit_id, credit_id, amount, LedgerId::USD, 1)
+        TransactionEvent::new(
+            TransactionId::new(),
+            debit_id,
+            credit_id,
+            amount,
+            LedgerId::USD,
+            1,
+        )
     }
 
     fn build_full_pipeline(
@@ -438,8 +463,8 @@ mod tests {
 
     #[test]
     fn transaction_over_risk_limit_is_rejected() {
-        let tiny_max = Amount::new(Decimal::new(1_00, 2), parse_currency("USD").expect("USD"))
-            .expect("max");
+        let tiny_max =
+            Amount::new(Decimal::new(1_00, 2), parse_currency("USD").expect("USD")).expect("max");
 
         let (pipeline, runner) = PipelineBuilder::new()
             .with_capacity(1024)

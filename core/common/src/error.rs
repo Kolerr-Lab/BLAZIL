@@ -30,7 +30,6 @@ use thiserror::Error;
 #[derive(Debug, Clone, Error)]
 pub enum BlazerError {
     // ── Identity errors ──────────────────────────────────────────────────────
-
     /// A string could not be parsed as a valid UUID.
     ///
     /// # Examples
@@ -44,7 +43,6 @@ pub enum BlazerError {
     InvalidId(String),
 
     // ── Amount errors ────────────────────────────────────────────────────────
-
     /// An arithmetic operation was attempted on amounts with different currencies.
     ///
     /// In Blazil, currency conversion is an explicit domain operation — implicit
@@ -78,7 +76,6 @@ pub enum BlazerError {
     NegativeAmount,
 
     // ── Currency errors ──────────────────────────────────────────────────────
-
     /// A string could not be parsed as a valid ISO 4217 currency code.
     ///
     /// # Examples
@@ -91,7 +88,6 @@ pub enum BlazerError {
     InvalidCurrency(String),
 
     // ── Validation errors ────────────────────────────────────────────────────
-
     /// A domain object failed structural validation.
     ///
     /// Used by implementors of the [`crate::traits::Validate`] trait.
@@ -99,7 +95,6 @@ pub enum BlazerError {
     ValidationError(String),
 
     // ── System errors ────────────────────────────────────────────────────────
-
     /// An unexpected internal error occurred.
     ///
     /// This variant should be rare in production; prefer specific variants
@@ -108,19 +103,16 @@ pub enum BlazerError {
     Internal(String),
 
     // ── Transport errors ─────────────────────────────────────────────────────
-
     /// An error occurred in the network transport layer (Aeron, io_uring, etc.).
     #[error("Transport error: {0}")]
     Transport(String),
 
     // ── Ledger errors ────────────────────────────────────────────────────────
-
     /// An error was returned from the TigerBeetle ledger layer.
     #[error("Ledger error: {0}")]
     Ledger(String),
 
     // ── Resource lifecycle ───────────────────────────────────────────────────
-
     /// The requested resource does not exist.
     ///
     /// # Examples
@@ -198,7 +190,11 @@ mod tests {
 
         for variant in variants {
             let msg = variant.to_string();
-            assert!(!msg.is_empty(), "BlazerError variant has empty Display: {:?}", variant);
+            assert!(
+                !msg.is_empty(),
+                "BlazerError variant has empty Display: {:?}",
+                variant
+            );
         }
     }
 
@@ -210,8 +206,7 @@ mod tests {
 
     #[test]
     fn blazer_result_holds_err_value() {
-        let result: BlazerResult<i32> =
-            Err(BlazerError::Internal("test error".into()));
+        let result: BlazerResult<i32> = Err(BlazerError::Internal("test error".into()));
         assert!(result.is_err());
     }
 

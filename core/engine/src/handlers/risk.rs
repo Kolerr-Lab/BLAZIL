@@ -59,17 +59,14 @@ impl RiskHandler {
     /// Transactions whose `amount` exceeds `max_transaction_amount` are
     /// rejected when `flags.requires_risk_check` is `true`.
     pub fn new(max_transaction_amount: Amount) -> Self {
-        Self { max_transaction_amount }
+        Self {
+            max_transaction_amount,
+        }
     }
 }
 
 impl EventHandler for RiskHandler {
-    fn on_event(
-        &mut self,
-        event: &mut TransactionEvent,
-        sequence: i64,
-        _end_of_batch: bool,
-    ) {
+    fn on_event(&mut self, event: &mut TransactionEvent, sequence: i64, _end_of_batch: bool) {
         // Rule 1: skip if already rejected.
         if event.result.is_some() {
             return;

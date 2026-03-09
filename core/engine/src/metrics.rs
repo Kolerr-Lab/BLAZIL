@@ -71,7 +71,8 @@ impl EngineMetrics {
     #[inline]
     pub fn record_committed(&self, latency_ns: u64) {
         self.events_committed.fetch_add(1, Ordering::Relaxed);
-        self.total_latency_ns.fetch_add(latency_ns, Ordering::Relaxed);
+        self.total_latency_ns
+            .fetch_add(latency_ns, Ordering::Relaxed);
     }
 
     /// Increments the rejected counter.

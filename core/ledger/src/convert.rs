@@ -140,8 +140,8 @@ pub fn minor_units_to_amount(minor_units: u128, currency: Currency) -> BlazerRes
     let scale = currency_scale(&currency);
     let scale_decimal = Decimal::from(scale);
     // Decimal::from_str handles values larger than u64::MAX
-    let minor_decimal = Decimal::from_str(&minor_units.to_string())
-        .map_err(|_| BlazerError::AmountOverflow)?;
+    let minor_decimal =
+        Decimal::from_str(&minor_units.to_string()).map_err(|_| BlazerError::AmountOverflow)?;
     let value = minor_decimal
         .checked_div(scale_decimal)
         .ok_or(BlazerError::AmountOverflow)?;

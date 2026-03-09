@@ -381,7 +381,13 @@ mod tests {
     #[test]
     fn validate_fails_on_zero_code() {
         let usd = parse_currency("USD").unwrap();
-        let account = Account::new(AccountId::new(), LedgerId::USD, usd, 0, AccountFlags::default());
+        let account = Account::new(
+            AccountId::new(),
+            LedgerId::USD,
+            usd,
+            0,
+            AccountFlags::default(),
+        );
         let err = account.validate().unwrap_err();
         assert!(matches!(err, BlazerError::ValidationError(_)));
     }

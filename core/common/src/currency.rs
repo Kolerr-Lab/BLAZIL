@@ -45,8 +45,7 @@ use crate::error::{BlazerError, BlazerResult};
 /// assert!(parse_currency("INVALID").is_err());
 /// ```
 pub fn parse_currency(code: &str) -> BlazerResult<Currency> {
-    Currency::from_str(code)
-        .map_err(|_| BlazerError::InvalidCurrency(code.to_owned()))
+    Currency::from_str(code).map_err(|_| BlazerError::InvalidCurrency(code.to_owned()))
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

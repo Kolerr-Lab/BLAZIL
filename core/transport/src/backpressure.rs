@@ -199,7 +199,9 @@ mod tests {
             );
             let seq = rb.next_sequence();
             // SAFETY: single-threaded test; we own the sequence.
-            unsafe { *rb.get_mut(seq) = event; }
+            unsafe {
+                *rb.get_mut(seq) = event;
+            }
             rb.publish(seq);
         }
 
@@ -219,7 +221,9 @@ mod tests {
             1,
         );
         let seq = rb.next_sequence();
-        unsafe { *rb.get_mut(seq) = event2; }
+        unsafe {
+            *rb.get_mut(seq) = event2;
+        }
         rb.publish(seq);
 
         assert!(guard.is_pressured());
@@ -244,7 +248,9 @@ mod tests {
                 1,
             );
             let seq = rb.next_sequence();
-            unsafe { *rb.get_mut(seq) = event; }
+            unsafe {
+                *rb.get_mut(seq) = event;
+            }
             rb.publish(seq);
         }
         assert!(guard.is_pressured());

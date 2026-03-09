@@ -55,12 +55,7 @@ use crate::handler::EventHandler;
 pub struct ValidationHandler;
 
 impl EventHandler for ValidationHandler {
-    fn on_event(
-        &mut self,
-        event: &mut TransactionEvent,
-        sequence: i64,
-        _end_of_batch: bool,
-    ) {
+    fn on_event(&mut self, event: &mut TransactionEvent, sequence: i64, _end_of_batch: bool) {
         // Skip events already rejected upstream (belt-and-suspenders).
         if event.result.is_some() {
             return;

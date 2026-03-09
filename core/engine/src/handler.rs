@@ -50,12 +50,7 @@ pub trait EventHandler: Send + 'static {
     /// - `end_of_batch`: `true` when this is the last event in the current
     ///   batch (i.e. no newer event is available yet). Use this hint to flush
     ///   any accumulated batch state.
-    fn on_event(
-        &mut self,
-        event: &mut TransactionEvent,
-        sequence: i64,
-        end_of_batch: bool,
-    );
+    fn on_event(&mut self, event: &mut TransactionEvent, sequence: i64, end_of_batch: bool);
 
     /// Called once when the pipeline starts, before any events are processed.
     ///

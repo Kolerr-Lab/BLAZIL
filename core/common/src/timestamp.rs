@@ -16,8 +16,8 @@
 //! println!("{}", fixed); // 2026-03-10T00:00:00.000000000Z
 //! ```
 
-use std::fmt;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 /// A nanosecond-precision timestamp representing an instant since the Unix epoch.
 ///

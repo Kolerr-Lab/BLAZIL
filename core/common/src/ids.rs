@@ -208,8 +208,7 @@ define_id!(
 /// assert_eq!(id.value(), 1);
 /// assert_eq!(LedgerId::USD.value(), 1);
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct LedgerId(u32);
 
 impl LedgerId {
@@ -274,8 +273,8 @@ impl fmt::Display for LedgerId {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
     use super::*;
+    use std::str::FromStr;
 
     const CANONICAL_UUID: &str = "550e8400-e29b-41d4-a716-446655440000";
 

@@ -174,12 +174,15 @@ impl LedgerClient for InMemoryLedgerClient {
 
         // ── Validate (immutable borrows scoped to this block) ─────────────────
         {
-            let debit_account = accounts.get(&debit_id).ok_or_else(|| BlazerError::NotFound {
-                resource: "Account".to_owned(),
-                id: debit_id.to_string(),
-            })?;
-            let credit_account =
-                accounts.get(&credit_id).ok_or_else(|| BlazerError::NotFound {
+            let debit_account = accounts
+                .get(&debit_id)
+                .ok_or_else(|| BlazerError::NotFound {
+                    resource: "Account".to_owned(),
+                    id: debit_id.to_string(),
+                })?;
+            let credit_account = accounts
+                .get(&credit_id)
+                .ok_or_else(|| BlazerError::NotFound {
                     resource: "Account".to_owned(),
                     id: credit_id.to_string(),
                 })?;
@@ -196,9 +199,7 @@ impl LedgerClient for InMemoryLedgerClient {
 
         accounts
             .get_mut(&credit_id)
-            .ok_or_else(|| {
-                BlazerError::Internal("credit account vanished under lock".to_owned())
-            })?
+            .ok_or_else(|| BlazerError::Internal("credit account vanished under lock".to_owned()))?
             .apply_credit(amount)?;
 
         drop(accounts);
@@ -243,7 +244,10 @@ impl LedgerClient for InMemoryLedgerClient {
     #[instrument(skip(self, ids), fields(count = ids.len()))]
     async fn get_account_balances(&self, ids: &[AccountId]) -> BlazerResult<Vec<Account>> {
         let accounts = self.accounts.read().await;
-        let result = ids.iter().filter_map(|id| accounts.get(id).cloned()).collect();
+        let result = ids
+            .iter()
+            .filter_map(|id| accounts.get(id).cloned())
+            .collect();
         Ok(result)
     }
 }
@@ -351,7 +355,10 @@ mod tests {
         let credit_acct = client.get_account(&credit_id).await.unwrap();
 
         assert_eq!(debit_acct.debits_posted().value(), Decimal::new(100_00, 2));
-        assert_eq!(credit_acct.credits_posted().value(), Decimal::new(100_00, 2));
+        assert_eq!(
+            credit_acct.credits_posted().value(),
+            Decimal::new(100_00, 2)
+        );
     }
 
     #[tokio::test]

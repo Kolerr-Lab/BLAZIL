@@ -157,14 +157,14 @@ mod tests {
     use blazil_common::amount::Amount;
     use blazil_common::currency::parse_currency;
     use blazil_common::ids::{AccountId, LedgerId, TransactionId};
-    use blazil_ledger::account::{Account, AccountFlags};
-    use blazil_ledger::client::LedgerClient;
-    use blazil_ledger::mock::InMemoryLedgerClient;
     use blazil_engine::handlers::ledger::LedgerHandler;
     use blazil_engine::handlers::publish::PublishHandler;
     use blazil_engine::handlers::risk::RiskHandler;
     use blazil_engine::handlers::validation::ValidationHandler;
     use blazil_engine::pipeline::PipelineBuilder;
+    use blazil_ledger::account::{Account, AccountFlags};
+    use blazil_ledger::client::LedgerClient;
+    use blazil_ledger::mock::InMemoryLedgerClient;
     use rust_decimal::Decimal;
     use tokio::net::TcpStream;
 
@@ -197,13 +197,25 @@ mod tests {
         let usd = parse_currency("USD").expect("USD");
 
         let debit_id = {
-            let acc = Account::new(AccountId::new(), LedgerId::USD, usd, 1, AccountFlags::default());
+            let acc = Account::new(
+                AccountId::new(),
+                LedgerId::USD,
+                usd,
+                1,
+                AccountFlags::default(),
+            );
             client.create_account(acc).await.expect("debit account")
         };
 
         let credit_id = {
             let usd2 = parse_currency("USD").expect("USD");
-            let acc = Account::new(AccountId::new(), LedgerId::USD, usd2, 1, AccountFlags::default());
+            let acc = Account::new(
+                AccountId::new(),
+                LedgerId::USD,
+                usd2,
+                1,
+                AccountFlags::default(),
+            );
             client.create_account(acc).await.expect("credit account")
         };
 
@@ -272,9 +284,16 @@ mod tests {
 
         let client = MockTransportClient::new(&addr);
         let req = make_request(&debit_id, &credit_id, "10.00");
-        let resp = client.send_transaction(req).await.expect("send_transaction");
+        let resp = client
+            .send_transaction(req)
+            .await
+            .expect("send_transaction");
 
-        assert!(resp.committed, "expected committed=true, got: {:?}", resp.error);
+        assert!(
+            resp.committed,
+            "expected committed=true, got: {:?}",
+            resp.error
+        );
         assert!(resp.transfer_id.is_some());
         assert!(resp.error.is_none());
 
@@ -296,7 +315,10 @@ mod tests {
             ledger_id: 1,
             code: 1,
         };
-        let resp = client.send_transaction(req).await.expect("send_transaction");
+        let resp = client
+            .send_transaction(req)
+            .await
+            .expect("send_transaction");
 
         assert!(!resp.committed);
         assert!(resp.error.is_some());
@@ -311,7 +333,10 @@ mod tests {
 
         let client = MockTransportClient::new(&addr);
         let req = make_request(&debit_id, &credit_id, "0.00"); // zero amount
-        let resp = client.send_transaction(req).await.expect("send_transaction");
+        let resp = client
+            .send_transaction(req)
+            .await
+            .expect("send_transaction");
 
         assert!(!resp.committed);
         assert!(resp.error.is_some());
@@ -358,11 +383,17 @@ mod tests {
         // The second client should get a capacity-error response immediately.
         let second_client = MockTransportClient::new(&addr);
         let req = make_request(&debit_id, &credit_id, "5.00");
-        let resp = second_client.send_transaction(req).await.expect("second send");
+        let resp = second_client
+            .send_transaction(req)
+            .await
+            .expect("second send");
 
         assert!(!resp.committed);
         assert!(
-            resp.error.as_deref().map(|e| e.contains("capacity")).unwrap_or(false),
+            resp.error
+                .as_deref()
+                .map(|e| e.contains("capacity"))
+                .unwrap_or(false),
             "expected capacity error, got: {:?}",
             resp.error
         );
@@ -388,8 +419,15 @@ mod tests {
         // Server should still be functional.
         let client = MockTransportClient::new(&addr);
         let req = make_request(&debit_id, &credit_id, "1.00");
-        let resp = client.send_transaction(req).await.expect("send after disconnect");
-        assert!(resp.committed, "server should still work after a disconnect: {:?}", resp.error);
+        let resp = client
+            .send_transaction(req)
+            .await
+            .expect("send after disconnect");
+        assert!(
+            resp.committed,
+            "server should still work after a disconnect: {:?}",
+            resp.error
+        );
 
         server.shutdown().await;
     }
