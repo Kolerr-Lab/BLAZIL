@@ -35,6 +35,14 @@ All performance-critical, low-level components in `core/`:
 
 These are managed as a Cargo workspace.
 
+### Benchmarks (Rust)
+`bench/` — standalone crate in the Cargo workspace:
+- `src/scenarios/` — four measurement scenarios: ring buffer (raw), pipeline (in-memory), TCP end-to-end, TigerBeetle (env-gated)
+- `src/metrics.rs` — `BenchmarkResult` with mean/min/max/P50/P95/P99/P99.9
+- `src/report.rs` — structured stdout report (hardware, OS, Rust version, date)
+- `benches/` — Criterion micro-benchmarks for regression detection
+- Run with `cargo run -p blazil-bench --release` or `./scripts/bench.sh`
+
 ### Services (Go)
 Domain-specific business services in `services/`:
 - `gateway/` - API gateway

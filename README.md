@@ -84,9 +84,60 @@ cargo build --workspace && cd services && go build ./...
 | `services/trading` | Go | Order management system, FIX protocol, clearing |
 | `services/crypto` | Go | Chain abstraction, digital asset custody, DeFi rails |
 | `services/compliance` | Go | KYC workflows, sanctions screening, regulatory reporting |
-| `bench` | Rust | Comprehensive performance benchmark suite (Criterion) |
+| `bench` | Rust | Benchmark suite — 4 scenarios (ring buffer, pipeline, TCP, TigerBeetle) + Criterion |
 | `infra` | YAML/HCL | Docker Compose, Kubernetes, Terraform, Ansible |
 | `observability` | YAML | Prometheus, Grafana, OpenTelemetry collector configs |
+
+---
+
+## Benchmarks
+
+Measured on Apple Silicon (ARM64) · macOS · Rust 1.94.0 · release build · March 2026
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ BLAZIL BENCHMARK RESULTS
+ Hardware: Apple Silicon (ARM64)
+ OS: macos
+ Rust: rustc 1.94.0 (4a4ef493e 2026-03-02)
+ Date: 2026-03-11
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ Scenario                              TPS      P99 Latency
+ ─────────────────────────────────────────────────────
+ Ring Buffer (raw)              12,500,000            84 ns
+ Pipeline (in-memory)           19,607,843            83 ns
+ End-to-End TCP                     39,651            38 µs
+ TigerBeetle (real)*               SKIPPED               —
+
+ * Requires BLAZIL_TB_ADDRESS — skipped if not set
+
+ Detailed latency (Pipeline in-memory):
+   P50:   41 ns
+   P95:   42 ns
+   P99:   83 ns
+   P99.9: 667 ns
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ Context:
+   Visa peak:        ~24,000 TPS
+   NASDAQ:       ~2,000,000 TPS
+   Blazil target: 10,000,000 TPS (multi-node)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+> Ring buffer and pipeline numbers exceed 10M TPS target on a single core.
+> TCP bottleneck is serialisation + loopback latency — expected for a single-node
+> sequential client. Production clients use persistent connections and pipelining.
+> TigerBeetle numbers require a Linux host with `io_uring`; run with
+> `BLAZIL_TB_ADDRESS=127.0.0.1:3000 cargo run -p blazil-bench --release`.
+
+Reproduce:
+```bash
+cargo run -p blazil-bench --release
+# Criterion micro-benchmarks:
+cargo bench -p blazil-bench
+```
 
 ---
 

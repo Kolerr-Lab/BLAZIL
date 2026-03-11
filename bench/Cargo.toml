@@ -5,10 +5,34 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
-[[bench]]
-name = "transaction_throughput"
-harness = false
+[lib]
+name = "blazil_bench"
+path = "src/lib.rs"
+
+[[bin]]
+name = "blazil-bench"
+path = "src/main.rs"
+
+[features]
+tigerbeetle-client = ["blazil-ledger/tigerbeetle-client"]
+
+[dependencies]
+blazil-common    = { path = "../core/common" }
+blazil-engine    = { path = "../core/engine" }
+blazil-ledger    = { path = "../core/ledger" }
+blazil-transport = { path = "../core/transport" }
+tokio            = { workspace = true }
+tracing          = { workspace = true }
+tracing-subscriber = { workspace = true }
+rust_decimal     = "1"
 
 [dev-dependencies]
-tokio = { workspace = true }
-criterion = { workspace = true }
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "ring_buffer"
+harness = false
+
+[[bench]]
+name = "latency"
+harness = false

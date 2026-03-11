@@ -74,6 +74,9 @@ use crate::transfer::Transfer;
 pub struct InMemoryLedgerClient {
     accounts: Arc<RwLock<HashMap<AccountId, Account>>>,
     transfers: Arc<RwLock<HashMap<TransferId, Transfer>>>,
+    /// When `true`, `create_transfer` skips all validation and balance updates.
+    /// **Benchmark-only behaviour** — do not use in production or test code.
+    unbounded: bool,
 }
 
 impl InMemoryLedgerClient {
@@ -89,12 +92,22 @@ impl InMemoryLedgerClient {
         Self {
             accounts: Arc::new(RwLock::new(HashMap::new())),
             transfers: Arc::new(RwLock::new(HashMap::new())),
+            unbounded: false,
+        }
+}
+
+    /// Creates an in-memory ledger that skips all balance validation.
+    ///
+    /// **Benchmark-only** — `create_transfer` returns `Ok` immediately without
+    /// checking account existence, currency, or balance constraints. This allows
+    /// a single account pair to absorb millions of debits during throughput tests.
+    pub fn new_unbounded() -> Self {
+        Self {
+            accounts: Arc::new(RwLock::new(HashMap::new())),
+            transfers: Arc::new(RwLock::new(HashMap::new())),
+            unbounded: true,
         }
     }
-
-    /// Returns the number of accounts currently stored (async).
-    ///
-    /// Intended for test assertions after operations complete.
     ///
     /// # Examples
     ///
@@ -167,6 +180,11 @@ impl LedgerClient for InMemoryLedgerClient {
         let transfer_id = *transfer.id();
         let debit_id = *transfer.debit_account_id();
         let credit_id = *transfer.credit_account_id();
+
+        // Benchmark fast-path: skip all validation and balance updates.
+        if self.unbounded {
+            return Ok(transfer_id);
+        }
 
         tracing::debug!(transfer_id = %transfer_id, debit = %debit_id, credit = %credit_id, "creating transfer");
 

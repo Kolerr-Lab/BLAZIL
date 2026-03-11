@@ -115,7 +115,7 @@ pub enum TransactionResult {
 /// assert!(!event.is_committed());
 /// assert!(!event.is_rejected());
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TransactionEvent {
     /// Monotonic sequence number assigned by the ring buffer.
     pub sequence: i64,
