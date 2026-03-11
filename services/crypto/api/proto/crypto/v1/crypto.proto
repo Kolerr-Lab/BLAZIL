@@ -1,0 +1,144 @@
+syntax = "proto3";
+
+package crypto.v1;
+
+option go_package = "github.com/blazil/crypto/api/proto/crypto/v1;cryptov1";
+
+// CryptoService manages wallets, deposits, withdrawals, and internal transfers.
+service CryptoService {
+  // CreateWallet provisions a new crypto wallet for an owner on a given chain.
+  rpc CreateWallet(CreateWalletRequest) returns (CreateWalletResponse);
+
+  // GetWallet retrieves wallet details by ID.
+  rpc GetWallet(GetWalletRequest) returns (GetWalletResponse);
+
+  // ProcessDeposit finalises a detected inbound deposit.
+  rpc ProcessDeposit(ProcessDepositRequest) returns (ProcessDepositResponse);
+
+  // RequestWithdrawal creates a pending outbound withdrawal.
+  rpc RequestWithdrawal(RequestWithdrawalRequest) returns (RequestWithdrawalResponse);
+
+  // ProcessWithdrawal broadcasts a pending withdrawal to the chain.
+  rpc ProcessWithdrawal(ProcessWithdrawalRequest) returns (ProcessWithdrawalResponse);
+
+  // InternalTransfer moves funds between two wallets on the same chain.
+  rpc InternalTransfer(InternalTransferRequest) returns (InternalTransferResponse);
+}
+
+// ─── Wallets ─────────────────────────────────────────────────────────────────
+
+message CreateWalletRequest {
+  string wallet_id = 1;
+  string owner_id = 2;
+  int32  chain_id = 3;
+  string wallet_type = 4;
+}
+
+message CreateWalletResponse {
+  WalletProto wallet = 1;
+}
+
+message GetWalletRequest {
+  string wallet_id = 1;
+}
+
+message GetWalletResponse {
+  WalletProto wallet = 1;
+}
+
+// ─── Deposits ────────────────────────────────────────────────────────────────
+
+message ProcessDepositRequest {
+  string deposit_id = 1;
+  string wallet_id = 2;
+  string account_id = 3;
+  string tx_hash = 4;
+  int32  chain_id = 5;
+  int64  amount_minor_units = 6;
+}
+
+message ProcessDepositResponse {
+  DepositProto deposit = 1;
+}
+
+// ─── Withdrawals ─────────────────────────────────────────────────────────────
+
+message RequestWithdrawalRequest {
+  string withdrawal_id = 1;
+  string wallet_id = 2;
+  string account_id = 3;
+  string to_address = 4;
+  int32  chain_id = 5;
+  int64  amount_minor_units = 6;
+}
+
+message RequestWithdrawalResponse {
+  WithdrawalProto withdrawal = 1;
+}
+
+message ProcessWithdrawalRequest {
+  string withdrawal_id = 1;
+}
+
+message ProcessWithdrawalResponse {
+  WithdrawalProto withdrawal = 1;
+}
+
+// ─── Internal Transfers ──────────────────────────────────────────────────────
+
+message InternalTransferRequest {
+  string transfer_id = 1;
+  string from_wallet_id = 2;
+  string to_wallet_id = 3;
+  string from_account_id = 4;
+  string to_account_id = 5;
+  int64  amount_minor_units = 6;
+}
+
+message InternalTransferResponse {
+  TransferProto transfer = 1;
+}
+
+// ─── Domain messages ─────────────────────────────────────────────────────────
+
+message WalletProto {
+  string wallet_id = 1;
+  string owner_id = 2;
+  int32  chain_id = 3;
+  string address = 4;
+  string wallet_type = 5;
+  string status = 6;
+}
+
+message DepositProto {
+  string deposit_id = 1;
+  string wallet_id = 2;
+  string account_id = 3;
+  string tx_hash = 4;
+  int32  chain_id = 5;
+  int64  amount_minor_units = 6;
+  string status = 7;
+  int32  confirmations = 8;
+}
+
+message WithdrawalProto {
+  string withdrawal_id = 1;
+  string wallet_id = 2;
+  string account_id = 3;
+  string to_address = 4;
+  int32  chain_id = 5;
+  int64  amount_minor_units = 6;
+  int64  fee_minor_units = 7;
+  string tx_hash = 8;
+  string status = 9;
+}
+
+message TransferProto {
+  string transfer_id = 1;
+  string from_wallet_id = 2;
+  string to_wallet_id = 3;
+  string from_account_id = 4;
+  string to_account_id = 5;
+  int32  chain_id = 6;
+  int64  amount_minor_units = 7;
+}
