@@ -1,0 +1,82 @@
+syntax = "proto3";
+
+package payments.v1;
+
+option go_package = "github.com/blazil/services/payments/api/proto/payments/v1;paymentsv1";
+
+// PaymentsService handles payment authorization, routing, and lifecycle.
+service PaymentsService {
+  // ProcessPayment authorizes, routes, and submits a payment.
+  // Idempotent: same idempotency_key always returns the same result.
+  rpc ProcessPayment(ProcessPaymentRequest) returns (ProcessPaymentResponse);
+
+  // GetPayment retrieves a previously processed payment by its ID.
+  rpc GetPayment(GetPaymentRequest) returns (GetPaymentResponse);
+}
+
+// ProcessPaymentRequest is the input to ProcessPayment.
+message ProcessPaymentRequest {
+  // idempotency_key is a caller-provided deduplication key (required).
+  string idempotency_key = 1;
+
+  // debit_account_id is the source account (UUID string).
+  string debit_account_id = 2;
+
+  // credit_account_id is the destination account (UUID string).
+  string credit_account_id = 3;
+
+  // amount_minor_units is the payment amount in the smallest currency unit.
+  int64 amount_minor_units = 4;
+
+  // currency_code is the ISO 4217 currency code, e.g. "USD", "EUR", "BTC".
+  string currency_code = 5;
+
+  // ledger_id identifies the TigerBeetle ledger. USD=1, EUR=2, GBP=3, etc.
+  uint32 ledger_id = 6;
+
+  // metadata is optional caller-provided key-value data.
+  // The "reference" key is required for authorization.
+  map<string, string> metadata = 7;
+}
+
+// ProcessPaymentResponse is the result of ProcessPayment.
+message ProcessPaymentResponse {
+  // payment_id is the unique ID assigned by the payments service.
+  string payment_id = 1;
+
+  // status is the final payment status: "settled", "cleared", or "failed".
+  string status = 2;
+
+  // rails is the selected payment rail: "internal", "ach", "sepa", "swift", "crypto".
+  string rails = 3;
+
+  // failure_reason contains a human-readable message when status is "failed".
+  string failure_reason = 4;
+
+  // risk_score is the aggregate risk score from authorization (0–100).
+  int32 risk_score = 5;
+}
+
+// GetPaymentRequest is the input to GetPayment.
+message GetPaymentRequest {
+  // payment_id is the unique payment identifier.
+  string payment_id = 1;
+}
+
+// GetPaymentResponse contains the payment details.
+message GetPaymentResponse {
+  // payment_id is the unique payment identifier.
+  string payment_id = 1;
+
+  // status is the current payment status.
+  string status = 2;
+
+  // rails is the payment rail.
+  string rails = 3;
+
+  // amount_minor_units is the payment amount in minor units.
+  int64 amount_minor_units = 4;
+
+  // currency_code is the ISO 4217 currency code.
+  string currency_code = 5;
+}

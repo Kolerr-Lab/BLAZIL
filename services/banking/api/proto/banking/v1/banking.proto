@@ -1,0 +1,143 @@
+syntax = "proto3";
+
+package banking.v1;
+
+option go_package = "github.com/blazil/banking/api/proto/banking/v1;bankingv1";
+
+// BankingService handles account management, balance queries, and transaction history.
+service BankingService {
+  // CreateAccount opens a new bank account.
+  rpc CreateAccount(CreateAccountRequest) returns (CreateAccountResponse);
+
+  // GetAccount retrieves account details by ID.
+  rpc GetAccount(GetAccountRequest) returns (GetAccountResponse);
+
+  // GetBalance returns the current balance for an account.
+  rpc GetBalance(GetBalanceRequest) returns (GetBalanceResponse);
+
+  // ListTransactions returns paginated transaction history for an account.
+  rpc ListTransactions(ListTransactionsRequest) returns (ListTransactionsResponse);
+}
+
+// CreateAccountRequest is the input to CreateAccount.
+message CreateAccountRequest {
+  // account_id is a caller-supplied unique identifier.
+  string account_id = 1;
+
+  // owner_id is the external customer identifier.
+  string owner_id = 2;
+
+  // account_type is "checking", "savings", or "loan".
+  string account_type = 3;
+
+  // currency_code is the ISO 4217 code, e.g. "USD".
+  string currency_code = 4;
+
+  // initial_balance_minor_units is the opening balance (must be >= 0).
+  int64 initial_balance_minor_units = 5;
+}
+
+// CreateAccountResponse is the result of CreateAccount.
+message CreateAccountResponse {
+  // account_id is the unique account identifier.
+  string account_id = 1;
+
+  // status is "active".
+  string status = 2;
+
+  // currency_code is the account currency.
+  string currency_code = 3;
+}
+
+// GetAccountRequest is the input to GetAccount.
+message GetAccountRequest {
+  // account_id is the unique account identifier.
+  string account_id = 1;
+}
+
+// GetAccountResponse contains account details.
+message GetAccountResponse {
+  // account_id is the unique account identifier.
+  string account_id = 1;
+
+  // owner_id is the external customer identifier.
+  string owner_id = 2;
+
+  // account_type is "checking", "savings", or "loan".
+  string account_type = 3;
+
+  // currency_code is the ISO 4217 code.
+  string currency_code = 4;
+
+  // balance_minor_units is the current balance in the smallest currency unit.
+  int64 balance_minor_units = 5;
+
+  // status is "active", "closed", or "frozen".
+  string status = 6;
+}
+
+// GetBalanceRequest is the input to GetBalance.
+message GetBalanceRequest {
+  // account_id is the unique account identifier.
+  string account_id = 1;
+}
+
+// GetBalanceResponse contains the current balance.
+message GetBalanceResponse {
+  // account_id is the unique account identifier.
+  string account_id = 1;
+
+  // balance_minor_units is the balance in the smallest currency unit.
+  int64 balance_minor_units = 2;
+
+  // currency_code is the ISO 4217 code.
+  string currency_code = 3;
+
+  // status is the account status.
+  string status = 4;
+}
+
+// ListTransactionsRequest is the input to ListTransactions.
+message ListTransactionsRequest {
+  // account_id is the unique account identifier.
+  string account_id = 1;
+
+  // limit is the maximum number of transactions to return (0 = server default).
+  int32 limit = 2;
+
+  // offset is the number of transactions to skip.
+  int32 offset = 3;
+}
+
+// TransactionProto represents a single transaction.
+message TransactionProto {
+  // transaction_id is the unique transaction identifier.
+  string transaction_id = 1;
+
+  // account_id is the account this transaction belongs to.
+  string account_id = 2;
+
+  // type is "debit", "credit", "interest", or "fee".
+  string type = 3;
+
+  // amount_minor_units is the absolute amount in the smallest currency unit.
+  int64 amount_minor_units = 4;
+
+  // currency_code is the ISO 4217 code.
+  string currency_code = 5;
+
+  // balance_after_minor_units is the account balance after this entry.
+  int64 balance_after_minor_units = 6;
+
+  // description is a human-readable memo.
+  string description = 7;
+
+  // timestamp_unix_nano is the UTC timestamp of the transaction.
+  int64 timestamp_unix_nano = 8;
+}
+
+// ListTransactionsResponse contains a page of transactions.
+message ListTransactionsResponse {
+  // transactions is the ordered list (newest first).
+  repeated TransactionProto transactions = 1;
+}

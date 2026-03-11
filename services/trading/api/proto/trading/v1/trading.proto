@@ -1,0 +1,107 @@
+syntax = "proto3";
+
+package trading.v1;
+
+option go_package = "github.com/blazil/trading/api/proto/trading/v1;tradingv1";
+
+// TradingService manages order placement, cancellation, and position queries.
+service TradingService {
+  // PlaceOrder submits a new limit order and returns the order + any immediate fills.
+  rpc PlaceOrder(PlaceOrderRequest) returns (PlaceOrderResponse);
+
+  // CancelOrder cancels an open or partially-filled order.
+  rpc CancelOrder(CancelOrderRequest) returns (CancelOrderResponse);
+
+  // GetOrder retrieves order details by ID.
+  rpc GetOrder(GetOrderRequest) returns (GetOrderResponse);
+
+  // GetPosition returns the current position for an owner in an instrument.
+  rpc GetPosition(GetPositionRequest) returns (GetPositionResponse);
+
+  // ListPositions returns all positions for an owner.
+  rpc ListPositions(ListPositionsRequest) returns (ListPositionsResponse);
+}
+
+// ─── Orders ──────────────────────────────────────────────────────────────────
+
+message PlaceOrderRequest {
+  string order_id = 1;
+  string instrument_id = 2;
+  string owner_id = 3;
+  // side: "buy" or "sell"
+  string side = 4;
+  int64 limit_price_minor_units = 5;
+  int64 quantity_units = 6;
+}
+
+message PlaceOrderResponse {
+  OrderProto order = 1;
+  repeated TradeProto trades = 2;
+}
+
+message CancelOrderRequest {
+  string order_id = 1;
+}
+
+message CancelOrderResponse {
+  OrderProto order = 1;
+}
+
+message GetOrderRequest {
+  string order_id = 1;
+}
+
+message GetOrderResponse {
+  OrderProto order = 1;
+}
+
+// ─── Positions ───────────────────────────────────────────────────────────────
+
+message GetPositionRequest {
+  string owner_id = 1;
+  string instrument_id = 2;
+}
+
+message GetPositionResponse {
+  PositionProto position = 1;
+}
+
+message ListPositionsRequest {
+  string owner_id = 1;
+}
+
+message ListPositionsResponse {
+  repeated PositionProto positions = 1;
+}
+
+// ─── Domain messages ─────────────────────────────────────────────────────────
+
+message OrderProto {
+  string order_id = 1;
+  string instrument_id = 2;
+  string owner_id = 3;
+  string side = 4;
+  int64 limit_price_minor_units = 5;
+  int64 quantity_units = 6;
+  int64 filled_units = 7;
+  string status = 8;
+  int64 placed_at_unix_nano = 9;
+}
+
+message TradeProto {
+  string trade_id = 1;
+  string instrument_id = 2;
+  string maker_order_id = 3;
+  string taker_order_id = 4;
+  int64 price_minor_units = 5;
+  int64 quantity_units = 6;
+  int64 executed_at_unix_nano = 7;
+}
+
+message PositionProto {
+  string position_id = 1;
+  string owner_id = 2;
+  string instrument_id = 3;
+  int64 quantity_units = 4;
+  int64 average_cost_minor_units = 5;
+}
