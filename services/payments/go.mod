@@ -3,7 +3,9 @@ module github.com/blazil/services/payments
 go 1.24.0
 
 require (
+	github.com/blazil/auth v0.0.0
 	github.com/blazil/observability v0.0.0
+	github.com/blazil/secrets v0.0.0
 	github.com/google/uuid v1.6.0
 	github.com/prometheus/client_golang v1.19.0
 	github.com/vmihailenco/msgpack/v5 v5.4.1
@@ -18,6 +20,7 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
+	github.com/golang-jwt/jwt/v5 v5.2.1 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.20.0 // indirect
 	github.com/prometheus/client_model v0.5.0 // indirect
 	github.com/prometheus/common v0.48.0 // indirect
@@ -39,4 +42,8 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251202230838-ff82c1b0f217 // indirect
 )
 
-replace github.com/blazil/observability => ../../libs/observability
+replace (
+	github.com/blazil/auth => ../../libs/auth
+	github.com/blazil/observability => ../../libs/observability
+	github.com/blazil/secrets => ../../libs/secrets
+)

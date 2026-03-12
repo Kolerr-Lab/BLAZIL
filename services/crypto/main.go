@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/blazil/auth"
 	"github.com/blazil/observability"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
@@ -77,7 +78,10 @@ func main() {
 	}
 
 	grpcServer := grpc.NewServer(
-		grpc.UnaryInterceptor(observability.UnaryServerInterceptor("crypto")),
+		grpc.ChainUnaryInterceptor(
+			observability.UnaryServerInterceptor("crypto"),
+			auth.AuthInterceptor(auth.NewJWTValidator()),
+		),
 	)
 	cryptov1.RegisterCryptoServiceServer(grpcServer, &cryptoServer{
 		walletSvc:       walletSvc,

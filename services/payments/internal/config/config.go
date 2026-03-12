@@ -2,9 +2,12 @@
 package config
 
 import (
+	"context"
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/blazil/secrets"
 )
 
 // Config holds all runtime configuration for the payments service.
@@ -38,11 +41,16 @@ type Config struct {
 }
 
 // Load reads configuration from environment variables, falling back to
-// defaults for any unset variable.
+// defaults for any unset variable. Vault is consulted first for sensitive
+// values; if unavailable, env vars and defaults are used (never fatal).
 func Load() Config {
+	vc := secrets.NewVaultClientImpl()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
 	return Config{
 		GRPCAddr:            envString("BLAZIL_GRPC_ADDR", ":50051"),
-		EngineAddr:          envString("BLAZIL_ENGINE_ADDR", "127.0.0.1:7878"),
+		EngineAddr:          secrets.LoadOrEnv(ctx, vc, "secret/data/payments", "engine_conn_string", "BLAZIL_ENGINE_ADDR", "127.0.0.1:7878"),
 		EngineTimeout:       envDuration("BLAZIL_ENGINE_TIMEOUT", 5*time.Second),
 		MaxAmountMinorUnits: envInt64("BLAZIL_MAX_AMOUNT_MINOR_UNITS", 100_000_000_00),
 		IdempotencyTTL:      envDuration("BLAZIL_IDEMPOTENCY_TTL", 24*time.Hour),

@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	blazilauth "github.com/blazil/auth"
 	"github.com/blazil/observability"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
@@ -86,7 +87,10 @@ func main() {
 	}
 
 	grpcServer := grpc.NewServer(
-		grpc.UnaryInterceptor(observability.UnaryServerInterceptor("payments")),
+		grpc.ChainUnaryInterceptor(
+			observability.UnaryServerInterceptor("payments"),
+			blazilauth.AuthInterceptor(blazilauth.NewJWTValidator()),
+		),
 	)
 	paymentsv1.RegisterPaymentsServiceServer(grpcServer, &paymentsServer{
 		processor: processor,

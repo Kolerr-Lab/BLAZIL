@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/blazil/auth"
 	"github.com/blazil/observability"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
@@ -62,7 +63,10 @@ func main() {
 	}
 
 	grpcServer := grpc.NewServer(
-		grpc.UnaryInterceptor(observability.UnaryServerInterceptor("trading")),
+		grpc.ChainUnaryInterceptor(
+			observability.UnaryServerInterceptor("trading"),
+			auth.AuthInterceptor(auth.NewJWTValidator()),
+		),
 	)
 	tradingv1.RegisterTradingServiceServer(grpcServer, &tradingServer{
 		orders:   orderSvc,

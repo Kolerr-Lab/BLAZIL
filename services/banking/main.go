@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/blazil/auth"
 	"github.com/blazil/observability"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
@@ -73,7 +74,10 @@ func main() {
 	}
 
 	grpcServer := grpc.NewServer(
-		grpc.UnaryInterceptor(observability.UnaryServerInterceptor("banking")),
+		grpc.ChainUnaryInterceptor(
+			observability.UnaryServerInterceptor("banking"),
+			auth.AuthInterceptor(auth.NewJWTValidator()),
+		),
 	)
 	bankingv1.RegisterBankingServiceServer(grpcServer, &bankingServer{
 		accounts:     accountSvc,

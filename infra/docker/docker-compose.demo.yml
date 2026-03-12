@@ -1,0 +1,129 @@
+# Blazil Demo Stack — one-command developer experience
+# Decision: TigerBeetle port 3000 not exposed on host (conflicts with Grafana host:3000).
+# Decision: blazil-engine metrics port 9090 not exposed on host (Prometheus scrapes it internally;
+#           host:9090 is reserved for the Prometheus UI as advertised by demo.sh).
+services:
+
+  tigerbeetle:
+    image: ghcr.io/tigerbeetle/tigerbeetle:latest
+    command: >
+      start --addresses=0.0.0.0:3000
+      /data/0_0.tigerbeetle
+    volumes:
+      - tb-data:/data
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "3000"]
+      interval: 5s
+      retries: 10
+
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    volumes:
+      - ./prometheus/prometheus.demo.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/blazil.yml:/etc/prometheus/blazil.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - blazil-engine
+
+  grafana:
+    image: grafana/grafana:10.4.0
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: blazil
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/provisioning/dashboards/blazil-overview.json
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+
+  blazil-engine:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.engine
+    environment:
+      BLAZIL_BIND_ADDR: "0.0.0.0:7878"
+      BLAZIL_METRICS_PORT: "9090"
+    ports:
+      - "7878:7878"
+    depends_on:
+      tigerbeetle:
+        condition: service_healthy
+
+  blazil-payments:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.payments
+    environment:
+      BLAZIL_ENGINE_ADDR: blazil-engine:7878
+      BLAZIL_METRICS_ADDR: "0.0.0.0:9091"
+      OTEL_EXPORTER_OTLP_ENDPOINT: ""
+      BLAZIL_AUTH_REQUIRED: "false"
+    ports:
+      - "50051:50051"
+      - "9091:9091"
+    depends_on:
+      - blazil-engine
+
+  blazil-banking:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.banking
+    environment:
+      BLAZIL_ENGINE_ADDR: blazil-engine:7878
+      BANKING_METRICS_ADDR: "0.0.0.0:9092"
+      BLAZIL_AUTH_REQUIRED: "false"
+    ports:
+      - "50052:50052"
+      - "9092:9092"
+    depends_on:
+      - blazil-engine
+
+  blazil-trading:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.trading
+    environment:
+      BLAZIL_ENGINE_ADDR: blazil-engine:7878
+      METRICS_ADDR: "0.0.0.0:9093"
+      BLAZIL_AUTH_REQUIRED: "false"
+    ports:
+      - "50053:50053"
+      - "9093:9093"
+    depends_on:
+      - blazil-engine
+
+  blazil-crypto:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.crypto
+    environment:
+      BLAZIL_ENGINE_ADDR: blazil-engine:7878
+      METRICS_ADDR: "0.0.0.0:9094"
+      BLAZIL_AUTH_REQUIRED: "false"
+    ports:
+      - "50054:50054"
+      - "9094:9094"
+    depends_on:
+      - blazil-engine
+
+  blazil-loadgen:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.loadgen
+    environment:
+      PAYMENTS_ADDR: blazil-payments:50051
+      BANKING_ADDR: blazil-banking:50052
+      TRADING_ADDR: blazil-trading:50053
+      CRYPTO_ADDR: blazil-crypto:50054
+    depends_on:
+      - blazil-payments
+      - blazil-banking
+      - blazil-trading
+      - blazil-crypto
+
+volumes:
+  tb-data:

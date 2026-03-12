@@ -1,0 +1,15 @@
+# Blazil loadgen — Go multi-stage build
+# Decision: COPY . . (full workspace) instead of spec's COPY tools/loadgen .
+# Reason: loadgen imports real proto-generated types from the 4 service modules;
+#         partial copy would break replace directives and transitive deps.
+FROM golang:1.24-alpine AS builder
+WORKDIR /app
+COPY . .
+WORKDIR /app/tools/loadgen
+ENV GOWORK=off
+RUN go mod download && go build -o /loadgen .
+
+FROM alpine:3.19
+RUN apk add --no-cache ca-certificates
+COPY --from=builder /loadgen /usr/local/bin/loadgen
+CMD ["loadgen"]

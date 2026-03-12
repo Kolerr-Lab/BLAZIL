@@ -1,0 +1,27 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - "blazil.yml"
+
+scrape_configs:
+  - job_name: blazil-engine
+    static_configs:
+      - targets: ['blazil-engine:9090']
+
+  - job_name: blazil-payments
+    static_configs:
+      - targets: ['blazil-payments:9091']
+
+  - job_name: blazil-banking
+    static_configs:
+      - targets: ['blazil-banking:9092']
+
+  - job_name: blazil-trading
+    static_configs:
+      - targets: ['blazil-trading:9093']
+
+  - job_name: blazil-crypto
+    static_configs:
+      - targets: ['blazil-crypto:9094']

@@ -8,9 +8,11 @@ repository.workspace = true
 [dependencies]
 blazil-common  = { path = "../common" }
 blazil-engine  = { path = "../engine" }
+blazil-ledger  = { path = "../ledger" }
 tokio          = { workspace = true }
 serde          = { workspace = true }
 tracing        = { workspace = true }
+tracing-subscriber = { workspace = true }
 thiserror      = { workspace = true }
 async-trait    = "0.1"
 axum           = "0.7"

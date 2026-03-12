@@ -1,0 +1,15 @@
+# Blazil payments service — Go multi-stage build
+# Decision: WORKDIR set to service directory so replace directives resolve correctly.
+# Decision: GOWORK=off ensures only go.mod replace directives are used (not services/go.work).
+FROM golang:1.24-alpine AS builder
+WORKDIR /app
+COPY . .
+WORKDIR /app/services/payments
+ENV GOWORK=off
+RUN go build -o /payments ./cmd/server
+
+FROM alpine:3.19
+RUN apk add --no-cache ca-certificates
+COPY --from=builder /payments /usr/local/bin/payments
+EXPOSE 50051 9091
+CMD ["payments"]

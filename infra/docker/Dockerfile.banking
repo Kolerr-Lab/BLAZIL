@@ -1,0 +1,13 @@
+# Blazil banking service — Go multi-stage build
+FROM golang:1.24-alpine AS builder
+WORKDIR /app
+COPY . .
+WORKDIR /app/services/banking
+ENV GOWORK=off
+RUN go build -o /banking .
+
+FROM alpine:3.19
+RUN apk add --no-cache ca-certificates
+COPY --from=builder /banking /usr/local/bin/banking
+EXPOSE 50052 9092
+CMD ["banking"]
