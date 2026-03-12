@@ -356,7 +356,7 @@ mod tests {
         let client = InMemoryLedgerClient::new();
         let (debit_id, credit_id) = funded_pair(&client).await;
 
-        let amount = usd_amount(100_00); // $100.00
+        let amount = usd_amount(10_000); // $100.00
         let transfer = Transfer::new(
             TransferId::new(),
             debit_id,
@@ -372,10 +372,10 @@ mod tests {
         let debit_acct = client.get_account(&debit_id).await.unwrap();
         let credit_acct = client.get_account(&credit_id).await.unwrap();
 
-        assert_eq!(debit_acct.debits_posted().value(), Decimal::new(100_00, 2));
+        assert_eq!(debit_acct.debits_posted().value(), Decimal::new(10_000, 2));
         assert_eq!(
             credit_acct.credits_posted().value(),
-            Decimal::new(100_00, 2)
+            Decimal::new(10_000, 2)
         );
     }
 

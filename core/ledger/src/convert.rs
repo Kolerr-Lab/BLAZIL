@@ -258,7 +258,7 @@ mod tests {
     #[test]
     fn usd_100_roundtrip() {
         let usd = parse_currency("USD").unwrap();
-        let amount = Amount::new(Decimal::new(100_00, 2), usd.clone()).unwrap();
+        let amount = Amount::new(Decimal::new(10_000, 2), usd).unwrap();
         let minor = amount_to_minor_units(&amount).unwrap();
         assert_eq!(minor, 10_000_u128);
         let back = minor_units_to_amount(minor, usd).unwrap();
@@ -269,7 +269,7 @@ mod tests {
     fn vnd_50000_roundtrip() {
         let vnd = parse_currency("VND").unwrap();
         // VND has no sub-units, scale = 1
-        let amount = Amount::new(Decimal::new(50_000, 0), vnd.clone()).unwrap();
+        let amount = Amount::new(Decimal::new(50_000, 0), vnd).unwrap();
         let minor = amount_to_minor_units(&amount).unwrap();
         assert_eq!(minor, 50_000_u128);
         let back = minor_units_to_amount(minor, vnd).unwrap();
@@ -279,7 +279,7 @@ mod tests {
     #[test]
     fn jpy_1000_roundtrip() {
         let jpy = parse_currency("JPY").unwrap();
-        let amount = Amount::new(Decimal::new(1_000, 0), jpy.clone()).unwrap();
+        let amount = Amount::new(Decimal::new(1_000, 0), jpy).unwrap();
         let minor = amount_to_minor_units(&amount).unwrap();
         assert_eq!(minor, 1_000_u128);
         let back = minor_units_to_amount(minor, jpy).unwrap();
@@ -290,7 +290,7 @@ mod tests {
     fn eur_99_99_roundtrip() {
         let eur = parse_currency("EUR").unwrap();
         // EUR 99.99 → 9999 euro-cents → EUR 99.99
-        let amount = Amount::new(Decimal::new(99_99, 2), eur.clone()).unwrap();
+        let amount = Amount::new(Decimal::new(99_99, 2), eur).unwrap();
         let minor = amount_to_minor_units(&amount).unwrap();
         assert_eq!(minor, 9_999_u128);
         let back = minor_units_to_amount(minor, eur).unwrap();

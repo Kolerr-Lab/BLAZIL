@@ -271,17 +271,17 @@ fn tb_account_to_blazil(tb: tb::Account) -> BlazerResult<Account> {
     };
 
     // Create account with zero balances, then apply the posted amounts
-    let mut account = Account::new(id, ledger_id, currency.clone(), tb.code(), flags);
+    let mut account = Account::new(id, ledger_id, currency, tb.code(), flags);
 
     let debits_minor = tb.debits_posted();
     let credits_minor = tb.credits_posted();
 
     if debits_minor > 0 {
-        let debits_posted = convert::minor_units_to_amount(debits_minor, currency.clone())?;
+        let debits_posted = convert::minor_units_to_amount(debits_minor, currency)?;
         account.apply_debit(debits_posted)?;
     }
     if credits_minor > 0 {
-        let credits_posted = convert::minor_units_to_amount(credits_minor, currency.clone())?;
+        let credits_posted = convert::minor_units_to_amount(credits_minor, currency)?;
         account.apply_credit(credits_posted)?;
     }
 

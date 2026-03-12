@@ -168,7 +168,7 @@ fn get_cpu_info() -> String {
         if let Ok(content) = std::fs::read_to_string("/proc/cpuinfo") {
             for line in content.lines() {
                 if line.starts_with("model name") {
-                    if let Some(val) = line.splitn(2, ':').nth(1) {
+                    if let Some(val) = line.split_once(':').map(|x| x.1) {
                         return val.trim().to_owned();
                     }
                 }

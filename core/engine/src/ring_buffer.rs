@@ -345,7 +345,7 @@ mod tests {
 
     fn make_event() -> TransactionEvent {
         let usd = parse_currency("USD").unwrap();
-        let amount = Amount::new(Decimal::new(100_00, 2), usd).unwrap();
+        let amount = Amount::new(Decimal::new(10_000, 2), usd).unwrap();
         TransactionEvent::new(
             TransactionId::new(),
             AccountId::new(),

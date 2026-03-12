@@ -37,7 +37,7 @@ use crate::handler::EventHandler;
 /// use rust_decimal::Decimal;
 ///
 /// let usd = parse_currency("USD").unwrap();
-/// let max = Amount::new(Decimal::new(1_000_000_00, 2), usd.clone()).unwrap();
+/// let max = Amount::new(Decimal::new(100_000_000, 2), usd.clone()).unwrap();
 /// let mut handler = RiskHandler::new(max);
 ///
 /// let small = Amount::new(Decimal::new(10_00, 2), usd).unwrap();
@@ -109,7 +109,7 @@ mod tests {
 
     fn make_handler() -> RiskHandler {
         let usd = parse_currency("USD").unwrap();
-        let max = Amount::new(Decimal::new(1_000_000_00, 2), usd).unwrap();
+        let max = Amount::new(Decimal::new(100_000_000, 2), usd).unwrap();
         RiskHandler::new(max)
     }
 
@@ -131,7 +131,7 @@ mod tests {
     #[test]
     fn amount_below_limit_result_remains_none() {
         let mut handler = make_handler();
-        let mut event = make_event_with_amount(100_00); // $100
+        let mut event = make_event_with_amount(10_000); // $100
         handler.on_event(&mut event, 0, true);
         assert!(event.result.is_none());
     }
@@ -140,7 +140,7 @@ mod tests {
     fn amount_above_limit_is_rejected() {
         let mut handler = make_handler();
         // Max is $1,000,000 → $1,000,001 should be rejected
-        let mut event = make_event_with_amount(1_000_001_00);
+        let mut event = make_event_with_amount(100_000_100);
         handler.on_event(&mut event, 0, true);
         assert!(event.is_rejected());
     }
@@ -148,7 +148,7 @@ mod tests {
     #[test]
     fn already_rejected_event_is_unchanged() {
         let mut handler = make_handler();
-        let mut event = make_event_with_amount(1_000_001_00);
+        let mut event = make_event_with_amount(100_000_100);
         event.result = Some(TransactionResult::Rejected {
             reason: BlazerError::ValidationError("upstream".into()),
         });
@@ -168,7 +168,7 @@ mod tests {
     fn risk_check_skipped_when_flag_is_false() {
         let mut handler = make_handler();
         let usd = parse_currency("USD").unwrap();
-        let amount = Amount::new(Decimal::new(999_999_999_00, 2), usd).unwrap();
+        let amount = Amount::new(Decimal::new(99_999_999_900, 2), usd).unwrap();
         let mut event = TransactionEvent::new(
             TransactionId::new(),
             AccountId::new(),

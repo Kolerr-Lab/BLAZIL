@@ -124,7 +124,7 @@ async fn create_account_real() {
     let client = connect_tb().await;
 
     let account = usd_account();
-    let account_id = account.id().clone();
+    let account_id = *account.id();
 
     client
         .create_account(account)
@@ -171,7 +171,7 @@ async fn create_transfer_real() {
         1,
     )
     .unwrap();
-    let transfer_id = transfer.id().clone();
+    let transfer_id = *transfer.id();
 
     client
         .create_transfer(transfer)
@@ -218,7 +218,7 @@ async fn idempotency_real() {
     let client = connect_tb().await;
 
     let account = usd_account();
-    let _account_id = account.id().clone();
+    let _account_id = *account.id();
 
     // First creation succeeds
     client
@@ -297,10 +297,10 @@ async fn currency_round_trip_real() {
 
     // Create accounts with different currencies and verify round-trip
     let usd_acc = usd_account();
-    let usd_id = usd_acc.id().clone();
+    let usd_id = *usd_acc.id();
 
     let eur_acc = eur_account();
-    let eur_id = eur_acc.id().clone();
+    let eur_id = *eur_acc.id();
 
     client
         .create_account(usd_acc)
@@ -347,7 +347,7 @@ async fn currency_round_trip_real() {
         1,
     )
     .unwrap();
-    let usd_transfer_id = usd_transfer.id().clone();
+    let usd_transfer_id = *usd_transfer.id();
 
     let eur_transfer = Transfer::new(
         TransferId::new(),
@@ -358,7 +358,7 @@ async fn currency_round_trip_real() {
         1,
     )
     .unwrap();
-    let eur_transfer_id = eur_transfer.id().clone();
+    let eur_transfer_id = *eur_transfer.id();
 
     client
         .create_transfer(usd_transfer)

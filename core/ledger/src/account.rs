@@ -367,10 +367,10 @@ mod tests {
         let account = Account {
             id: nil_id,
             ledger_id: LedgerId::USD,
-            currency: usd.clone(),
+            currency: usd,
             code: 1,
             flags: AccountFlags::default(),
-            debits_posted: Amount::zero(usd.clone()),
+            debits_posted: Amount::zero(usd),
             credits_posted: Amount::zero(usd),
             timestamp: Timestamp::now(),
         };

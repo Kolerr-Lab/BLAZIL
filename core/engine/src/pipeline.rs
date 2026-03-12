@@ -356,7 +356,7 @@ mod tests {
 
     fn make_event(debit_id: AccountId, credit_id: AccountId) -> TransactionEvent {
         let usd = parse_currency("USD").expect("USD");
-        let amount = Amount::new(Decimal::new(100_00, 2), usd).expect("amount");
+        let amount = Amount::new(Decimal::new(10_000, 2), usd).expect("amount");
         TransactionEvent::new(
             TransactionId::new(),
             debit_id,
@@ -372,7 +372,7 @@ mod tests {
         runtime: Arc<tokio::runtime::Runtime>,
     ) -> (Pipeline, std::thread::JoinHandle<()>) {
         let max_amount = Amount::new(
-            Decimal::new(1_000_000_00, 2),
+            Decimal::new(100_000_000, 2),
             parse_currency("USD").expect("USD"),
         )
         .expect("max amount");
@@ -485,7 +485,7 @@ mod tests {
 
         let usd = parse_currency("USD").expect("USD");
         // Amount ($500) >> risk limit ($1)
-        let amount = Amount::new(Decimal::new(500_00, 2), usd).expect("amount");
+        let amount = Amount::new(Decimal::new(50_000, 2), usd).expect("amount");
         let mut event = TransactionEvent::new(
             TransactionId::new(),
             AccountId::new(),

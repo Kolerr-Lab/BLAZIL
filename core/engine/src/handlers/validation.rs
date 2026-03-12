@@ -42,7 +42,7 @@ use crate::handler::EventHandler;
 /// use rust_decimal::Decimal;
 ///
 /// let usd = parse_currency("USD").unwrap();
-/// let amount = Amount::new(Decimal::new(100_00, 2), usd).unwrap();
+/// let amount = Amount::new(Decimal::new(10_000, 2), usd).unwrap();
 /// let mut event = TransactionEvent::new(
 ///     TransactionId::new(), AccountId::new(), AccountId::new(),
 ///     amount, LedgerId::USD, 1,
@@ -134,7 +134,7 @@ mod tests {
 
     fn make_valid_event() -> TransactionEvent {
         let usd = parse_currency("USD").unwrap();
-        let amount = Amount::new(Decimal::new(100_00, 2), usd).unwrap();
+        let amount = Amount::new(Decimal::new(10_000, 2), usd).unwrap();
         TransactionEvent::new(
             TransactionId::new(),
             AccountId::new(),

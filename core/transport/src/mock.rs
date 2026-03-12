@@ -220,7 +220,7 @@ mod tests {
         };
 
         let max_amount = Amount::new(
-            Decimal::new(1_000_000_00, 2),
+            Decimal::new(100_000_000, 2),
             parse_currency("USD").expect("USD"),
         )
         .expect("max amount");

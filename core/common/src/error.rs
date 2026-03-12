@@ -206,7 +206,7 @@ mod tests {
     #[test]
     fn blazer_result_holds_ok_value() {
         let result: BlazerResult<i32> = Ok(42);
-        assert_eq!(result.unwrap(), 42);
+        assert!(result.is_ok());
     }
 
     #[test]

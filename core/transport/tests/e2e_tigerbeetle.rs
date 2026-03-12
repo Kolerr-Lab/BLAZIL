@@ -79,7 +79,7 @@ async fn create_accounts_for_test(
         AccountFlags::default()
     };
 
-    let debit_acc = Account::new(AccountId::new(), LedgerId::USD, usd.clone(), 1, debit_flags);
+    let debit_acc = Account::new(AccountId::new(), LedgerId::USD, usd, 1, debit_flags);
     let credit_acc = Account::new(
         AccountId::new(),
         LedgerId::USD,
