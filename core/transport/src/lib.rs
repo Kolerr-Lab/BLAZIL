@@ -34,6 +34,7 @@
 
 pub mod backpressure;
 pub mod connection;
+pub mod metrics_server;
 pub mod mock;
 pub mod protocol;
 pub mod server;

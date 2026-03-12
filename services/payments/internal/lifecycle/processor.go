@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/blazil/observability"
 	"github.com/blazil/services/payments/internal/authorization"
 	"github.com/blazil/services/payments/internal/domain"
 	"github.com/blazil/services/payments/internal/engine"
@@ -46,6 +47,8 @@ func NewPaymentProcessor(
 // Returns the resulting Payment (which may have StatusFailed for authorization
 // rejections) and a non-nil error only for infrastructure failures.
 func (p *PaymentProcessor) Process(ctx context.Context, req domain.ProcessPaymentRequest) (*domain.Payment, error) {
+	start := time.Now()
+
 	// STEP 1 — Idempotency check: return cached result without reprocessing.
 	if existing := p.idempotency.Get(req.IdempotencyKey); existing != nil {
 		return existing, nil
@@ -113,7 +116,9 @@ func (p *PaymentProcessor) Process(ctx context.Context, req domain.ProcessPaymen
 		return nil, fmt.Errorf("store failed for payment %s: %w", payment.ID, err)
 	}
 
-	// STEP 7 — Return.
+	// STEP 7 — Record metrics and return.
+	observability.TransactionsTotal.WithLabelValues("payments", payment.Status.String(), payment.Rails.String()).Inc()
+	observability.TransactionDuration.WithLabelValues("payments", "process").Observe(time.Since(start).Seconds())
 	return payment, nil
 }
 

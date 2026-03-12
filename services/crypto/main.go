@@ -6,10 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 
+	"github.com/blazil/observability"
+	"github.com/prometheus/client_golang/prometheus"
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -26,6 +30,27 @@ import (
 
 func main() {
 	cfg := config.Load()
+
+	logger := observability.NewLogger("crypto", cfg.LogLevel)
+	defer logger.Sync() //nolint:errcheck
+
+	// ── Observability ─────────────────────────────────────────────────────────
+	if err := observability.RegisterAll(prometheus.DefaultRegisterer); err != nil {
+		logger.Warn("metrics registration error", zap.Error(err))
+	}
+	otelShutdown, err := observability.InitTracer("crypto", os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
+	if err != nil {
+		logger.Warn("tracer init failed", zap.Error(err))
+	} else {
+		defer otelShutdown()
+	}
+	go func() {
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", observability.MetricsHandler())
+		if err := http.ListenAndServe(cfg.MetricsAddr, mux); err != nil {
+			logger.Error("metrics server error", zap.Error(err))
+		}
+	}()
 
 	// Build chain registry with mock adapters (no real blockchain connections).
 	registry := chains.NewChainRegistry()
@@ -51,7 +76,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(
+		grpc.UnaryInterceptor(observability.UnaryServerInterceptor("crypto")),
+	)
 	cryptov1.RegisterCryptoServiceServer(grpcServer, &cryptoServer{
 		walletSvc:       walletSvc,
 		depositStore:    depositStore,
@@ -71,7 +98,7 @@ func main() {
 
 	fmt.Printf("crypto gRPC server listening on %s\n", cfg.GRPCAddr)
 	if err := grpcServer.Serve(lis); err != nil {
-		fmt.Fprintf(os.Stderr, "grpc serve: %v\n", err)
+		logger.Error("gRPC server error", zap.Error(err))
 		os.Exit(1)
 	}
 }

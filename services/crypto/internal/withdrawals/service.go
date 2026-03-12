@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/blazil/observability"
 	"github.com/blazil/crypto/internal/chains"
 	"github.com/blazil/crypto/internal/domain"
 	"github.com/blazil/crypto/internal/engine"
@@ -122,6 +123,15 @@ func (s *InMemoryWithdrawalService) ProcessWithdrawal(ctx context.Context, id st
 		return nil, domain.ErrWithdrawalNotPending
 	}
 
+	// Resolve chain symbol for metrics labels.
+	chainSymbol := fmt.Sprintf("chain-%d", w.ChainID)
+	for _, c := range domain.SupportedChains() {
+		if c.ID == w.ChainID {
+			chainSymbol = c.Symbol
+			break
+		}
+	}
+
 	adapter, err := s.registry.Get(w.ChainID)
 	if err != nil {
 		return nil, domain.ErrChainNotFound
@@ -131,6 +141,7 @@ func (s *InMemoryWithdrawalService) ProcessWithdrawal(ctx context.Context, id st
 	if err := s.engine.Debit(ctx, w.AccountID, w.AmountMinorUnits); err != nil {
 		w.Status = domain.WithdrawalStatusFailed
 		_ = s.store.Save(ctx, w)
+		observability.WithdrawalsTotal.WithLabelValues(chainSymbol, "failed").Inc()
 		return w, err
 	}
 
@@ -140,6 +151,7 @@ func (s *InMemoryWithdrawalService) ProcessWithdrawal(ctx context.Context, id st
 		_ = s.engine.Credit(ctx, w.AccountID, w.AmountMinorUnits)
 		w.Status = domain.WithdrawalStatusFailed
 		_ = s.store.Save(ctx, w)
+		observability.WithdrawalsTotal.WithLabelValues(chainSymbol, "failed").Inc()
 		return w, fmt.Errorf("broadcast: %w", err)
 	}
 
@@ -148,6 +160,7 @@ func (s *InMemoryWithdrawalService) ProcessWithdrawal(ctx context.Context, id st
 	if err := s.store.Save(ctx, w); err != nil {
 		return nil, err
 	}
+	observability.WithdrawalsTotal.WithLabelValues(chainSymbol, "broadcast").Inc()
 	return w, nil
 }
 

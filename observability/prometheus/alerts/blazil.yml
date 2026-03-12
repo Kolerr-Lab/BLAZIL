@@ -2,29 +2,46 @@ groups:
   - name: blazil_alerts
     interval: 30s
     rules:
-      - alert: HighErrorRate
-        expr: rate(blazil_errors_total[5m]) > 0.05
+      # ── Transaction throughput ──────────────────────────────────────────────
+      - alert: TransactionThroughputLow
+        expr: |
+          sum(rate(blazil_transactions_total[5m])) < 1
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "High error rate detected"
-          description: "Error rate is {{ $value }} errors/sec"
-      
-      - alert: HighLatency
-        expr: histogram_quantile(0.99, rate(blazil_request_duration_seconds_bucket[5m])) > 0.1
+          summary: "Transaction throughput is critically low"
+          description: "Total transaction rate is {{ $value | humanize }} TPS over the last 5m"
+
+      # ── Transaction error rate ──────────────────────────────────────────────
+      - alert: TransactionErrorRateHigh
+        expr: |
+          sum(rate(blazil_transactions_total{status!="success",status!="settled",status!="cleared"}[5m]))
+            /
+          sum(rate(blazil_transactions_total[5m])) > 0.05
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "High latency detected"
-          description: "P99 latency is {{ $value }}s"
-      
+          summary: "Transaction error rate exceeds 5 %"
+          description: "Error rate is {{ $value | humanizePercentage }} over the last 5m"
+
+      # ── Ring buffer pressure ────────────────────────────────────────────────
+      - alert: RingBufferHighUtilization
+        expr: blazil_ring_buffer_utilization_ratio > 0.80
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Ring buffer utilization above 80 %"
+          description: "Ring buffer is {{ $value | humanizePercentage }} full — back-pressure active"
+
+      # ── Service availability ────────────────────────────────────────────────
       - alert: ServiceDown
         expr: up{job=~"blazil-.*"} == 0
         for: 2m
         labels:
           severity: critical
         annotations:
-          summary: "Service {{ $labels.job }} is down"
-          description: "Service has been down for more than 2 minutes"
+          summary: "Blazil service {{ $labels.job }} is unreachable"
+          description: "Metrics endpoint for {{ $labels.job }} has been down for more than 2 minutes"

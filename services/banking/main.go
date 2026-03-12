@@ -6,11 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/blazil/observability"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -36,6 +39,24 @@ func main() {
 
 	logger.Info("starting blazil banking service", zap.String("grpc_addr", cfg.GRPCAddr))
 
+	// ── Observability ─────────────────────────────────────────────────────────
+	if err := observability.RegisterAll(prometheus.DefaultRegisterer); err != nil {
+		logger.Warn("metrics registration error", zap.Error(err))
+	}
+	otelShutdown, err := observability.InitTracer("banking", os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
+	if err != nil {
+		logger.Warn("tracer init failed", zap.Error(err))
+	} else {
+		defer otelShutdown()
+	}
+	go func() {
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", observability.MetricsHandler())
+		if err := http.ListenAndServe(cfg.MetricsAddr, mux); err != nil {
+			logger.Error("metrics server error", zap.Error(err))
+		}
+	}()
+
 	// ── Wiring ────────────────────────────────────────────────────────────────
 
 	accountSvc := accounts.NewInMemoryAccountService()
@@ -51,7 +72,9 @@ func main() {
 		logger.Fatal("failed to listen", zap.String("addr", cfg.GRPCAddr), zap.Error(err))
 	}
 
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(
+		grpc.UnaryInterceptor(observability.UnaryServerInterceptor("banking")),
+	)
 	bankingv1.RegisterBankingServiceServer(grpcServer, &bankingServer{
 		accounts:     accountSvc,
 		balances:     balanceSvc,

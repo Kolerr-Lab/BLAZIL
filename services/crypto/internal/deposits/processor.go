@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/blazil/observability"
 	"github.com/blazil/crypto/internal/chains"
 	"github.com/blazil/crypto/internal/domain"
 	"github.com/blazil/crypto/internal/engine"
@@ -138,9 +139,11 @@ func (p *DepositProcessor) Process(ctx context.Context, depositID string) (*doma
 
 	// Resolve required confirmations from supported chains list.
 	requiredConfs := 0
+	chainSymbol := fmt.Sprintf("chain-%d", dep.ChainID)
 	for _, c := range domain.SupportedChains() {
 		if c.ID == dep.ChainID {
 			requiredConfs = c.RequiredConfirmations
+			chainSymbol = c.Symbol
 			break
 		}
 	}
@@ -161,6 +164,7 @@ func (p *DepositProcessor) Process(ctx context.Context, depositID string) (*doma
 	if err := p.engine.Credit(ctx, dep.AccountID, dep.AmountMinorUnits); err != nil {
 		dep.Status = domain.DepositStatusFailed
 		_ = p.store.Save(ctx, dep)
+		observability.DepositsTotal.WithLabelValues(chainSymbol, "failed").Inc()
 		return dep, err
 	}
 
@@ -170,5 +174,6 @@ func (p *DepositProcessor) Process(ctx context.Context, depositID string) (*doma
 	if err := p.store.Save(ctx, dep); err != nil {
 		return nil, err
 	}
+	observability.DepositsTotal.WithLabelValues(chainSymbol, "processed").Inc()
 	return dep, nil
 }

@@ -16,6 +16,10 @@ type Config struct {
 
 	// IdempotencyTTL is unused in this iteration but reserved for future use.
 	IdempotencyTTL time.Duration
+
+	// MetricsAddr is the address the Prometheus metrics HTTP server listens on.
+	// Default: ":9092"
+	MetricsAddr string
 }
 
 // Load reads configuration from environment variables, falling back to defaults.
@@ -24,6 +28,7 @@ func Load() Config {
 		GRPCAddr:       getEnv("BANKING_GRPC_ADDR", ":50052"),
 		LogLevel:       getEnv("LOG_LEVEL", "info"),
 		IdempotencyTTL: 24 * time.Hour,
+		MetricsAddr:    getEnv("BANKING_METRICS_ADDR", ":9092"),
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/blazil/observability"
 	"github.com/blazil/banking/internal/accounts"
 	"github.com/blazil/banking/internal/domain"
 	"github.com/blazil/banking/internal/history"
@@ -85,6 +86,7 @@ func (s *AccountBalanceService) GetBalanceSummary(ctx context.Context, id domain
 
 // Credit implements BalanceService.
 func (s *AccountBalanceService) Credit(ctx context.Context, id domain.AccountID, amountMinorUnits int64, currencyCode, reference, paymentID string) (*domain.Balance, error) {
+	start := time.Now()
 	if amountMinorUnits < 0 {
 		return nil, domain.ErrNegativeAmount
 	}
@@ -122,11 +124,14 @@ func (s *AccountBalanceService) Credit(ctx context.Context, id domain.AccountID,
 	if err := s.history.Append(ctx, tx); err != nil {
 		return nil, fmt.Errorf("Credit history: %w", err)
 	}
+	observability.TransactionsTotal.WithLabelValues("banking", "success", "internal").Inc()
+	observability.TransactionDuration.WithLabelValues("banking", "credit").Observe(time.Since(start).Seconds())
 	return newBal, nil
 }
 
 // Debit implements BalanceService.
 func (s *AccountBalanceService) Debit(ctx context.Context, id domain.AccountID, amountMinorUnits int64, currencyCode, reference, paymentID string) (*domain.Balance, error) {
+	start := time.Now()
 	if amountMinorUnits < 0 {
 		return nil, domain.ErrNegativeAmount
 	}
@@ -167,6 +172,8 @@ func (s *AccountBalanceService) Debit(ctx context.Context, id domain.AccountID, 
 	if err := s.history.Append(ctx, tx); err != nil {
 		return nil, fmt.Errorf("Debit history: %w", err)
 	}
+	observability.TransactionsTotal.WithLabelValues("banking", "success", "internal").Inc()
+	observability.TransactionDuration.WithLabelValues("banking", "debit").Observe(time.Since(start).Seconds())
 	return newBal, nil
 }
 

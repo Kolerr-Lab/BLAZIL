@@ -13,8 +13,10 @@ serde          = { workspace = true }
 tracing        = { workspace = true }
 thiserror      = { workspace = true }
 async-trait    = "0.1"
+axum           = "0.7"
 rmp-serde      = "1"
 rust_decimal   = { version = "1", features = ["serde"] }
 
 [dev-dependencies]
 blazil-ledger  = { path = "../ledger", features = ["tigerbeetle-client"] }
+tower          = { version = "0.5", features = ["util"] }

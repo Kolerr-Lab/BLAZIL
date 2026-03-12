@@ -31,6 +31,10 @@ type Config struct {
 
 	// LogLevel controls the structured log verbosity. Default: "info"
 	LogLevel string
+
+	// MetricsAddr is the address the Prometheus metrics HTTP server listens on.
+	// Default: ":9091"
+	MetricsAddr string
 }
 
 // Load reads configuration from environment variables, falling back to
@@ -43,6 +47,7 @@ func Load() Config {
 		MaxAmountMinorUnits: envInt64("BLAZIL_MAX_AMOUNT_MINOR_UNITS", 100_000_000_00),
 		IdempotencyTTL:      envDuration("BLAZIL_IDEMPOTENCY_TTL", 24*time.Hour),
 		LogLevel:            envString("BLAZIL_LOG_LEVEL", "info"),
+		MetricsAddr:         envString("BLAZIL_METRICS_ADDR", ":9091"),
 	}
 }
 

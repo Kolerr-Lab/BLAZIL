@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/blazil/observability"
 	"github.com/blazil/trading/internal/domain"
 	"github.com/blazil/trading/internal/matching"
 	"github.com/blazil/trading/internal/orderbook"
@@ -98,7 +99,14 @@ func (s *InMemoryOrderService) PlaceOrder(_ context.Context, req PlaceOrderReque
 	var trades []domain.Trade
 	for _, t := range result.Trades {
 		trades = append(trades, *t)
+		observability.TransactionsTotal.WithLabelValues("trading", "matched", "internal").Inc()
 	}
+
+	// Record order book depth (outside the hot fill loop).
+	instrID := string(req.InstrumentID)
+	observability.OrderBookDepth.WithLabelValues(instrID, "bid").Set(float64(len(book.BidLevels())))
+	observability.OrderBookDepth.WithLabelValues(instrID, "ask").Set(float64(len(book.AskLevels())))
+
 	return order, trades, nil
 }
 

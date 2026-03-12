@@ -6,10 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 
+	"github.com/blazil/observability"
+	"github.com/prometheus/client_golang/prometheus"
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -26,6 +30,27 @@ import (
 func main() {
 	cfg := config.Load()
 
+	logger := observability.NewLogger("trading", cfg.LogLevel)
+	defer logger.Sync() //nolint:errcheck
+
+	// ── Observability ─────────────────────────────────────────────────────────
+	if err := observability.RegisterAll(prometheus.DefaultRegisterer); err != nil {
+		logger.Warn("metrics registration error", zap.Error(err))
+	}
+	otelShutdown, err := observability.InitTracer("trading", os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
+	if err != nil {
+		logger.Warn("tracer init failed", zap.Error(err))
+	} else {
+		defer otelShutdown()
+	}
+	go func() {
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", observability.MetricsHandler())
+		if err := http.ListenAndServe(cfg.MetricsAddr, mux); err != nil {
+			logger.Error("metrics server error", zap.Error(err))
+		}
+	}()
+
 	orderSvc := orders.NewInMemoryOrderService(matching.NewFIFOEngine())
 	posSvc := positions.NewInMemoryPositionService()
 	settler := settlement.NewEngineSettler(orderSvc, posSvc)
@@ -36,7 +61,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(
+		grpc.UnaryInterceptor(observability.UnaryServerInterceptor("trading")),
+	)
 	tradingv1.RegisterTradingServiceServer(grpcServer, &tradingServer{
 		orders:   orderSvc,
 		positions: posSvc,
@@ -47,14 +74,14 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
-		fmt.Printf("Blazil trading service listening on %s\n", cfg.GRPCAddr)
+		logger.Info("gRPC server listening", zap.String("addr", cfg.GRPCAddr))
 		if err := grpcServer.Serve(lis); err != nil {
-			fmt.Fprintf(os.Stderr, "gRPC server error: %v\n", err)
+			logger.Error("gRPC server error", zap.Error(err))
 		}
 	}()
 
 	<-quit
-	fmt.Println("shutting down")
+	logger.Info("shutting down")
 	grpcServer.GracefulStop()
 }
 

@@ -5,11 +5,14 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/blazil/observability"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -39,6 +42,24 @@ func main() {
 		zap.String("engine_addr", cfg.EngineAddr),
 	)
 
+	// ── Observability ─────────────────────────────────────────────────────────
+	if err := observability.RegisterAll(prometheus.DefaultRegisterer); err != nil {
+		logger.Warn("metrics registration error", zap.Error(err))
+	}
+	otelShutdown, err := observability.InitTracer("payments", os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
+	if err != nil {
+		logger.Warn("tracer init failed", zap.Error(err))
+	} else {
+		defer otelShutdown()
+	}
+	go func() {
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", observability.MetricsHandler())
+		if err := http.ListenAndServe(cfg.MetricsAddr, mux); err != nil {
+			logger.Error("metrics server error", zap.Error(err))
+		}
+	}()
+
 	// ── Wiring ────────────────────────────────────────────────────────────────
 
 	authCfg := authorization.DefaultAuthorizerConfig()
@@ -64,7 +85,9 @@ func main() {
 		logger.Fatal("failed to listen", zap.String("addr", cfg.GRPCAddr), zap.Error(err))
 	}
 
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(
+		grpc.UnaryInterceptor(observability.UnaryServerInterceptor("payments")),
+	)
 	paymentsv1.RegisterPaymentsServiceServer(grpcServer, &paymentsServer{
 		processor: processor,
 		logger:    logger,

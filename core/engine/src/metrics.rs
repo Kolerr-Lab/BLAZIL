@@ -35,6 +35,10 @@ pub struct EngineMetrics {
     /// Running sum of latency in nanoseconds.
     /// Divide by `events_committed` to get the average.
     total_latency_ns: AtomicU64,
+    /// Peak observed commit latency in nanoseconds (proxy for p99).
+    peak_ns: AtomicU64,
+    /// Ring buffer utilization × 10_000 (i.e. 10000 = 100%).
+    ring_util_x10000: AtomicU64,
 }
 
 impl EngineMetrics {
@@ -54,6 +58,8 @@ impl EngineMetrics {
             events_committed: AtomicU64::new(0),
             events_rejected: AtomicU64::new(0),
             total_latency_ns: AtomicU64::new(0),
+            peak_ns: AtomicU64::new(0),
+            ring_util_x10000: AtomicU64::new(0),
         })
     }
 
@@ -73,6 +79,19 @@ impl EngineMetrics {
         self.events_committed.fetch_add(1, Ordering::Relaxed);
         self.total_latency_ns
             .fetch_add(latency_ns, Ordering::Relaxed);
+        // Update peak (proxy for p99) using compare-and-swap loop.
+        let mut current = self.peak_ns.load(Ordering::Relaxed);
+        while latency_ns > current {
+            match self.peak_ns.compare_exchange_weak(
+                current,
+                latency_ns,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(actual) => current = actual,
+            }
+        }
     }
 
     /// Increments the rejected counter.
@@ -169,6 +188,25 @@ impl EngineMetrics {
         println!("Events committed:  {}", self.committed());
         println!("Events rejected:   {}", self.rejected());
         println!("Avg latency:       {} ns", self.avg_latency_ns());
+        println!("Peak latency:      {} ns", self.peak_latency_ns());
+    }
+
+    /// Returns the peak (maximum) observed commit latency in nanoseconds.
+    /// Used as a proxy for p99 without requiring a histogram.
+    #[inline]
+    pub fn peak_latency_ns(&self) -> u64 {
+        self.peak_ns.load(Ordering::Relaxed)
+    }
+
+    /// Returns the ring buffer utilization × 10_000 (10_000 = 100%).
+    #[inline]
+    pub fn ring_utilization_x10000(&self) -> u64 {
+        self.ring_util_x10000.load(Ordering::Relaxed)
+    }
+
+    /// Sets ring buffer utilization; value is utilization × 10_000.
+    pub fn set_ring_utilization_x10000(&self, val: u64) {
+        self.ring_util_x10000.store(val, Ordering::Relaxed);
     }
 }
 
