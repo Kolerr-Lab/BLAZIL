@@ -94,7 +94,7 @@ impl InMemoryLedgerClient {
             transfers: Arc::new(RwLock::new(HashMap::new())),
             unbounded: false,
         }
-}
+    }
 
     /// Creates an in-memory ledger that skips all balance validation.
     ///

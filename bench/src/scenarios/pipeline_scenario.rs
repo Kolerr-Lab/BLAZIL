@@ -26,7 +26,7 @@ use crate::metrics::BenchmarkResult;
 use crate::scenarios::ring_buffer_scenario::{publish_with_backpressure, wait_for_drain};
 
 const WARMUP_EVENTS: u64 = 10_000;
-const CAPACITY: usize    = 1_048_576;
+const CAPACITY: usize = 1_048_576;
 
 /// Run the pipeline scenario 3 times and return the median-TPS result.
 ///
@@ -55,21 +55,34 @@ fn run_once_blocking(events: u64) -> BenchmarkResult {
             .expect("ledger runtime"),
     );
 
-    let usd    = parse_currency("USD").expect("USD");
+    let usd = parse_currency("USD").expect("USD");
     let client = Arc::new(InMemoryLedgerClient::new_unbounded());
 
-    let debit_id  = rt.block_on(client.create_account(Account::new(
-        AccountId::new(), LedgerId::USD, usd, 1, AccountFlags::default(),
-    ))).expect("debit account");
-    let credit_id = rt.block_on(client.create_account(Account::new(
-        AccountId::new(), LedgerId::USD, usd, 1, AccountFlags::default(),
-    ))).expect("credit account");
+    let debit_id = rt
+        .block_on(client.create_account(Account::new(
+            AccountId::new(),
+            LedgerId::USD,
+            usd,
+            1,
+            AccountFlags::default(),
+        )))
+        .expect("debit account");
+    let credit_id = rt
+        .block_on(client.create_account(Account::new(
+            AccountId::new(),
+            LedgerId::USD,
+            usd,
+            1,
+            AccountFlags::default(),
+        )))
+        .expect("credit account");
 
     let amount = Amount::new(Decimal::new(1_00, 2), usd).expect("amount");
     let max_amount = Amount::new(
         Decimal::new(100_000_000_000, 2),
         parse_currency("USD").expect("USD"),
-    ).expect("max amount");
+    )
+    .expect("max amount");
 
     let (pipeline, runner) = PipelineBuilder::new()
         .with_capacity(CAPACITY)
@@ -80,11 +93,16 @@ fn run_once_blocking(events: u64) -> BenchmarkResult {
         .build()
         .expect("pipeline build");
 
-    let rb     = Arc::clone(pipeline.ring_buffer());
+    let rb = Arc::clone(pipeline.ring_buffer());
     let handle = runner.run();
 
     let template = TransactionEvent::new(
-        TransactionId::new(), debit_id, credit_id, amount, LedgerId::USD, 1,
+        TransactionId::new(),
+        debit_id,
+        credit_id,
+        amount,
+        LedgerId::USD,
+        1,
     );
 
     // ── warmup ───────────────────────────────────────────────────────────────

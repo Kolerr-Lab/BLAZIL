@@ -131,10 +131,9 @@ async fn main() {
         .init();
 
     // ── Config from env ───────────────────────────────────────────────────────
-    let bind_addr = std::env::var("BLAZIL_BIND_ADDR")
-        .unwrap_or_else(|_| "0.0.0.0:7878".to_string());
-    let metrics_port = std::env::var("BLAZIL_METRICS_PORT")
-        .unwrap_or_else(|_| "9090".to_string());
+    let bind_addr =
+        std::env::var("BLAZIL_BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:7878".to_string());
+    let metrics_port = std::env::var("BLAZIL_METRICS_PORT").unwrap_or_else(|_| "9090".to_string());
     let metrics_addr = format!("0.0.0.0:{metrics_port}");
     let capacity = std::env::var("BLAZIL_CAPACITY")
         .ok()
@@ -172,4 +171,3 @@ async fn main() {
         run_pipeline(client, bind_addr, metrics_addr, capacity).await;
     }
 }
-

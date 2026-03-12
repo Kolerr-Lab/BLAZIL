@@ -36,7 +36,7 @@ use tokio::net::TcpStream;
 use crate::metrics::BenchmarkResult;
 
 const WARMUP_EVENTS: u64 = 100;
-const CAPACITY: usize    = 65_536;
+const CAPACITY: usize = 65_536;
 
 /// Run the TCP scenario 3 times and return the median-TPS result.
 pub async fn run(events: u64) -> BenchmarkResult {
@@ -62,15 +62,32 @@ async fn run_once(events: u64) -> BenchmarkResult {
     );
 
     // Pre-create accounts directly — the pipeline handles transfers only.
-    let debit_id  = client.create_account(Account::new(
-        AccountId::new(), LedgerId::USD, usd, 1, AccountFlags::default(),
-    )).await.expect("debit account");
-    let credit_id = client.create_account(Account::new(
-        AccountId::new(), LedgerId::USD, usd, 1, AccountFlags::default(),
-    )).await.expect("credit account");
+    let debit_id = client
+        .create_account(Account::new(
+            AccountId::new(),
+            LedgerId::USD,
+            usd,
+            1,
+            AccountFlags::default(),
+        ))
+        .await
+        .expect("debit account");
+    let credit_id = client
+        .create_account(Account::new(
+            AccountId::new(),
+            LedgerId::USD,
+            usd,
+            1,
+            AccountFlags::default(),
+        ))
+        .await
+        .expect("credit account");
 
-    let max_amount = Amount::new(Decimal::new(100_000_000_000, 2), parse_currency("USD").expect("USD"))
-        .expect("max amount");
+    let max_amount = Amount::new(
+        Decimal::new(100_000_000_000, 2),
+        parse_currency("USD").expect("USD"),
+    )
+    .expect("max amount");
 
     // ── pipeline ─────────────────────────────────────────────────────────────
     let (pipeline, runner) = PipelineBuilder::new()
@@ -83,8 +100,8 @@ async fn run_once(events: u64) -> BenchmarkResult {
         .expect("pipeline build");
 
     let ring_buffer = Arc::clone(pipeline.ring_buffer());
-    let pipeline    = Arc::new(pipeline);
-    let run_handle  = runner.run();
+    let pipeline = Arc::new(pipeline);
+    let run_handle = runner.run();
 
     // ── server ───────────────────────────────────────────────────────────────
     let server = Arc::new(TcpTransportServer::new(
@@ -94,7 +111,9 @@ async fn run_once(events: u64) -> BenchmarkResult {
         1_000,
     ));
     let s = Arc::clone(&server);
-    tokio::spawn(async move { let _ = s.serve().await; });
+    tokio::spawn(async move {
+        let _ = s.serve().await;
+    });
 
     // Wait for the listener to bind and update bound_addr.
     let addr = loop {
@@ -119,24 +138,20 @@ async fn run_once(events: u64) -> BenchmarkResult {
     //
     // Open a single connection (same pattern as send_batch) and loop, measuring
     // each request individually. Zero new ports opened — no TIME_WAIT buildup.
-    let mut stream = TcpStream::connect(&addr)
-        .await
-        .expect("benchmark connect");
+    let mut stream = TcpStream::connect(&addr).await.expect("benchmark connect");
 
     let mut latencies = Vec::with_capacity(events as usize);
     let wall_start = Instant::now();
 
     for _ in 0..events {
-        let req     = make_request(&debit_id, &credit_id);
+        let req = make_request(&debit_id, &credit_id);
         let payload = serialize_request(&req).expect("serialize");
 
         let t0 = Instant::now();
         Frame::write_frame(&mut stream, &payload)
             .await
             .expect("write_frame");
-        let frame = Frame::read_frame(&mut stream)
-            .await
-            .expect("read_frame");
+        let frame = Frame::read_frame(&mut stream).await.expect("read_frame");
         latencies.push(t0.elapsed().as_nanos() as u64);
 
         // Consume the frame to keep the stream in sync.
@@ -171,14 +186,17 @@ fn make_request(debit_id: &AccountId, credit_id: &AccountId) -> TransactionReque
     let id = REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
     // Format as a hyphenated UUID string so the transport layer accepts it without warnings.
     // Using a fixed prefix + counter in the final 12 hex nibbles.
-    let request_id = format!("10000000-0000-4000-8000-{:012x}", id & 0x0000_ffff_ffff_ffff);
+    let request_id = format!(
+        "10000000-0000-4000-8000-{:012x}",
+        id & 0x0000_ffff_ffff_ffff
+    );
     TransactionRequest {
         request_id,
-        debit_account_id:  debit_id.to_string(),
+        debit_account_id: debit_id.to_string(),
         credit_account_id: credit_id.to_string(),
-        amount:            "1.00".to_owned(),
-        currency:          "USD".to_owned(),
-        ledger_id:         1,
-        code:              1,
+        amount: "1.00".to_owned(),
+        currency: "USD".to_owned(),
+        ledger_id: 1,
+        code: 1,
     }
 }

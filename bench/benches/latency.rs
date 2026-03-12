@@ -4,6 +4,7 @@ use criterion::{criterion_group, criterion_main, Criterion};
 
 use blazil_common::amount::Amount;
 use blazil_common::currency::parse_currency;
+use blazil_common::error::BlazerError;
 use blazil_common::ids::{AccountId, LedgerId, TransactionId};
 use blazil_engine::event::TransactionEvent;
 use blazil_engine::handlers::ledger::LedgerHandler;
@@ -14,7 +15,6 @@ use blazil_engine::pipeline::PipelineBuilder;
 use blazil_ledger::account::{Account, AccountFlags};
 use blazil_ledger::client::LedgerClient;
 use blazil_ledger::mock::InMemoryLedgerClient;
-use blazil_common::error::BlazerError;
 use rust_decimal::Decimal;
 
 fn bench_single_tx_latency(c: &mut Criterion) {
@@ -29,12 +29,24 @@ fn bench_single_tx_latency(c: &mut Criterion) {
             .expect("runtime"),
     );
 
-    let debit_id = rt.block_on(client.create_account(Account::new(
-        AccountId::new(), LedgerId::USD, usd, 1, AccountFlags::default(),
-    ))).expect("debit account");
-    let credit_id = rt.block_on(client.create_account(Account::new(
-        AccountId::new(), LedgerId::USD, usd, 1, AccountFlags::default(),
-    ))).expect("credit account");
+    let debit_id = rt
+        .block_on(client.create_account(Account::new(
+            AccountId::new(),
+            LedgerId::USD,
+            usd,
+            1,
+            AccountFlags::default(),
+        )))
+        .expect("debit account");
+    let credit_id = rt
+        .block_on(client.create_account(Account::new(
+            AccountId::new(),
+            LedgerId::USD,
+            usd,
+            1,
+            AccountFlags::default(),
+        )))
+        .expect("credit account");
 
     let amount = Amount::new(Decimal::new(1_00, 2), usd).expect("amount");
     let max_amount = Amount::new(Decimal::new(100_000_000_000, 2), usd).expect("max");
@@ -52,7 +64,12 @@ fn bench_single_tx_latency(c: &mut Criterion) {
     let _handle = runner.run();
 
     let template = TransactionEvent::new(
-        TransactionId::new(), debit_id, credit_id, amount, LedgerId::USD, 1,
+        TransactionId::new(),
+        debit_id,
+        credit_id,
+        amount,
+        LedgerId::USD,
+        1,
     );
 
     c.bench_function("single_tx_latency", |b| {

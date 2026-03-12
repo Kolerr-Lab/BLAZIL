@@ -14,8 +14,10 @@ pub async fn run(events: u64) -> Option<BenchmarkResult> {
     use std::sync::Arc;
     use std::time::Instant;
 
+    use crate::scenarios::ring_buffer_scenario::{publish_with_backpressure, wait_for_drain};
     use blazil_common::amount::Amount;
     use blazil_common::currency::parse_currency;
+    use blazil_common::ids::TransactionId;
     use blazil_common::ids::{AccountId, LedgerId};
     use blazil_engine::event::TransactionEvent;
     use blazil_engine::handlers::ledger::LedgerHandler;
@@ -26,9 +28,7 @@ pub async fn run(events: u64) -> Option<BenchmarkResult> {
     use blazil_ledger::account::{Account, AccountFlags};
     use blazil_ledger::client::LedgerClient;
     use blazil_ledger::tigerbeetle::TigerBeetleClient;
-    use blazil_common::ids::TransactionId;
     use rust_decimal::Decimal;
-    use crate::scenarios::ring_buffer_scenario::{publish_with_backpressure, wait_for_drain};
 
     let addr = match std::env::var("BLAZIL_TB_ADDRESS") {
         Ok(a) => a,
@@ -59,16 +59,31 @@ pub async fn run(events: u64) -> Option<BenchmarkResult> {
     let usd = parse_currency("USD").expect("USD");
 
     // Create two accounts in TigerBeetle.
-    let debit_id = rt.block_on(tb.create_account(Account::new(
-        AccountId::new(), LedgerId::USD, usd.clone(), 1, AccountFlags::default(),
-    ))).expect("debit account");
-    let credit_id = rt.block_on(tb.create_account(Account::new(
-        AccountId::new(), LedgerId::USD, usd.clone(), 1, AccountFlags::default(),
-    ))).expect("credit account");
+    let debit_id = rt
+        .block_on(tb.create_account(Account::new(
+            AccountId::new(),
+            LedgerId::USD,
+            usd.clone(),
+            1,
+            AccountFlags::default(),
+        )))
+        .expect("debit account");
+    let credit_id = rt
+        .block_on(tb.create_account(Account::new(
+            AccountId::new(),
+            LedgerId::USD,
+            usd.clone(),
+            1,
+            AccountFlags::default(),
+        )))
+        .expect("credit account");
 
     let amount = Amount::new(Decimal::new(1_00, 2), usd).expect("amount");
-    let max_amount = Amount::new(Decimal::new(1_000_000_000_00, 2), parse_currency("USD").expect("USD"))
-        .expect("max amount");
+    let max_amount = Amount::new(
+        Decimal::new(1_000_000_000_00, 2),
+        parse_currency("USD").expect("USD"),
+    )
+    .expect("max amount");
 
     let (pipeline, runner) = PipelineBuilder::new()
         .with_capacity(65_536)
@@ -79,11 +94,16 @@ pub async fn run(events: u64) -> Option<BenchmarkResult> {
         .build()
         .expect("pipeline build");
 
-    let rb     = Arc::clone(pipeline.ring_buffer());
+    let rb = Arc::clone(pipeline.ring_buffer());
     let handle = runner.run();
 
     let template = TransactionEvent::new(
-        TransactionId::new(), debit_id, credit_id, amount, LedgerId::USD, 1,
+        TransactionId::new(),
+        debit_id,
+        credit_id,
+        amount,
+        LedgerId::USD,
+        1,
     );
 
     // Warmup: 100 events (TigerBeetle is slower — keep warmup small).
@@ -109,7 +129,12 @@ pub async fn run(events: u64) -> Option<BenchmarkResult> {
     pipeline.stop();
     handle.join().expect("runner panicked");
 
-    Some(BenchmarkResult::new("TigerBeetle (real)", events, duration, &mut latencies))
+    Some(BenchmarkResult::new(
+        "TigerBeetle (real)",
+        events,
+        duration,
+        &mut latencies,
+    ))
 }
 
 #[cfg(not(feature = "tigerbeetle-client"))]

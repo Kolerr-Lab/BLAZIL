@@ -10,33 +10,33 @@ use crate::metrics::BenchmarkResult;
 // ── color palette ─────────────────────────────────────────────────────────────
 
 struct Colors {
-    header:  &'static str, // bold blue   — section headers / dividers
-    tps:     &'static str, // bold green  — TPS numbers
+    header: &'static str,  // bold blue   — section headers / dividers
+    tps: &'static str,     // bold green  — TPS numbers
     latency: &'static str, // bold cyan   — latency numbers
-    label:   &'static str, // white       — scenario labels
+    label: &'static str,   // white       — scenario labels
     context: &'static str, // yellow      — context comparisons
-    reset:   &'static str,
+    reset: &'static str,
 }
 
 impl Colors {
     fn new() -> Self {
         if std::io::stdout().is_terminal() {
             Colors {
-                header:  "\x1b[1;34m",
-                tps:     "\x1b[1;32m",
+                header: "\x1b[1;34m",
+                tps: "\x1b[1;32m",
                 latency: "\x1b[1;36m",
-                label:   "\x1b[0;37m",
+                label: "\x1b[0;37m",
                 context: "\x1b[0;33m",
-                reset:   "\x1b[0m",
+                reset: "\x1b[0m",
             }
         } else {
             Colors {
-                header:  "",
-                tps:     "",
+                header: "",
+                tps: "",
                 latency: "",
-                label:   "",
+                label: "",
                 context: "",
-                reset:   "",
+                reset: "",
             }
         }
     }
@@ -53,34 +53,37 @@ pub fn print_report(
     tcp: &BenchmarkResult,
     tb: Option<&BenchmarkResult>,
 ) {
-    let c    = Colors::new();
-    let sep  = "━".repeat(54);
+    let c = Colors::new();
+    let sep = "━".repeat(54);
     let rule = "─".repeat(53);
 
-    let cpu  = get_cpu_info();
-    let os   = std::env::consts::OS.to_owned();
+    let cpu = get_cpu_info();
+    let os = std::env::consts::OS.to_owned();
     let rust = get_rust_version();
     let date = get_date();
 
     println!("\n{h}{sep}{r}", h = c.header, r = c.reset);
     println!("{h} BLAZIL BENCHMARK RESULTS{r}", h = c.header, r = c.reset);
     println!("{h} Hardware: {cpu}{r}", h = c.header, r = c.reset);
-    println!("{h} OS: {os}{r}",        h = c.header, r = c.reset);
-    println!("{h} Rust: {rust}{r}",    h = c.header, r = c.reset);
-    println!("{h} Date: {date}{r}",    h = c.header, r = c.reset);
-    println!("{h}{sep}{r}\n",          h = c.header, r = c.reset);
+    println!("{h} OS: {os}{r}", h = c.header, r = c.reset);
+    println!("{h} Rust: {rust}{r}", h = c.header, r = c.reset);
+    println!("{h} Date: {date}{r}", h = c.header, r = c.reset);
+    println!("{h}{sep}{r}\n", h = c.header, r = c.reset);
 
     // ── summary table ────────────────────────────────────────────────────────
     println!(
         " {h}{:<28}{r} {h}{:>12}{r}  {h}{:>15}{r}",
-        "Scenario", "TPS", "P99 Latency",
-        h = c.header, r = c.reset,
+        "Scenario",
+        "TPS",
+        "P99 Latency",
+        h = c.header,
+        r = c.reset,
     );
     println!("{h} {rule}{r}", h = c.header, r = c.reset);
 
-    print_row(&c, "Ring Buffer (raw)",    ring,    "ns");
+    print_row(&c, "Ring Buffer (raw)", ring, "ns");
     print_row(&c, "Pipeline (in-memory)", pipeline, "ns");
-    print_tcp_row(&c, "End-to-End TCP",   tcp);
+    print_tcp_row(&c, "End-to-End TCP", tcp);
 
     if let Some(tb) = tb {
         println!(
@@ -88,13 +91,19 @@ pub fn print_report(
             "TigerBeetle (real)*",
             fmt_commas(tb.tps),
             fmt_commas(tb.p99_ns / 1_000),
-            lc = c.label, tc = c.tps, r = c.reset,
+            lc = c.label,
+            tc = c.tps,
+            r = c.reset,
         );
     } else {
         println!(
             " {lc}{:<28}{r} {tc}{:>12}{r}  {lc}{:>15}{r}",
-            "TigerBeetle (real)*", "SKIPPED", "—",
-            lc = c.label, tc = c.tps, r = c.reset,
+            "TigerBeetle (real)*",
+            "SKIPPED",
+            "—",
+            lc = c.label,
+            tc = c.tps,
+            r = c.reset,
         );
     }
 
@@ -103,18 +112,54 @@ pub fn print_report(
 
     // ── detailed latency for pipeline ────────────────────────────────────────
     println!();
-    println!("{h} Detailed latency (Pipeline in-memory):{r}", h = c.header, r = c.reset);
-    println!("   P50:   {lc}{} ns{r}",   fmt_commas(pipeline.p50_ns),   lc = c.latency, r = c.reset);
-    println!("   P95:   {lc}{} ns{r}",   fmt_commas(pipeline.p95_ns),   lc = c.latency, r = c.reset);
-    println!("   P99:   {lc}{} ns{r}",   fmt_commas(pipeline.p99_ns),   lc = c.latency, r = c.reset);
-    println!("   P99.9: {lc}{} ns{r}",   fmt_commas(pipeline.p99_9_ns), lc = c.latency, r = c.reset);
+    println!(
+        "{h} Detailed latency (Pipeline in-memory):{r}",
+        h = c.header,
+        r = c.reset
+    );
+    println!(
+        "   P50:   {lc}{} ns{r}",
+        fmt_commas(pipeline.p50_ns),
+        lc = c.latency,
+        r = c.reset
+    );
+    println!(
+        "   P95:   {lc}{} ns{r}",
+        fmt_commas(pipeline.p95_ns),
+        lc = c.latency,
+        r = c.reset
+    );
+    println!(
+        "   P99:   {lc}{} ns{r}",
+        fmt_commas(pipeline.p99_ns),
+        lc = c.latency,
+        r = c.reset
+    );
+    println!(
+        "   P99.9: {lc}{} ns{r}",
+        fmt_commas(pipeline.p99_9_ns),
+        lc = c.latency,
+        r = c.reset
+    );
 
     // ── context ──────────────────────────────────────────────────────────────
     println!("\n{h}{sep}{r}", h = c.header, r = c.reset);
     println!(" Context:");
-    println!("   {cx}Visa peak:        ~24,000 TPS{r}",             cx = c.context, r = c.reset);
-    println!("   {cx}NASDAQ:       ~2,000,000 TPS{r}",              cx = c.context, r = c.reset);
-    println!("   {cx}Blazil target: 10,000,000 TPS (multi-node){r}", cx = c.context, r = c.reset);
+    println!(
+        "   {cx}Visa peak:        ~24,000 TPS{r}",
+        cx = c.context,
+        r = c.reset
+    );
+    println!(
+        "   {cx}NASDAQ:       ~2,000,000 TPS{r}",
+        cx = c.context,
+        r = c.reset
+    );
+    println!(
+        "   {cx}Blazil target: 10,000,000 TPS (multi-node){r}",
+        cx = c.context,
+        r = c.reset
+    );
     println!("{h}{sep}{r}\n", h = c.header, r = c.reset);
 }
 
@@ -126,7 +171,9 @@ fn print_row(c: &Colors, label: &str, r: &BenchmarkResult, unit: &str) {
         label,
         fmt_commas(r.tps),
         fmt_commas(r.p99_ns),
-        lc = c.label, tc = c.tps, r = c.reset,
+        lc = c.label,
+        tc = c.tps,
+        r = c.reset,
     );
 }
 
@@ -136,7 +183,9 @@ fn print_tcp_row(c: &Colors, label: &str, r: &BenchmarkResult) {
         label,
         fmt_commas(r.tps),
         fmt_commas(r.p99_ns / 1_000),
-        lc = c.label, tc = c.tps, r = c.reset,
+        lc = c.label,
+        tc = c.tps,
+        r = c.reset,
     );
 }
 

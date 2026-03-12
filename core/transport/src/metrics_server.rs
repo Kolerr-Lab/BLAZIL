@@ -154,10 +154,7 @@ mod tests {
             text.contains("blazil_pipeline_events_rejected_total"),
             "missing rejected counter"
         );
-        assert!(
-            text.contains("blazil_pipeline_p99_ns"),
-            "missing p99 gauge"
-        );
+        assert!(text.contains("blazil_pipeline_p99_ns"), "missing p99 gauge");
         assert!(
             text.contains("blazil_ring_buffer_utilization_ratio"),
             "missing utilization gauge"
