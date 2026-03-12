@@ -6,11 +6,10 @@ services:
 
   tigerbeetle:
     image: ghcr.io/tigerbeetle/tigerbeetle:latest
-    command: >
-      start --addresses=0.0.0.0:3000
-      /data/0_0.tigerbeetle
+    entrypoint: ["/entrypoint.sh"]
     volumes:
       - tb-data:/data
+      - ./tigerbeetle-entrypoint.sh:/entrypoint.sh:ro
     healthcheck:
       test: ["CMD", "nc", "-z", "localhost", "3000"]
       interval: 5s
@@ -47,6 +46,7 @@ services:
     environment:
       BLAZIL_BIND_ADDR: "0.0.0.0:7878"
       BLAZIL_METRICS_PORT: "9090"
+      BLAZIL_TB_ADDRESS: "tigerbeetle:3000"
     ports:
       - "7878:7878"
     depends_on:

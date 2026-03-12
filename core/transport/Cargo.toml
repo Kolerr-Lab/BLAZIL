@@ -5,6 +5,11 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+# Enables the real TigerBeetle ledger client.
+# Required by Dockerfile.engine; unit tests use the default in-memory client.
+tigerbeetle-client = ["blazil-ledger/tigerbeetle-client"]
+
 [dependencies]
 blazil-common  = { path = "../common" }
 blazil-engine  = { path = "../engine" }

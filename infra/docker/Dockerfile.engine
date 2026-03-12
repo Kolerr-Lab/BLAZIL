@@ -1,13 +1,34 @@
 # Blazil engine — Rust multi-stage build
-# Decision: blazil-transport is both a lib and a binary (src/main.rs added in this prompt).
-# Decision: Uses in-memory ledger for demo mode; TigerBeetle integration flagged for Prompt #14.
+# Compiles with the tigerbeetle-client feature, which requires Zig (used internally
+# by tigerbeetle-unofficial to cross-compile C sources via the Zig C compiler).
+# At runtime the engine detects BLAZIL_TB_ADDRESS: if set it connects to TigerBeetle,
+# otherwise it falls back to the in-memory ledger (dev/demo only).
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 1: builder
+# ─────────────────────────────────────────────────────────────────────────────
 FROM rust:1.82-slim AS builder
 WORKDIR /app
-COPY . .
-RUN cargo build --release -p blazil-transport
 
+# System deps required by tigerbeetle-unofficial and the SSL crate
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config libssl-dev clang lld curl xz-utils ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Zig 0.13.0 — required by tigerbeetle-unofficial's build.zig
+RUN curl -fsSL https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz \
+    | tar -xJ -C /usr/local \
+    && ln -s /usr/local/zig-linux-x86_64-0.13.0/zig /usr/local/bin/zig
+
+COPY . .
+RUN cargo build --release -p blazil-transport --features blazil-transport/tigerbeetle-client
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 2: minimal runtime image
+# ─────────────────────────────────────────────────────────────────────────────
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /app/target/release/blazil-transport /usr/local/bin/blazil-transport
 EXPOSE 7878 9090
 CMD ["blazil-transport"]

@@ -1,44 +1,61 @@
-## Pull Request Description
+## Description
 
-<!-- Provide a brief description of the changes in this PR -->
+<!-- What problem does this PR solve? Link to the issue it addresses. -->
+
+Fixes #
 
 ## Type of Change
 
-- [ ] Bug fix (non-breaking change which fixes an issue)
-- [ ] New feature (non-breaking change which adds functionality)
-- [ ] Breaking change (fix or feature that would cause existing functionality to not work as expected)
-- [ ] Documentation update
+- [ ] Bug fix
+- [ ] New feature
+- [ ] Breaking change
 - [ ] Performance improvement
-- [ ] Refactoring (no functional changes)
+- [ ] Refactoring / cleanup
+- [ ] Documentation / runbook
+- [ ] CI / infra / tooling
 
-## Related Issue
+## What Changed
 
-<!-- Link to the issue this PR addresses, e.g., Fixes #123 -->
+<!-- Bullet-point summary of the key changes. Include any architecture decisions. -->
+
+-
 
 ## Testing
 
-<!-- Describe the tests you ran to verify your changes -->
+| Test type | Command | Status |
+|-----------|---------|--------|
+| Rust unit | `cargo test --workspace` | [ ] |
+| Go unit | `cd services && go test ./...` | [ ] |
+| Integration | `cargo test -p blazil-ledger --features tigerbeetle-client` | [ ] |
+| Benchmarks | `./scripts/bench.sh` | [ ] N/A |
 
-- [ ] Unit tests pass (`cargo test` / `go test`)
-- [ ] Integration tests pass
-- [ ] Benchmarks show no regression
-- [ ] Manual testing completed
+Describe any manual verification steps performed:
+
+## Security & Compliance
+
+- [ ] No secrets / credentials committed
+- [ ] OWASP Top 10 considered (injection, auth, SSRF, etc.)
+- [ ] `cargo audit` / `trivy` pass with no new CRITICAL/HIGH findings
+- [ ] OPA policy rules updated if access control changed (`infra/policies/blazil.rego`)
+
+## Observability
+
+- [ ] New code paths emit structured logs (`tracing::info!` / `tracing::error!`)
+- [ ] New metrics registered and exposed on `/metrics`
+- [ ] Grafana dashboard updated if new panels are needed
+
+## Deployment Notes
+
+<!-- Anything the reviewer or on-call needs to know when this ships:
+     - env vars added/changed
+     - migration steps
+     - feature flags
+     - rollback procedure -->
 
 ## Checklist
 
-- [ ] My code follows the project's code style
-- [ ] I have performed a self-review of my own code
-- [ ] I have commented my code, particularly in hard-to-understand areas
-- [ ] I have made corresponding changes to the documentation
-- [ ] My changes generate no new warnings
-- [ ] I have added tests that prove my fix is effective or that my feature works
-- [ ] New and existing unit tests pass locally with my changes
-- [ ] Any dependent changes have been merged and published
-
-## Performance Impact
-
-<!-- If applicable, describe the performance impact of your changes -->
-
-## Additional Notes
-
-<!-- Any additional information that reviewers should know -->
+- [ ] PR title follows `scope: short description` convention (e.g. `engine: add risk limit config`)
+- [ ] Self-review completed — code reads clearly without inline explanation
+- [ ] Docs/runbooks updated (`docs/`, `infra/docker/`, `observability/`)
+- [ ] CHANGELOG.md updated under `[Unreleased]`
+- [ ] No regressions in `cargo clippy --workspace -- -D warnings`

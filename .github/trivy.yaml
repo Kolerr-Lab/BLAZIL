@@ -1,0 +1,22 @@
+# Trivy configuration for Blazil security scanning.
+# Scans for OS and library vulnerabilities.
+# Only fails on CRITICAL and HIGH severity unfixed vulnerabilities.
+
+scan:
+  skip-dirs:
+    - vendor
+    - node_modules
+    - .git
+    - target
+  skip-files:
+    - "**/*_test.go"
+
+vulnerability:
+  type:
+    - os
+    - library
+  ignore-unfixed: true
+
+severity:
+  - CRITICAL
+  - HIGH

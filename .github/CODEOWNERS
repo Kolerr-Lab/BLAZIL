@@ -1,0 +1,40 @@
+# CODEOWNERS — GitHub automatically requests reviews from these teams/individuals
+# when a PR touches files matching the pattern.
+# Rules are evaluated in order; the LAST matching rule wins.
+# Docs: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# ── Global fallback ───────────────────────────────────────────────────────────
+* @Kolerr-Lab/blazil-core
+
+# ── Rust core (engine, ledger, transport, risk, common) ───────────────────────
+/core/                          @Kolerr-Lab/blazil-rust
+/bench/                         @Kolerr-Lab/blazil-rust
+
+# ── Go services ───────────────────────────────────────────────────────────────
+/services/                      @Kolerr-Lab/blazil-go
+/libs/                          @Kolerr-Lab/blazil-go
+
+# ── Infra / DevOps ────────────────────────────────────────────────────────────
+/infra/                         @Kolerr-Lab/blazil-infra
+/infra/terraform/               @Kolerr-Lab/blazil-infra
+/infra/k8s/                     @Kolerr-Lab/blazil-infra
+/infra/ansible/                 @Kolerr-Lab/blazil-infra
+/infra/docker/                  @Kolerr-Lab/blazil-infra
+
+# ── CI / GitHub configuration ─────────────────────────────────────────────────
+/.github/                       @Kolerr-Lab/blazil-infra @Kolerr-Lab/blazil-core
+/.github/workflows/             @Kolerr-Lab/blazil-infra
+/.github/CODEOWNERS             @Kolerr-Lab/blazil-core
+
+# ── Observability ─────────────────────────────────────────────────────────────
+/observability/                 @Kolerr-Lab/blazil-infra
+
+# ── Security / Compliance ─────────────────────────────────────────────────────
+/infra/policies/                @Kolerr-Lab/blazil-security
+SECURITY.md                     @Kolerr-Lab/blazil-security
+
+# ── Documentation ─────────────────────────────────────────────────────────────
+/docs/                          @Kolerr-Lab/blazil-core
+README.md                       @Kolerr-Lab/blazil-core
+CHANGELOG.md                    @Kolerr-Lab/blazil-core
+CONTRIBUTING.md                 @Kolerr-Lab/blazil-core
