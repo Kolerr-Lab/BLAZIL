@@ -11,10 +11,12 @@ scan:
   skip-files:
     - "**/*_test.go"
 
-vulnerability:
-  type:
+pkg:
+  types:
     - os
     - library
+
+vulnerability:
   ignore-unfixed: true
 
 severity:

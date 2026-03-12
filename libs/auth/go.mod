@@ -3,7 +3,7 @@ module github.com/blazil/auth
 go 1.24.0
 
 require (
-	github.com/golang-jwt/jwt/v5 v5.2.1
+	github.com/golang-jwt/jwt/v5 v5.2.2
 	google.golang.org/grpc v1.64.0
 )
 
