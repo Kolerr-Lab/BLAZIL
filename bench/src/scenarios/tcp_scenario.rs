@@ -63,13 +63,13 @@ async fn run_once(events: u64) -> BenchmarkResult {
 
     // Pre-create accounts directly — the pipeline handles transfers only.
     let debit_id  = client.create_account(Account::new(
-        AccountId::new(), LedgerId::USD, usd.clone(), 1, AccountFlags::default(),
+        AccountId::new(), LedgerId::USD, usd, 1, AccountFlags::default(),
     )).await.expect("debit account");
     let credit_id = client.create_account(Account::new(
-        AccountId::new(), LedgerId::USD, usd.clone(), 1, AccountFlags::default(),
+        AccountId::new(), LedgerId::USD, usd, 1, AccountFlags::default(),
     )).await.expect("credit account");
 
-    let max_amount = Amount::new(Decimal::new(1_000_000_000_00, 2), parse_currency("USD").expect("USD"))
+    let max_amount = Amount::new(Decimal::new(100_000_000_000, 2), parse_currency("USD").expect("USD"))
         .expect("max amount");
 
     // ── pipeline ─────────────────────────────────────────────────────────────

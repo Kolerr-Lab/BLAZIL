@@ -27,7 +27,7 @@ impl BenchmarkResult {
         scenario: &str,
         events: u64,
         duration: Duration,
-        latencies: &mut Vec<u64>,
+        latencies: &mut [u64],
     ) -> Self {
         latencies.sort_unstable();
 

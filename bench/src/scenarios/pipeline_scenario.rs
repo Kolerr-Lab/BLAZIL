@@ -59,15 +59,15 @@ fn run_once_blocking(events: u64) -> BenchmarkResult {
     let client = Arc::new(InMemoryLedgerClient::new_unbounded());
 
     let debit_id  = rt.block_on(client.create_account(Account::new(
-        AccountId::new(), LedgerId::USD, usd.clone(), 1, AccountFlags::default(),
+        AccountId::new(), LedgerId::USD, usd, 1, AccountFlags::default(),
     ))).expect("debit account");
     let credit_id = rt.block_on(client.create_account(Account::new(
-        AccountId::new(), LedgerId::USD, usd.clone(), 1, AccountFlags::default(),
+        AccountId::new(), LedgerId::USD, usd, 1, AccountFlags::default(),
     ))).expect("credit account");
 
     let amount = Amount::new(Decimal::new(1_00, 2), usd).expect("amount");
     let max_amount = Amount::new(
-        Decimal::new(1_000_000_000_00, 2),
+        Decimal::new(100_000_000_000, 2),
         parse_currency("USD").expect("USD"),
     ).expect("max amount");
 

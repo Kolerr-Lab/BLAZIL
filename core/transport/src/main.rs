@@ -56,7 +56,7 @@ async fn run_pipeline<C: LedgerClient + 'static>(
     );
 
     let max_amount = Amount::new(
-        Decimal::new(1_000_000_000_000_00, 2),
+        Decimal::new(100_000_000_000_000, 2),
         parse_currency("USD").expect("USD"),
     )
     .expect("max amount");
@@ -104,7 +104,7 @@ async fn make_in_memory_client() -> Arc<InMemoryLedgerClient> {
         .create_account(Account::new(
             debit_id,
             LedgerId::USD,
-            usd.clone(),
+            usd,
             1,
             AccountFlags::default(),
         ))

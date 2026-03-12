@@ -156,7 +156,7 @@ pub fn fmt_commas(n: u64) -> String {
 fn get_cpu_info() -> String {
     #[cfg(target_arch = "aarch64")]
     {
-        return "Apple Silicon (ARM64)".to_owned();
+        "Apple Silicon (ARM64)".to_owned()
     }
 
     #[cfg(not(target_arch = "aarch64"))]
