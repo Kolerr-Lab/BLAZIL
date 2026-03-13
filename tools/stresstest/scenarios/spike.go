@@ -61,7 +61,7 @@ func Spike(cfg Config) Result {
 		<-ctx.Done()
 		wg.Wait()
 
-		total, success, failed, _, p99 := col.Snapshot()
+		total, success, failed, _, p99 := col.SnapshotDelta()
 		tps := float64(success) / dur.Seconds()
 		errPct := 0.0
 		if total > 0 {

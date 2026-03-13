@@ -7,10 +7,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/blazil/observability"
 	"github.com/blazil/crypto/internal/chains"
 	"github.com/blazil/crypto/internal/domain"
 	"github.com/blazil/crypto/internal/engine"
+	"github.com/blazil/observability"
 )
 
 // DepositStore is the persistence interface for deposits.

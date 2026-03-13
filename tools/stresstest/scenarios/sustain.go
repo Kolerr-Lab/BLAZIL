@@ -68,7 +68,7 @@ func Sustain(cfg Config, sc SustainConfig) Result {
 			goto done
 		case <-ticker.C:
 			elapsed = time.Since(start)
-			total, success, failed, p50, p99 := col.Snapshot()
+			total, success, failed, p50, p99 := col.SnapshotDelta()
 			secs := interval.Seconds()
 			tps := float64(success) / secs
 			errPct := 0.0
@@ -91,7 +91,7 @@ func Sustain(cfg Config, sc SustainConfig) Result {
 done:
 	// Final snapshot for any residual counts.
 	{
-		total, success, failed, p50, p99 := col.Snapshot()
+		total, success, failed, p50, p99 := col.SnapshotDelta()
 		remaining := time.Since(start) - elapsed
 		if remaining > 0 && (total > 0) {
 			secs := remaining.Seconds()

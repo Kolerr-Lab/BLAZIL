@@ -47,7 +47,7 @@ func Ramp(cfg Config) Result {
 		<-ctx.Done()
 		cancel()
 
-		total, success, failed, _, p99 := col.Snapshot()
+		total, success, failed, _, p99 := col.SnapshotDelta()
 		elapsed := stepDur.Seconds()
 		tps := float64(success) / elapsed
 		errPct := 0.0

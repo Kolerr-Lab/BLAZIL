@@ -99,6 +99,24 @@ func (c *Collector) Snapshot() (total, success, failed int64, p50Ms, p99Ms float
 	return
 }
 
+// SnapshotDelta returns the counts accumulated since the previous SnapshotDelta
+// call (or since creation) and resets those counters to zero.  The latency
+// buffer is also drained and reset.  Use this for per-interval TPS calculations.
+func (c *Collector) SnapshotDelta() (total, success, failed int64, p50Ms, p99Ms float64) {
+	total = c.total.Swap(0)
+	success = c.success.Swap(0)
+	failed = c.failed.Swap(0)
+
+	c.mu.Lock()
+	buf := make([]int64, len(c.latBuf))
+	copy(buf, c.latBuf)
+	c.latBuf = c.latBuf[:0]
+	c.mu.Unlock()
+
+	p50Ms, p99Ms = percentiles(buf)
+	return
+}
+
 // Reset clears all counters and the latency buffer.  Call between scenarios.
 func (c *Collector) Reset() {
 	c.total.Store(0)
