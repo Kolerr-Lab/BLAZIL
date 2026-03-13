@@ -121,6 +121,7 @@ jobs:
           mkdir -p /tmp/tb-data
           # Step 1: format the data file (runs to completion then exits)
           docker run --rm \
+            --security-opt seccomp=unconfined \
             -v /tmp/tb-data:/data \
             ghcr.io/tigerbeetle/tigerbeetle:latest \
             format \
@@ -129,10 +130,10 @@ jobs:
             --replica-count=1 \
             /data/0_0.tigerbeetle
           # Step 2: start the server in the background
-          # --development disables io_uring and uses POSIX I/O (required on GHA runners)
           docker run -d \
             --name tigerbeetle \
             --network host \
+            --security-opt seccomp=unconfined \
             -v /tmp/tb-data:/data \
             ghcr.io/tigerbeetle/tigerbeetle:latest \
             start \
