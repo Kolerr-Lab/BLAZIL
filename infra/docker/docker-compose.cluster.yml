@@ -1,0 +1,260 @@
+# Blazil 3-Node Cluster — local simulation on a single machine.
+#
+# Topology:
+#   TigerBeetle: 3-replica VSR cluster (replicas 0-2, ports 3000-3002)
+#   blazil-node-1: shard 0 — engine :7878, payments :50051, metrics :9095
+#   blazil-node-2: shard 1 — engine :7879, payments :50061, metrics :9096
+#   blazil-node-3: shard 2 — engine :7880, payments :50071, metrics :9097
+#   prometheus:   :9090  (scrapes all 3 node engines via container network)
+#   grafana:      :3010
+#
+# Usage:
+#   ./scripts/cluster.sh
+#   docker compose -f infra/docker/docker-compose.cluster.yml up --build
+
+networks:
+  blazil-cluster:
+    driver: bridge
+
+volumes:
+  tb-0-data:
+  tb-1-data:
+  tb-2-data:
+
+services:
+
+  # ── TigerBeetle Cluster (3 replicas, VSR consensus) ─────────────────────────
+
+  tigerbeetle-0:
+    image: ghcr.io/tigerbeetle/tigerbeetle:latest
+    entrypoint: ["/entrypoint.sh"]
+    environment:
+      TB_REPLICA: "0"
+      TB_REPLICA_COUNT: "3"
+      TB_ADDRESSES: "tigerbeetle-0:3000,tigerbeetle-1:3001,tigerbeetle-2:3002"
+    volumes:
+      - tb-0-data:/data
+      - ./tigerbeetle-entrypoint.sh:/entrypoint.sh:ro
+    ports:
+      - "3000:3000"
+    networks:
+      - blazil-cluster
+    security_opt:
+      - seccomp:unconfined
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "3000"]
+      interval: 5s
+      retries: 15
+      start_period: 10s
+
+  tigerbeetle-1:
+    image: ghcr.io/tigerbeetle/tigerbeetle:latest
+    entrypoint: ["/entrypoint.sh"]
+    environment:
+      TB_REPLICA: "1"
+      TB_REPLICA_COUNT: "3"
+      TB_ADDRESSES: "tigerbeetle-0:3000,tigerbeetle-1:3001,tigerbeetle-2:3002"
+    volumes:
+      - tb-1-data:/data
+      - ./tigerbeetle-entrypoint.sh:/entrypoint.sh:ro
+    ports:
+      - "3001:3001"
+    networks:
+      - blazil-cluster
+    security_opt:
+      - seccomp:unconfined
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "3001"]
+      interval: 5s
+      retries: 15
+      start_period: 10s
+
+  tigerbeetle-2:
+    image: ghcr.io/tigerbeetle/tigerbeetle:latest
+    entrypoint: ["/entrypoint.sh"]
+    environment:
+      TB_REPLICA: "2"
+      TB_REPLICA_COUNT: "3"
+      TB_ADDRESSES: "tigerbeetle-0:3000,tigerbeetle-1:3001,tigerbeetle-2:3002"
+    volumes:
+      - tb-2-data:/data
+      - ./tigerbeetle-entrypoint.sh:/entrypoint.sh:ro
+    ports:
+      - "3002:3002"
+    networks:
+      - blazil-cluster
+    security_opt:
+      - seccomp:unconfined
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "3002"]
+      interval: 5s
+      retries: 15
+      start_period: 10s
+
+  # ── Node 1 — Shard 0 ─────────────────────────────────────────────────────────
+
+  blazil-node-1:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.engine
+    container_name: blazil-node-1
+    environment:
+      BLAZIL_BIND_ADDR: "0.0.0.0:7878"
+      BLAZIL_METRICS_PORT: "9090"
+      BLAZIL_TB_ADDRESS: "tigerbeetle-0:3000,tigerbeetle-1:3001,tigerbeetle-2:3002"
+      BLAZIL_SHARD_ID: "0"
+      BLAZIL_NODE_ID: "node-1"
+    ports:
+      - "7878:7878"
+      - "9095:9090"
+    networks:
+      - blazil-cluster
+    depends_on:
+      tigerbeetle-0:
+        condition: service_healthy
+      tigerbeetle-1:
+        condition: service_healthy
+      tigerbeetle-2:
+        condition: service_healthy
+
+  blazil-node-1-payments:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.payments
+    environment:
+      BLAZIL_ENGINE_ADDR: "blazil-node-1:7878"
+      BLAZIL_METRICS_ADDR: "0.0.0.0:9091"
+      BLAZIL_SHARD_ID: "0"
+      BLAZIL_NODE_ID: "node-1"
+      BLAZIL_SHARDING_ENABLED: "true"
+      BLAZIL_NODES: "node-1:blazil-node-1:7878,node-2:blazil-node-2:7878,node-3:blazil-node-3:7878"
+      BLAZIL_AUTH_REQUIRED: "false"
+    ports:
+      - "50051:50051"
+      - "9091:9091"
+    networks:
+      - blazil-cluster
+    depends_on:
+      - blazil-node-1
+
+  # ── Node 2 — Shard 1 ─────────────────────────────────────────────────────────
+
+  blazil-node-2:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.engine
+    container_name: blazil-node-2
+    environment:
+      BLAZIL_BIND_ADDR: "0.0.0.0:7878"
+      BLAZIL_METRICS_PORT: "9090"
+      BLAZIL_TB_ADDRESS: "tigerbeetle-0:3000,tigerbeetle-1:3001,tigerbeetle-2:3002"
+      BLAZIL_SHARD_ID: "1"
+      BLAZIL_NODE_ID: "node-2"
+    ports:
+      - "7879:7878"
+      - "9096:9090"
+    networks:
+      - blazil-cluster
+    depends_on:
+      tigerbeetle-0:
+        condition: service_healthy
+      tigerbeetle-1:
+        condition: service_healthy
+      tigerbeetle-2:
+        condition: service_healthy
+
+  blazil-node-2-payments:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.payments
+    environment:
+      BLAZIL_ENGINE_ADDR: "blazil-node-2:7878"
+      BLAZIL_METRICS_ADDR: "0.0.0.0:9091"
+      BLAZIL_SHARD_ID: "1"
+      BLAZIL_NODE_ID: "node-2"
+      BLAZIL_SHARDING_ENABLED: "true"
+      BLAZIL_NODES: "node-1:blazil-node-1:7878,node-2:blazil-node-2:7878,node-3:blazil-node-3:7878"
+      BLAZIL_AUTH_REQUIRED: "false"
+    ports:
+      - "50061:50051"
+      - "9101:9091"
+    networks:
+      - blazil-cluster
+    depends_on:
+      - blazil-node-2
+
+  # ── Node 3 — Shard 2 ─────────────────────────────────────────────────────────
+
+  blazil-node-3:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.engine
+    container_name: blazil-node-3
+    environment:
+      BLAZIL_BIND_ADDR: "0.0.0.0:7878"
+      BLAZIL_METRICS_PORT: "9090"
+      BLAZIL_TB_ADDRESS: "tigerbeetle-0:3000,tigerbeetle-1:3001,tigerbeetle-2:3002"
+      BLAZIL_SHARD_ID: "2"
+      BLAZIL_NODE_ID: "node-3"
+    ports:
+      - "7880:7878"
+      - "9097:9090"
+    networks:
+      - blazil-cluster
+    depends_on:
+      tigerbeetle-0:
+        condition: service_healthy
+      tigerbeetle-1:
+        condition: service_healthy
+      tigerbeetle-2:
+        condition: service_healthy
+
+  blazil-node-3-payments:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.payments
+    environment:
+      BLAZIL_ENGINE_ADDR: "blazil-node-3:7878"
+      BLAZIL_METRICS_ADDR: "0.0.0.0:9091"
+      BLAZIL_SHARD_ID: "2"
+      BLAZIL_NODE_ID: "node-3"
+      BLAZIL_SHARDING_ENABLED: "true"
+      BLAZIL_NODES: "node-1:blazil-node-1:7878,node-2:blazil-node-2:7878,node-3:blazil-node-3:7878"
+      BLAZIL_AUTH_REQUIRED: "false"
+    ports:
+      - "50071:50051"
+      - "9111:9091"
+    networks:
+      - blazil-cluster
+    depends_on:
+      - blazil-node-3
+
+  # ── Monitoring ───────────────────────────────────────────────────────────────
+
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    volumes:
+      - ./prometheus/prometheus.cluster.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    networks:
+      - blazil-cluster
+    depends_on:
+      - blazil-node-1
+      - blazil-node-2
+      - blazil-node-3
+
+  grafana:
+    image: grafana/grafana:10.4.0
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: blazil
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "3010:3000"
+    networks:
+      - blazil-cluster
+    depends_on:
+      - prometheus

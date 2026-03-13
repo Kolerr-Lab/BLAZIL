@@ -28,6 +28,8 @@ type PaymentProcessor struct {
 	engineClient engine.BlazerEngineClient
 	// shardRouter is optional; nil means single-node mode.
 	shardRouter sharding.ShardRouter
+	// coordinator handles cross-shard transfers when shardRouter is set.
+	coordinator sharding.CrossShardCoordinator
 }
 
 // NewPaymentProcessor constructs a PaymentProcessor with the provided dependencies.
@@ -48,10 +50,18 @@ func NewPaymentProcessor(
 }
 
 // SetShardRouter enables shard-aware routing on this processor. When set, the
-// processor detects cross-shard transfers and logs them. Actual cross-shard
-// execution is handled in Prompt #16.
+// processor detects cross-shard transfers and, if a CrossShardCoordinator is
+// also configured via SetCrossShardCoordinator, executes them via the
+// two-phase pending→commit/void protocol.
 func (p *PaymentProcessor) SetShardRouter(r sharding.ShardRouter) {
 	p.shardRouter = r
+}
+
+// SetCrossShardCoordinator registers the coordinator used to execute
+// cross-shard transfers. Must be called after SetShardRouter when multi-node
+// sharding is active.
+func (p *PaymentProcessor) SetCrossShardCoordinator(c sharding.CrossShardCoordinator) {
+	p.coordinator = c
 }
 
 // Process runs the full payment lifecycle for the given request.
@@ -103,19 +113,42 @@ func (p *PaymentProcessor) Process(ctx context.Context, req domain.ProcessPaymen
 	}
 	payment.Rails = rails
 
-	// STEP 4b — Cross-shard detection (Prompt #15).
-	// When sharding is enabled, log cross-shard transfers for future execution
-	// in Prompt #16. The engine submission below still uses the single-node
-	// client; multi-node dispatch is out of scope for this prompt.
+	// STEP 4b — Cross-shard detection and execution (Prompt #16).
+	// When sharding is enabled and a coordinator is wired, cross-shard
+	// transfers are executed via TigerBeetle linked transfers (pending →
+	// commit / void). Single-shard transfers fall through to STEP 5.
 	if p.shardRouter != nil {
 		fromID := accountToUint64(string(payment.DebitAccountID))
 		toID := accountToUint64(string(payment.CreditAccountID))
 		if p.shardRouter.IsCrossShard(fromID, toID) {
-			zap.L().Info("cross-shard transfer detected",
-				zap.String("debit_account", string(payment.DebitAccountID)),
-				zap.String("credit_account", string(payment.CreditAccountID)),
-				zap.String("payment_id", string(payment.ID)),
-			)
+			if p.coordinator == nil {
+				// Coordinator not yet wired — log and fall through.
+				zap.L().Info("cross-shard transfer detected (coordinator not set)",
+					zap.String("debit_account", string(payment.DebitAccountID)),
+					zap.String("credit_account", string(payment.CreditAccountID)),
+					zap.String("payment_id", string(payment.ID)),
+				)
+			} else {
+				if err := p.coordinator.Execute(ctx, sharding.CrossShardRequest{
+					FromAccountID:  fromID,
+					ToAccountID:    toID,
+					Amount:         payment.Amount.MinorUnits,
+					Currency:       payment.Amount.Currency.Code,
+					IdempotencyKey: payment.IdempotencyKey,
+				}); err != nil {
+					return nil, fmt.Errorf("cross-shard transfer failed for payment %s: %w", payment.ID, err)
+				}
+				// Cross-shard transfer settled by coordinator.
+				payment.Status = domain.StatusSettled
+				payment.UpdatedAt = time.Now().UTC()
+				p.idempotency.Set(req.IdempotencyKey, payment)
+				if err := p.store.Save(payment); err != nil {
+					return nil, fmt.Errorf("store failed for payment %s: %w", payment.ID, err)
+				}
+				observability.TransactionsTotal.WithLabelValues("payments", payment.Status.String(), payment.Rails.String()).Inc()
+				observability.TransactionDuration.WithLabelValues("payments", "process").Observe(time.Since(start).Seconds())
+				return payment, nil
+			}
 		}
 	}
 

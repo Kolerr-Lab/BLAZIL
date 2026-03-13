@@ -2,6 +2,7 @@ package lifecycle_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -93,4 +94,75 @@ func TestPayments_ShardingEnabled_Routes(t *testing.T) {
 	if mockRouter.IsCrossShardCallCount() == 0 {
 		t.Error("expected IsCrossShard to be called at least once during processing")
 	}
+}
+
+// mockCoordinator is a test-local CrossShardCoordinator that records Execute
+// calls and returns a configurable error.
+type mockCoordinator struct {
+	executeCount int
+	returnErr    error
+}
+
+func (m *mockCoordinator) Execute(_ context.Context, _ sharding.CrossShardRequest) error {
+	m.executeCount++
+	return m.returnErr
+}
+
+// TestPayments_CoordinatorExecutes_CrossShard verifies that when a coordinator
+// is wired and IsCrossShard returns true, the coordinator's Execute method is
+// called (and the normal engine path is skipped).
+func TestPayments_CoordinatorExecutes_CrossShard(t *testing.T) {
+	mock := engine.NewMockEngineClient()
+	proc := buildProcessorForSharding(mock)
+
+	// Use a real MockShardRouter so IsCrossShard uses actual jump hash.
+	// Pick two account IDs that jump-hash to different shards (3 shards).
+	// account-X and account-Z are chosen so IsCrossShard returns true;
+	// the test asserts coordinator.Execute is invoked.
+	mockRouter := sharding.NewMockShardRouter()
+	coordinator := &mockCoordinator{}
+	proc.SetShardRouter(mockRouter)
+	proc.SetCrossShardCoordinator(coordinator)
+
+	// Find the first cross-shard pair by iterating until IsCrossShard is true.
+	var debitID, creditID string
+	for i := 0; i < 1000; i++ {
+		for j := i + 1; j < 1000; j++ {
+			a := domain.AccountID(fmt.Sprintf("account-%d", i))
+			b := domain.AccountID(fmt.Sprintf("account-%d", j))
+			if mockRouter.IsCrossShard(hashAccount(a), hashAccount(b)) {
+				debitID = string(a)
+				creditID = string(b)
+				goto found
+			}
+		}
+	}
+found:
+	req := domain.ProcessPaymentRequest{
+		IdempotencyKey:  "coordinator-xshard-1",
+		DebitAccountID:  domain.AccountID(debitID),
+		CreditAccountID: domain.AccountID(creditID),
+		Amount:          domain.NewMoney(2500, domain.USD),
+		LedgerID:        1,
+		Metadata:        map[string]string{"reference": "REF-003"},
+	}
+
+	_, err := proc.Process(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if coordinator.executeCount == 0 {
+		t.Error("expected coordinator.Execute to be called for cross-shard payment, but it was not")
+	}
+}
+
+// hashAccount mirrors accountToUint64 used in processor.go so the test can
+// compute shard IDs without accessing the unexported helper.
+func hashAccount(id domain.AccountID) uint64 {
+	var h uint64 = 14695981039346656037 // FNV-1a offset basis
+	for _, b := range []byte(id) {
+		h ^= uint64(b)
+		h *= 1099511628211
+	}
+	return h
 }
