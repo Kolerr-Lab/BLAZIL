@@ -12,6 +12,7 @@ import (
 	"syscall"
 
 	"github.com/blazil/auth"
+	"github.com/blazil/crypto/internal/engine"
 	"github.com/blazil/observability"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
@@ -69,7 +70,7 @@ func main() {
 	withdrawalStore := withdrawals.NewInMemoryWithdrawalStore()
 	withdrawalSvc := withdrawals.NewInMemoryWithdrawalService(withdrawalStore, registry, nil)
 
-	transferSvc := transfers.NewInMemoryInternalTransferService(walletSvc, nil)
+	transferSvc := transfers.NewInMemoryInternalTransferService(walletSvc, &engine.MockEngineClient{})
 
 	lis, err := net.Listen("tcp", cfg.GRPCAddr)
 	if err != nil {

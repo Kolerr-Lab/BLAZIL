@@ -24,6 +24,7 @@
 //! **Flag for Architecture Room review.**
 
 use async_trait::async_trait;
+use std::net::SocketAddr;
 use std::time::Instant;
 use tracing::instrument;
 
@@ -62,6 +63,27 @@ pub struct TigerBeetleClient {
     address: String,
 }
 
+// ── Address resolution ────────────────────────────────────────────────────────
+
+/// Resolves a `host:port` string to `ip:port`.
+///
+/// TigerBeetle's embedded Zig client (v0.14) only accepts IP addresses — DNS
+/// hostnames are rejected with "Replica addresses format is invalid".  This
+/// helper performs a one-shot DNS lookup so callers (e.g. Docker Compose
+/// service names like `"tigerbeetle:3000"`) don't need to know the IP.
+async fn resolve_tb_address(addr: &str) -> BlazerResult<String> {
+    // Fast path: already a valid IP:port — no lookup needed.
+    if addr.parse::<SocketAddr>().is_ok() {
+        return Ok(addr.to_owned());
+    }
+    tokio::net::lookup_host(addr)
+        .await
+        .map_err(|e| BlazerError::Ledger(format!("Failed to resolve TB address '{addr}': {e}")))?
+        .next()
+        .map(|sa| sa.to_string())
+        .ok_or_else(|| BlazerError::Ledger(format!("No DNS result for TB address '{addr}'")))
+}
+
 impl TigerBeetleClient {
     /// Connects to TigerBeetle at `address` for the given `cluster_id`.
     ///
@@ -83,7 +105,10 @@ impl TigerBeetleClient {
     /// }
     /// ```
     pub async fn connect(address: &str, cluster_id: u128) -> BlazerResult<Self> {
-        let inner = tb::Client::new(cluster_id, address)
+        // TigerBeetle's Zig-based client (v0.14) only accepts IP:port, not
+        // DNS hostnames.  Resolve here so callers can use container names.
+        let resolved = resolve_tb_address(address).await?;
+        let inner = tb::Client::new(cluster_id, &resolved)
             .map_err(|e| BlazerError::Ledger(format!("TigerBeetle connect failed: {e}")))?;
         Ok(Self {
             inner,

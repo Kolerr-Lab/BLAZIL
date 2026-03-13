@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 # TigerBeetle entrypoint — supports single-replica (demo) and multi-replica
 # (cluster) modes via environment variables.
 #
@@ -22,7 +22,7 @@ DATA_FILE="/data/${TB_REPLICA}_0.tigerbeetle"
 
 if [ ! -f "$DATA_FILE" ]; then
   echo "Formatting TigerBeetle data file (replica ${TB_REPLICA}/${TB_REPLICA_COUNT})..."
-  tigerbeetle format \
+  /tigerbeetle format \
     --cluster=0 \
     --replica="${TB_REPLICA}" \
     --replica-count="${TB_REPLICA_COUNT}" \
@@ -31,6 +31,6 @@ if [ ! -f "$DATA_FILE" ]; then
 fi
 
 echo "Starting TigerBeetle (replica ${TB_REPLICA}, addresses: ${TB_ADDRESSES})..."
-exec tigerbeetle start \
+exec /tigerbeetle start \
   --addresses="${TB_ADDRESSES}" \
   "${DATA_FILE}"

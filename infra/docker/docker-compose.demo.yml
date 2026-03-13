@@ -16,9 +16,11 @@ services:
       - tb-data:/data
       - ./tigerbeetle-entrypoint.sh:/entrypoint.sh:ro
     healthcheck:
-      test: ["CMD", "nc", "-z", "localhost", "3000"]
+      test: ["CMD-SHELL", "test -f /data/0_0.tigerbeetle"]
       interval: 5s
-      retries: 10
+      timeout: 3s
+      retries: 24
+      start_period: 10s
 
   prometheus:
     image: prom/prometheus:v2.51.0
@@ -51,6 +53,9 @@ services:
       context: ../..
       dockerfile: infra/docker/Dockerfile.engine
     container_name: blazil-engine
+    security_opt:
+      - seccomp:unconfined
+    restart: on-failure
     environment:
       BLAZIL_BIND_ADDR: "0.0.0.0:7878"
       BLAZIL_METRICS_PORT: "9090"
@@ -58,14 +63,14 @@ services:
     ports:
       - "7878:7878"
     depends_on:
-      tigerbeetle:
-        condition: service_healthy
+      - tigerbeetle
 
   blazil-payments:
     build:
       context: ../..
       dockerfile: infra/docker/Dockerfile.payments
     container_name: blazil-payments
+    restart: on-failure
     environment:
       BLAZIL_ENGINE_ADDR: blazil-engine:7878
       BLAZIL_METRICS_ADDR: "0.0.0.0:9091"
