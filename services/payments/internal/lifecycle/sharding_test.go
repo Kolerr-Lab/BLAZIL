@@ -6,12 +6,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/blazil/sharding"
 	"github.com/blazil/services/payments/internal/authorization"
 	"github.com/blazil/services/payments/internal/domain"
 	"github.com/blazil/services/payments/internal/engine"
 	"github.com/blazil/services/payments/internal/lifecycle"
 	"github.com/blazil/services/payments/internal/routing"
+	"github.com/blazil/sharding"
 )
 
 // buildProcessorForSharding wires a PaymentProcessor the same way buildProcessor

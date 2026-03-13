@@ -1,3 +1,5 @@
+name: blazil
+
 # Blazil Demo Stack — one-command developer experience
 # Decision: TigerBeetle port 3000 not exposed on host (conflicts with Grafana host:3000).
 # Decision: blazil-engine metrics port 9090 not exposed on host (Prometheus scrapes it internally;
@@ -6,7 +8,10 @@ services:
 
   tigerbeetle:
     image: ghcr.io/tigerbeetle/tigerbeetle:latest
+    container_name: blazil-tigerbeetle
     entrypoint: ["/entrypoint.sh"]
+    security_opt:
+      - seccomp:unconfined
     volumes:
       - tb-data:/data
       - ./tigerbeetle-entrypoint.sh:/entrypoint.sh:ro
@@ -17,6 +22,7 @@ services:
 
   prometheus:
     image: prom/prometheus:v2.51.0
+    container_name: blazil-prometheus
     volumes:
       - ./prometheus/prometheus.demo.yml:/etc/prometheus/prometheus.yml:ro
       - ./prometheus/blazil.yml:/etc/prometheus/blazil.yml:ro
@@ -27,6 +33,7 @@ services:
 
   grafana:
     image: grafana/grafana:10.4.0
+    container_name: blazil-grafana
     environment:
       GF_SECURITY_ADMIN_PASSWORD: blazil
       GF_AUTH_ANONYMOUS_ENABLED: "true"
@@ -43,6 +50,7 @@ services:
     build:
       context: ../..
       dockerfile: infra/docker/Dockerfile.engine
+    container_name: blazil-engine
     environment:
       BLAZIL_BIND_ADDR: "0.0.0.0:7878"
       BLAZIL_METRICS_PORT: "9090"
@@ -57,6 +65,7 @@ services:
     build:
       context: ../..
       dockerfile: infra/docker/Dockerfile.payments
+    container_name: blazil-payments
     environment:
       BLAZIL_ENGINE_ADDR: blazil-engine:7878
       BLAZIL_METRICS_ADDR: "0.0.0.0:9091"
@@ -72,6 +81,7 @@ services:
     build:
       context: ../..
       dockerfile: infra/docker/Dockerfile.banking
+    container_name: blazil-banking
     environment:
       BLAZIL_ENGINE_ADDR: blazil-engine:7878
       BANKING_METRICS_ADDR: "0.0.0.0:9092"
@@ -86,6 +96,7 @@ services:
     build:
       context: ../..
       dockerfile: infra/docker/Dockerfile.trading
+    container_name: blazil-trading
     environment:
       BLAZIL_ENGINE_ADDR: blazil-engine:7878
       METRICS_ADDR: "0.0.0.0:9093"
@@ -100,6 +111,7 @@ services:
     build:
       context: ../..
       dockerfile: infra/docker/Dockerfile.crypto
+    container_name: blazil-crypto
     environment:
       BLAZIL_ENGINE_ADDR: blazil-engine:7878
       METRICS_ADDR: "0.0.0.0:9094"
@@ -114,6 +126,7 @@ services:
     build:
       context: ../..
       dockerfile: infra/docker/Dockerfile.loadgen
+    container_name: blazil-loadgen
     environment:
       PAYMENTS_ADDR: blazil-payments:50051
       BANKING_ADDR: blazil-banking:50052

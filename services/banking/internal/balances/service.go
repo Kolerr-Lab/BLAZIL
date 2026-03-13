@@ -8,10 +8,10 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/blazil/observability"
 	"github.com/blazil/banking/internal/accounts"
 	"github.com/blazil/banking/internal/domain"
 	"github.com/blazil/banking/internal/history"
+	"github.com/blazil/observability"
 )
 
 // BalanceSummary is a rich snapshot of an account's current balance.

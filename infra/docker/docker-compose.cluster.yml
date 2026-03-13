@@ -1,3 +1,5 @@
+name: blazil
+
 # Blazil 3-Node Cluster — local simulation on a single machine.
 #
 # Topology:
@@ -27,6 +29,7 @@ services:
 
   tigerbeetle-0:
     image: ghcr.io/tigerbeetle/tigerbeetle:latest
+    container_name: blazil-tigerbeetle-0
     entrypoint: ["/entrypoint.sh"]
     environment:
       TB_REPLICA: "0"
@@ -49,6 +52,7 @@ services:
 
   tigerbeetle-1:
     image: ghcr.io/tigerbeetle/tigerbeetle:latest
+    container_name: blazil-tigerbeetle-1
     entrypoint: ["/entrypoint.sh"]
     environment:
       TB_REPLICA: "1"
@@ -71,6 +75,7 @@ services:
 
   tigerbeetle-2:
     image: ghcr.io/tigerbeetle/tigerbeetle:latest
+    container_name: blazil-tigerbeetle-2
     entrypoint: ["/entrypoint.sh"]
     environment:
       TB_REPLICA: "2"
@@ -121,6 +126,7 @@ services:
     build:
       context: ../..
       dockerfile: infra/docker/Dockerfile.payments
+    container_name: blazil-node-1-payments
     environment:
       BLAZIL_ENGINE_ADDR: "blazil-node-1:7878"
       BLAZIL_METRICS_ADDR: "0.0.0.0:9091"
@@ -167,6 +173,7 @@ services:
     build:
       context: ../..
       dockerfile: infra/docker/Dockerfile.payments
+    container_name: blazil-node-2-payments
     environment:
       BLAZIL_ENGINE_ADDR: "blazil-node-2:7878"
       BLAZIL_METRICS_ADDR: "0.0.0.0:9091"
@@ -178,6 +185,60 @@ services:
     ports:
       - "50061:50051"
       - "9101:9091"
+    networks:
+      - blazil-cluster
+    depends_on:
+      - blazil-node-2
+
+  blazil-node-2-banking:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.banking
+    container_name: blazil-node-2-banking
+    environment:
+      BLAZIL_ENGINE_ADDR: "blazil-node-2:7878"
+      BANKING_METRICS_ADDR: "0.0.0.0:9092"
+      BLAZIL_NODE_ID: "node-2"
+      BLAZIL_AUTH_REQUIRED: "false"
+    ports:
+      - "50062:50052"
+      - "9102:9092"
+    networks:
+      - blazil-cluster
+    depends_on:
+      - blazil-node-2
+
+  blazil-node-2-trading:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.trading
+    container_name: blazil-node-2-trading
+    environment:
+      BLAZIL_ENGINE_ADDR: "blazil-node-2:7878"
+      METRICS_ADDR: "0.0.0.0:9093"
+      BLAZIL_NODE_ID: "node-2"
+      BLAZIL_AUTH_REQUIRED: "false"
+    ports:
+      - "50063:50053"
+      - "9103:9093"
+    networks:
+      - blazil-cluster
+    depends_on:
+      - blazil-node-2
+
+  blazil-node-2-crypto:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.crypto
+    container_name: blazil-node-2-crypto
+    environment:
+      BLAZIL_ENGINE_ADDR: "blazil-node-2:7878"
+      METRICS_ADDR: "0.0.0.0:9094"
+      BLAZIL_NODE_ID: "node-2"
+      BLAZIL_AUTH_REQUIRED: "false"
+    ports:
+      - "50064:50054"
+      - "9104:9094"
     networks:
       - blazil-cluster
     depends_on:
@@ -213,6 +274,7 @@ services:
     build:
       context: ../..
       dockerfile: infra/docker/Dockerfile.payments
+    container_name: blazil-node-3-payments
     environment:
       BLAZIL_ENGINE_ADDR: "blazil-node-3:7878"
       BLAZIL_METRICS_ADDR: "0.0.0.0:9091"
@@ -229,10 +291,65 @@ services:
     depends_on:
       - blazil-node-3
 
+  blazil-node-3-banking:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.banking
+    container_name: blazil-node-3-banking
+    environment:
+      BLAZIL_ENGINE_ADDR: "blazil-node-3:7878"
+      BANKING_METRICS_ADDR: "0.0.0.0:9092"
+      BLAZIL_NODE_ID: "node-3"
+      BLAZIL_AUTH_REQUIRED: "false"
+    ports:
+      - "50072:50052"
+      - "9112:9092"
+    networks:
+      - blazil-cluster
+    depends_on:
+      - blazil-node-3
+
+  blazil-node-3-trading:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.trading
+    container_name: blazil-node-3-trading
+    environment:
+      BLAZIL_ENGINE_ADDR: "blazil-node-3:7878"
+      METRICS_ADDR: "0.0.0.0:9093"
+      BLAZIL_NODE_ID: "node-3"
+      BLAZIL_AUTH_REQUIRED: "false"
+    ports:
+      - "50073:50053"
+      - "9113:9093"
+    networks:
+      - blazil-cluster
+    depends_on:
+      - blazil-node-3
+
+  blazil-node-3-crypto:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.crypto
+    container_name: blazil-node-3-crypto
+    environment:
+      BLAZIL_ENGINE_ADDR: "blazil-node-3:7878"
+      METRICS_ADDR: "0.0.0.0:9094"
+      BLAZIL_NODE_ID: "node-3"
+      BLAZIL_AUTH_REQUIRED: "false"
+    ports:
+      - "50074:50054"
+      - "9114:9094"
+    networks:
+      - blazil-cluster
+    depends_on:
+      - blazil-node-3
+
   # ── Monitoring ───────────────────────────────────────────────────────────────
 
   prometheus:
     image: prom/prometheus:v2.51.0
+    container_name: blazil-prometheus
     volumes:
       - ./prometheus/prometheus.cluster.yml:/etc/prometheus/prometheus.yml:ro
     ports:
@@ -246,6 +363,7 @@ services:
 
   grafana:
     image: grafana/grafana:10.4.0
+    container_name: blazil-grafana
     environment:
       GF_SECURITY_ADMIN_PASSWORD: blazil
       GF_AUTH_ANONYMOUS_ENABLED: "true"

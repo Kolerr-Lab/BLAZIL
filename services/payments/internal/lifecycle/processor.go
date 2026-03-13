@@ -11,11 +11,11 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/blazil/observability"
-	"github.com/blazil/sharding"
 	"github.com/blazil/services/payments/internal/authorization"
 	"github.com/blazil/services/payments/internal/domain"
 	"github.com/blazil/services/payments/internal/engine"
 	"github.com/blazil/services/payments/internal/routing"
+	"github.com/blazil/sharding"
 )
 
 // PaymentProcessor orchestrates the full payment lifecycle:
@@ -136,8 +136,10 @@ func (p *PaymentProcessor) Process(ctx context.Context, req domain.ProcessPaymen
 					Currency:       payment.Amount.Currency.Code,
 					IdempotencyKey: payment.IdempotencyKey,
 				}); err != nil {
+					observability.CrossShardTotal.WithLabelValues("failed").Inc()
 					return nil, fmt.Errorf("cross-shard transfer failed for payment %s: %w", payment.ID, err)
 				}
+				observability.CrossShardTotal.WithLabelValues("success").Inc()
 				// Cross-shard transfer settled by coordinator.
 				payment.Status = domain.StatusSettled
 				payment.UpdatedAt = time.Now().UTC()
@@ -197,4 +199,3 @@ func accountToUint64(id string) uint64 {
 	h.Write([]byte(id)) //nolint:errcheck
 	return h.Sum64()
 }
-

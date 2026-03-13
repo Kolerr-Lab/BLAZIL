@@ -1,0 +1,102 @@
+package scenarios
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/blazil/stresstest/metrics"
+)
+
+// Spike tests recovery from a sudden 10× concurrency spike.
+// Phases: baseline (30 s) → spike (10 s) → recovery (30 s).
+// Pass criteria:
+//   - Error rate during spike < 1 %
+//   - TPS recovers to ≥ 90 % of baseline TPS within one sample interval after spike ends.
+func Spike(cfg Config) Result {
+	conn, err := dial(cfg.Target)
+	if err != nil {
+		return Result{Name: "spike", Notes: fmt.Sprintf("dial error: %v", err)}
+	}
+	defer conn.Close()
+
+	col, stopCol := metrics.NewCollector()
+	defer stopCol()
+
+	const (
+		baselineWorkers = 200
+		spikeWorkers    = 2000
+		baselineDur     = 30 * time.Second
+		spikeDur        = 10 * time.Second
+		recoveryDur     = 30 * time.Second
+	)
+
+	interval := cfg.SampleInterval
+	if interval == 0 {
+		interval = 5 * time.Second
+	}
+
+	type phaseResult struct {
+		name    string
+		tps     float64
+		p99Ms   float64
+		errPct  float64
+	}
+
+	runPhase := func(name string, workers int, dur time.Duration) phaseResult {
+		col.Reset()
+		ctx, cancel := context.WithTimeout(context.Background(), dur)
+		defer cancel()
+
+		var wg sync.WaitGroup
+		for i := 0; i < workers; i++ {
+			wg.Add(1)
+			wIdx := i
+			go func() {
+				defer wg.Done()
+				worker(ctx, conn, col, int64(wIdx+workers*10000))
+			}()
+		}
+		<-ctx.Done()
+		wg.Wait()
+
+		total, success, failed, _, p99 := col.Snapshot()
+		tps := float64(success) / dur.Seconds()
+		errPct := 0.0
+		if total > 0 {
+			errPct = float64(failed) / float64(total) * 100
+		}
+		fmt.Printf("  spike %-10s %4d workers → %9.0f TPS  P99 %.2f ms  err %.2f%%\n",
+			name, workers, tps, p99, errPct)
+		return phaseResult{name: name, tps: tps, p99Ms: p99, errPct: errPct}
+	}
+
+	baseline := runPhase("baseline", baselineWorkers, baselineDur)
+	spike := runPhase("spike", spikeWorkers, spikeDur)
+	recovery := runPhase("recovery", baselineWorkers, recoveryDur)
+
+	spikeErrOK := spike.errPct < 1.0
+	recoveryOK := baseline.tps == 0 || recovery.tps >= baseline.tps*0.90
+
+	passed := spikeErrOK && recoveryOK
+	notes := ""
+	if !passed {
+		notes = fmt.Sprintf("spike err %.2f%% (need <1%%), recovery TPS %.0f (need ≥ %.0f)",
+			spike.errPct, recovery.tps, baseline.tps*0.90)
+	}
+
+	return Result{
+		Name:    "spike",
+		Passed:  passed,
+		PeakTPS: spike.tps,
+		P99Ms:   spike.p99Ms,
+		ErrPct:  spike.errPct,
+		Samples: []metrics.Sample{
+			{Elapsed: baselineDur, TPS: baseline.tps, P99Ms: baseline.p99Ms, ErrPct: baseline.errPct},
+			{Elapsed: baselineDur + spikeDur, TPS: spike.tps, P99Ms: spike.p99Ms, ErrPct: spike.errPct},
+			{Elapsed: baselineDur + spikeDur + recoveryDur, TPS: recovery.tps, P99Ms: recovery.p99Ms, ErrPct: recovery.errPct},
+		},
+		Notes: notes,
+	}
+}

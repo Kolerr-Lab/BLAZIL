@@ -12,9 +12,9 @@ import (
 
 // InMemoryTransactionStore is a thread-safe in-memory implementation of TransactionStore.
 type InMemoryTransactionStore struct {
-	mu           sync.RWMutex
-	byID         map[domain.TransactionID]*domain.Transaction
-	byAccount    map[domain.AccountID][]*domain.Transaction
+	mu        sync.RWMutex
+	byID      map[domain.TransactionID]*domain.Transaction
+	byAccount map[domain.AccountID][]*domain.Transaction
 }
 
 // NewInMemoryTransactionStore constructs an empty InMemoryTransactionStore.

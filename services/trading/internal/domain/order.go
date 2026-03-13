@@ -30,9 +30,9 @@ type OrderStatus int
 
 const (
 	OrderStatusOpen      OrderStatus = iota + 1
-	OrderStatusPartial                // partially filled
-	OrderStatusFilled                 // fully filled
-	OrderStatusCancelled              // cancelled by user
+	OrderStatusPartial               // partially filled
+	OrderStatusFilled                // fully filled
+	OrderStatusCancelled             // cancelled by user
 )
 
 // String returns the human-readable order status.

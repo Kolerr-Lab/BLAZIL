@@ -63,7 +63,7 @@ pub async fn run(events: u64) -> Option<BenchmarkResult> {
         .block_on(tb.create_account(Account::new(
             AccountId::new(),
             LedgerId::USD,
-            usd.clone(),
+            usd,
             1,
             AccountFlags::default(),
         )))
@@ -72,7 +72,7 @@ pub async fn run(events: u64) -> Option<BenchmarkResult> {
         .block_on(tb.create_account(Account::new(
             AccountId::new(),
             LedgerId::USD,
-            usd.clone(),
+            usd,
             1,
             AccountFlags::default(),
         )))
@@ -80,7 +80,7 @@ pub async fn run(events: u64) -> Option<BenchmarkResult> {
 
     let amount = Amount::new(Decimal::new(1_00, 2), usd).expect("amount");
     let max_amount = Amount::new(
-        Decimal::new(1_000_000_000_00, 2),
+        Decimal::new(100_000_000_000, 2),
         parse_currency("USD").expect("USD"),
     )
     .expect("max amount");

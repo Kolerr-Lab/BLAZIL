@@ -248,4 +248,3 @@ func domainToGRPCStatus(err error) error {
 		return status.Errorf(codes.Internal, "%v", err)
 	}
 }
-

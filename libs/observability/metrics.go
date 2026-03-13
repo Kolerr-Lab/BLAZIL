@@ -58,7 +58,6 @@ var GRPCRequestDuration = prometheus.NewHistogramVec(
 	},
 	[]string{"service", "method"},
 )
-
 // OrderBookDepth tracks the number of orders in each side of the order book.
 var OrderBookDepth = prometheus.NewGaugeVec(
 	prometheus.GaugeOpts{
@@ -86,6 +85,16 @@ var WithdrawalsTotal = prometheus.NewCounterVec(
 	[]string{"chain", "status"},
 )
 
+// CrossShardTotal counts cross-shard transfer executions by outcome.
+// Labels: status — "success", "failed", "voided".
+var CrossShardTotal = prometheus.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "blazil_cross_shard_total",
+		Help: "Total cross-shard transfers executed",
+	},
+	[]string{"status"},
+)
+
 // RegisterAll registers all Blazil metrics with the given registerer.
 // Duplicate registrations (prometheus.AlreadyRegisteredError) are silently
 // ignored so that tests can call RegisterAll multiple times without panicking.
@@ -99,6 +108,7 @@ func RegisterAll(reg prometheus.Registerer) error {
 		OrderBookDepth,
 		DepositsTotal,
 		WithdrawalsTotal,
+		CrossShardTotal,
 	}
 	for _, c := range collectors {
 		if err := reg.Register(c); err != nil {

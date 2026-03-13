@@ -69,9 +69,9 @@ func main() {
 		),
 	)
 	tradingv1.RegisterTradingServiceServer(grpcServer, &tradingServer{
-		orders:   orderSvc,
+		orders:    orderSvc,
 		positions: posSvc,
-		settler:  settler,
+		settler:   settler,
 	})
 
 	quit := make(chan os.Signal, 1)
@@ -240,4 +240,3 @@ func positionToProto(p *domain.Position) *tradingv1.PositionProto {
 		AverageCostMinorUnits: p.AverageCostMinorUnits,
 	}
 }
-

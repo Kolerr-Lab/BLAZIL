@@ -12,6 +12,11 @@ coverage.html
 dist/
 bin/
 
+# Go service binaries (compiled in-place)
+services/compliance/compliance
+services/gateway/gateway
+tools/loadgen/loadgen
+
 # Infrastructure
 .terraform/
 *.tfstate

@@ -20,8 +20,8 @@ type IdempotencyStore interface {
 
 // idempotencyEntry wraps a Payment with its store timestamp for TTL eviction.
 type idempotencyEntry struct {
-	payment   *domain.Payment
-	storedAt  time.Time
+	payment  *domain.Payment
+	storedAt time.Time
 }
 
 // InMemoryIdempotencyStore is a TTL-based in-memory implementation of IdempotencyStore.

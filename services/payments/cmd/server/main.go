@@ -8,15 +8,18 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	blazilauth "github.com/blazil/auth"
 	"github.com/blazil/observability"
+	"github.com/blazil/sharding"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 
 	paymentsv1 "github.com/blazil/services/payments/api/proto/payments/v1"
@@ -78,6 +81,45 @@ func main() {
 
 	paymentStore := lifecycle.NewInMemoryPaymentStore()
 	processor := lifecycle.NewPaymentProcessor(paymentStore, auth, router, idempotencyStore, engineClient)
+
+	// ── Sharding coordinator (multi-node mode) ────────────────────────────────
+	if cfg.ShardingEnabled && len(cfg.NodeAddresses) > 0 {
+		ring := &sharding.NodeRing{}
+		for i, raw := range cfg.NodeAddresses {
+			// BLAZIL_NODES format: "nodeID:host:port" — split on first colon.
+			parts := strings.SplitN(raw, ":", 2)
+			nodeID := fmt.Sprintf("node-%d", i)
+			addr := raw
+			if len(parts) == 2 {
+				nodeID = parts[0]
+				addr = parts[1]
+			}
+			_ = ring.Add(sharding.NodeInfo{
+				ID:      nodeID,
+				Address: addr,
+				ShardID: i,
+				Status:  sharding.NodeStatusHealthy,
+			})
+		}
+		shardRouter := sharding.NewShardRouter(ring, len(cfg.NodeAddresses))
+		balancer := sharding.NewShardAwareLoadBalancer(shardRouter, ring)
+		processor.SetShardRouter(shardRouter)
+		factory := func(nodeAddress string) sharding.NodeTransferClient {
+			//nolint:staticcheck
+			conn, err := grpc.Dial(nodeAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
+			if err != nil {
+				logger.Error("sharding: failed to dial node", zap.String("addr", nodeAddress), zap.Error(err))
+				return engine.NewTcpTransferClient(conn)
+			}
+			return engine.NewTcpTransferClient(conn)
+		}
+		coordinator := sharding.NewCrossShardCoordinator(shardRouter, balancer, factory)
+		processor.SetCrossShardCoordinator(coordinator)
+		logger.Info("sharding enabled",
+			zap.Int("shards", len(cfg.NodeAddresses)),
+			zap.Strings("nodes", cfg.NodeAddresses),
+		)
+	}
 
 	// ── gRPC server ───────────────────────────────────────────────────────────
 
