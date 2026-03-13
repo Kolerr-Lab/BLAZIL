@@ -6,6 +6,7 @@ require (
 	github.com/blazil/auth v0.0.0
 	github.com/blazil/observability v0.0.0
 	github.com/blazil/secrets v0.0.0
+	github.com/blazil/sharding v0.0.0
 	github.com/google/uuid v1.6.0
 	github.com/prometheus/client_golang v1.19.0
 	github.com/vmihailenco/msgpack/v5 v5.4.1
@@ -46,4 +47,5 @@ replace (
 	github.com/blazil/auth => ../../libs/auth
 	github.com/blazil/observability => ../../libs/observability
 	github.com/blazil/secrets => ../../libs/secrets
+	github.com/blazil/sharding => ../../libs/sharding
 )

@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/blazil/secrets"
@@ -38,6 +39,15 @@ type Config struct {
 	// MetricsAddr is the address the Prometheus metrics HTTP server listens on.
 	// Default: ":9091"
 	MetricsAddr string
+
+	// ShardingEnabled turns on account-based shard routing when true.
+	// Set via BLAZIL_SHARDING_ENABLED=true. Default: false.
+	ShardingEnabled bool
+
+	// NodeAddresses is the ordered list of shard node addresses used when
+	// ShardingEnabled is true. Set via BLAZIL_NODES=node1:7878,node2:7878.
+	// Default: nil (single-node mode).
+	NodeAddresses []string
 }
 
 // Load reads configuration from environment variables, falling back to
@@ -56,6 +66,8 @@ func Load() Config {
 		IdempotencyTTL:      envDuration("BLAZIL_IDEMPOTENCY_TTL", 24*time.Hour),
 		LogLevel:            envString("BLAZIL_LOG_LEVEL", "info"),
 		MetricsAddr:         envString("BLAZIL_METRICS_ADDR", ":9091"),
+		ShardingEnabled:     envBool("BLAZIL_SHARDING_ENABLED", false),
+		NodeAddresses:       envStringSlice("BLAZIL_NODES"),
 	}
 }
 
@@ -82,4 +94,24 @@ func envDuration(key string, fallback time.Duration) time.Duration {
 		}
 	}
 	return fallback
+}
+
+func envBool(key string, fallback bool) bool {
+	if v := os.Getenv(key); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			return b
+		}
+	}
+	return fallback
+}
+
+func envStringSlice(key string) []string {
+	if v := os.Getenv(key); v != "" {
+		parts := strings.Split(v, ",")
+		for i := range parts {
+			parts[i] = strings.TrimSpace(parts[i])
+		}
+		return parts
+	}
+	return nil
 }

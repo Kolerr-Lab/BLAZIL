@@ -4,11 +4,14 @@ package lifecycle
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"time"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 
 	"github.com/blazil/observability"
+	"github.com/blazil/sharding"
 	"github.com/blazil/services/payments/internal/authorization"
 	"github.com/blazil/services/payments/internal/domain"
 	"github.com/blazil/services/payments/internal/engine"
@@ -23,6 +26,8 @@ type PaymentProcessor struct {
 	router       routing.PaymentRouter
 	idempotency  IdempotencyStore
 	engineClient engine.BlazerEngineClient
+	// shardRouter is optional; nil means single-node mode.
+	shardRouter sharding.ShardRouter
 }
 
 // NewPaymentProcessor constructs a PaymentProcessor with the provided dependencies.
@@ -40,6 +45,13 @@ func NewPaymentProcessor(
 		idempotency:  idempotency,
 		engineClient: engineClient,
 	}
+}
+
+// SetShardRouter enables shard-aware routing on this processor. When set, the
+// processor detects cross-shard transfers and logs them. Actual cross-shard
+// execution is handled in Prompt #16.
+func (p *PaymentProcessor) SetShardRouter(r sharding.ShardRouter) {
+	p.shardRouter = r
 }
 
 // Process runs the full payment lifecycle for the given request.
@@ -91,6 +103,22 @@ func (p *PaymentProcessor) Process(ctx context.Context, req domain.ProcessPaymen
 	}
 	payment.Rails = rails
 
+	// STEP 4b — Cross-shard detection (Prompt #15).
+	// When sharding is enabled, log cross-shard transfers for future execution
+	// in Prompt #16. The engine submission below still uses the single-node
+	// client; multi-node dispatch is out of scope for this prompt.
+	if p.shardRouter != nil {
+		fromID := accountToUint64(string(payment.DebitAccountID))
+		toID := accountToUint64(string(payment.CreditAccountID))
+		if p.shardRouter.IsCrossShard(fromID, toID) {
+			zap.L().Info("cross-shard transfer detected",
+				zap.String("debit_account", string(payment.DebitAccountID)),
+				zap.String("credit_account", string(payment.CreditAccountID)),
+				zap.String("payment_id", string(payment.ID)),
+			)
+		}
+	}
+
 	// STEP 5 — Engine submission (internal rails only).
 	if payment.Rails == domain.RailsInternal {
 		committed, transferID, err := p.engineClient.Submit(ctx, payment)
@@ -128,4 +156,12 @@ func (p *PaymentProcessor) GetPayment(id domain.PaymentID) (*domain.Payment, err
 	return p.store.GetByID(id)
 }
 
+// accountToUint64 derives a stable uint64 key from a string account ID using
+// FNV-1a hashing. This is used exclusively by the sharding router; it is not
+// part of any stored value.
+func accountToUint64(id string) uint64 {
+	h := fnv.New64a()
+	h.Write([]byte(id)) //nolint:errcheck
+	return h.Sum64()
+}
 
