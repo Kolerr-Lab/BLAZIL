@@ -116,7 +116,33 @@ jobs:
             pkg-config libssl-dev \
             clang lld
 
+      - name: Start TigerBeetle
+        run: |
+          # Step 1: format the data file (runs to completion then exits)
+          docker run --rm \
+            -v tb-data:/data \
+            ghcr.io/tigerbeetle/tigerbeetle:latest \
+            format --cluster=0 --replica=0 --replica-count=1 /data/0_0.tigerbeetle
+          # Step 2: start the server in the background
+          docker run -d --name tb \
+            -p 3000:3000 \
+            -v tb-data:/data \
+            ghcr.io/tigerbeetle/tigerbeetle:latest \
+            start --addresses=0.0.0.0:3000 /data/0_0.tigerbeetle
+          # Wait until TigerBeetle is accepting connections (up to 30s)
+          for i in $(seq 1 30); do
+            if docker exec tb sh -c 'true' 2>/dev/null || \
+               nc -z 127.0.0.1 3000 2>/dev/null; then
+              echo "TigerBeetle ready after ${i}s"; break
+            fi
+            echo "Waiting for TigerBeetle... ($i/30)"
+            sleep 1
+          done
+          docker ps
+
       - name: Run integration tests
+        env:
+          BLAZIL_TB_ADDRESS: 127.0.0.1:3000
         run: |
           cargo test -p blazil-ledger \
             --features tigerbeetle-client \
