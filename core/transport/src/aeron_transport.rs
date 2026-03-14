@@ -24,21 +24,24 @@
 //! publication.offer_part(response_buffer)
 //! ```
 //!
-//! ## Notes on the Aeron C Media Driver
+//! ## Notes on the Embedded Media Driver
 //!
 //! `aeron-rs 0.1` is a **pure Rust** crate (no C bindings, no FFI, no cmake).
 //! It builds via `cargo` with zero C toolchain requirements.
 //!
-//! At runtime it communicates with `aeronmd` (Aeron C Media Driver) via
-//! shared memory (`/dev/shm`). The `aeronmd` process must be running before
-//! `Aeron::new()` is called.  When `BLAZIL_TRANSPORT=aeron` is selected,
-//! start `aeronmd` externally (sidecar, separate host process, etc.) and
-//! point `AERON_DIR` at its shared-memory directory.
+//! The transport automatically **spawns `aeronmd` as a subprocess** when
+//! `serve()` is called. If `aeronmd` is not in PATH, it falls back to expecting
+//! an externally-managed driver (systemd service, Docker sidecar, etc.).
 //!
-//! For deployments without an external `aeronmd`, use
-//! `BLAZIL_TRANSPORT=io-uring` (Linux) or `BLAZIL_TRANSPORT=tcp` (all
-//! platforms) instead.  The `aeron` feature stays compiled-in to keep the
-//! binary ready for when aeronmd is available.
+//! The spawned aeronmd runs as a child process and is automatically terminated
+//! on shutdown. Driver and client communicate via shared memory (`/dev/shm`).
+//!
+//! To install aeronmd binary on DO Linux nodes:
+//! ```bash
+//! wget https://github.com/real-logic/aeron/releases/download/1.44.1/aeron-1.44.1.tar.gz
+//! tar -xzf aeron-1.44.1.tar.gz
+//! sudo cp aeron-1.44.1/bin/aeronmd /usr/local/bin/
+//! ```
 //!
 //! ## Env vars
 //!
@@ -99,8 +102,8 @@ const RSP_BUF_CAPACITY: i32 = 65_536;
 /// processes each request through the engine pipeline, and publishes
 /// responses on [`RSP_STREAM_ID`].
 ///
-/// Requires an Aeron C Media Driver (`aeronmd`) to be running and pointed
-/// at the same `AERON_DIR` before `serve()` is called.
+/// Automatically spawns `aeronmd` media driver as a subprocess if available in
+/// PATH. Falls back to external driver if `aeronmd` binary is not found.
 pub struct AeronTransportServer {
     /// Aeron channel URI, e.g. `"aeron:udp?endpoint=0.0.0.0:20121"`.
     channel: String,
@@ -168,8 +171,8 @@ impl TransportServer for AeronTransportServer {
 
 /// Entry point for the dedicated blocking Aeron thread.
 ///
-/// Creates the Aeron client, waits for subscription and publication to
-/// connect via the running C Media Driver, then polls in a tight loop
+/// Spawns aeronmd media driver as a child process, creates the Aeron client,
+/// waits for subscription and publication to connect, then polls in a tight loop
 /// until the shutdown flag is set.
 fn aeron_serve_blocking(
     channel: String,
@@ -179,12 +182,32 @@ fn aeron_serve_blocking(
     shutdown: Arc<AtomicBool>,
 ) -> BlazerResult<()> {
     use std::ffi::CString;
+    use std::process::{Child, Command};
+
+    // ── Spawn aeronmd media driver as subprocess ──────────────────────────────
+    info!(aeron_dir = %aeron_dir, "Spawning aeronmd media driver...");
+
+    let mut driver_child: Option<Child> = None;
+
+    // Try to spawn aeronmd if available in PATH
+    match Command::new("aeronmd").env("AERON_DIR", &aeron_dir).spawn() {
+        Ok(child) => {
+            let pid = child.id();
+            driver_child = Some(child);
+            info!(pid, "aeronmd started as subprocess");
+            // Give the driver time to initialize
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        Err(e) => {
+            warn!(error = %e, "aeronmd not found in PATH, assuming external driver");
+        }
+    }
 
     // ── Aeron client ──────────────────────────────────────────────────────────
     let mut ctx = Context::new();
     ctx.set_aeron_dir(aeron_dir);
 
-    // Aeron::new connects to the running C Media Driver over the IPC dir.
+    // Aeron::new connects to the media driver over the IPC dir.
     // No separate .start() call is needed in aeron-rs 0.1.x.
     let mut aeron =
         Aeron::new(ctx).map_err(|e| BlazerError::Transport(format!("Aeron init failed: {e}")))?;
@@ -284,6 +307,14 @@ fn aeron_serve_blocking(
     }
 
     info!("Aeron poll loop exited cleanly");
+
+    // ── Cleanup: kill aeronmd subprocess if we spawned it ─────────────────────
+    if let Some(mut child) = driver_child {
+        info!(pid = child.id(), "Terminating aeronmd subprocess");
+        let _ = child.kill();
+        let _ = child.wait(); // Reap zombie process
+    }
+
     Ok(())
 }
 

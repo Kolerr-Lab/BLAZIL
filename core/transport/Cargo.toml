@@ -11,8 +11,8 @@ repository.workspace = true
 tigerbeetle-client = ["blazil-ledger/tigerbeetle-client"]
 
 # Enables the Aeron UDP transport backend.
-# Requires an Aeron C Media Driver process (see infra/docker/docker-compose.node-*.yml).
-# Activate at runtime via BLAZIL_TRANSPORT=aeron.
+# Auto-spawns aeronmd as subprocess if found in PATH, or connects to external driver.
+# Activate at runtime via BLAZIL_TRANSPORT=aeron or BLAZIL_TRANSPORT=aeron+io-uring.
 aeron = ["dep:aeron-rs"]
 
 # Enables the io_uring TCP transport backend (Linux 5.1+ only).
