@@ -245,11 +245,16 @@ impl LedgerClient for TigerBeetleClient {
                 }
                 Err(tb::error::CreateTransfersError::Api(api_err)) => {
                     // Some transfers failed; those not in the error slice succeeded.
-                    let failed: std::collections::HashSet<usize> =
-                        api_err.as_slice().iter().map(|e| e.index() as usize).collect();
+                    let failed: std::collections::HashSet<usize> = api_err
+                        .as_slice()
+                        .iter()
+                        .map(|e| e.index() as usize)
+                        .collect();
                     for (tb_pos, &orig_i) in tb_to_orig.iter().enumerate() {
-                        if let Some(e) =
-                            api_err.as_slice().iter().find(|e| e.index() as usize == tb_pos)
+                        if let Some(e) = api_err
+                            .as_slice()
+                            .iter()
+                            .find(|e| e.index() as usize == tb_pos)
                         {
                             results[orig_i] = Some(Err(BlazerError::Ledger(format!(
                                 "TB transfer error {:?} at batch index {tb_pos}",
