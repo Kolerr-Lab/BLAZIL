@@ -30,7 +30,7 @@ services:
   # ── TigerBeetle replica 2 ────────────────────────────────────────────────────
 
   tigerbeetle-2:
-    image: ghcr.io/tigerbeetle/tigerbeetle:latest
+    image: ghcr.io/tigerbeetle/tigerbeetle:0.16.75
     container_name: blazil-tigerbeetle-2
     entrypoint: ["/entrypoint.sh"]
     environment:
