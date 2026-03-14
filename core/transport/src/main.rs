@@ -28,12 +28,68 @@ use blazil_transport::server::TransportServer;
 use blazil_transport::tcp::TcpTransportServer;
 use rust_decimal::Decimal;
 use tracing::info;
+#[cfg(feature = "tigerbeetle-client")]
+use tracing::warn;
 
 #[cfg(feature = "tigerbeetle-client")]
 use blazil_ledger::tigerbeetle::TigerBeetleClient;
 
 const DEFAULT_CAPACITY: usize = 65_536;
 const DEFAULT_MAX_CONNECTIONS: u64 = 10_000;
+
+// ── TigerBeetle connection with retry ─────────────────────────────────────────
+
+/// Probes the TigerBeetle TCP port, then initialises `TigerBeetleClient`.
+///
+/// Returns `Some(client)` on success.  Returns `None` after `max_retries`
+/// failed attempts so the caller can fall back to `InMemoryLedgerClient`.
+///
+/// Environment variables (read by `main`, passed in here):
+///   `BLAZIL_TB_CONNECT_RETRY`    — max attempts        (default 20)
+///   `BLAZIL_TB_CONNECT_DELAY_MS` — wait between tries  (default 500 ms)
+#[cfg(feature = "tigerbeetle-client")]
+async fn try_connect_tb(
+    addr: &str,
+    max_retries: u32,
+    delay_ms: u64,
+) -> Option<Arc<TigerBeetleClient>> {
+    for attempt in 1..=max_retries {
+        info!(
+            "Connecting to TigerBeetle... attempt {}/{}",
+            attempt, max_retries
+        );
+        // TCP probe — tokio resolves DNS automatically
+        match tokio::net::TcpStream::connect(addr).await {
+            Ok(_) => {
+                // Port is reachable; initialise the TB client
+                match TigerBeetleClient::connect(addr, 0).await {
+                    Ok(client) => {
+                        info!("✅ TigerBeetle connected ({})", addr);
+                        return Some(Arc::new(client));
+                    }
+                    Err(e) => {
+                        warn!(
+                            "TB client init failed (attempt {}/{}): {}",
+                            attempt, max_retries, e
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                warn!(
+                    "TB not yet reachable (attempt {}/{}): {}",
+                    attempt, max_retries, e
+                );
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+    }
+    warn!(
+        "⚠️  TB unavailable after {} attempts, falling back to in-memory ledger",
+        max_retries
+    );
+    None
+}
 
 /// Builds, wires, and runs the full pipeline with the given ledger client.
 ///
@@ -150,11 +206,31 @@ async fn main() {
     {
         match std::env::var("BLAZIL_TB_ADDRESS") {
             Ok(addr) => {
-                info!("🔥 Engine: TigerBeetle mode ({})", addr);
-                let client = TigerBeetleClient::connect(&addr, 0)
-                    .await
-                    .expect("failed to connect to TigerBeetle — check BLAZIL_TB_ADDRESS");
-                run_pipeline(Arc::new(client), bind_addr, metrics_addr, capacity).await;
+                let max_retries: u32 = std::env::var("BLAZIL_TB_CONNECT_RETRY")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(20);
+                let delay_ms: u64 = std::env::var("BLAZIL_TB_CONNECT_DELAY_MS")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(500);
+
+                info!(
+                    "🔥 Engine: TigerBeetle mode ({}) — up to {} attempts",
+                    addr, max_retries
+                );
+                match try_connect_tb(&addr, max_retries, delay_ms).await {
+                    Some(client) => {
+                        run_pipeline(client, bind_addr, metrics_addr, capacity).await;
+                    }
+                    None => {
+                        warn!(
+                            "⚠️  Engine: in-memory mode (TB unavailable — check BLAZIL_TB_ADDRESS)"
+                        );
+                        let client = make_in_memory_client().await;
+                        run_pipeline(client, bind_addr, metrics_addr, capacity).await;
+                    }
+                }
             }
             Err(_) => {
                 info!("⚠️  Engine: in-memory mode (demo/dev only)");

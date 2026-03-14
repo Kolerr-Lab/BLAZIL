@@ -16,11 +16,13 @@ services:
       - tb-data:/data
       - ./tigerbeetle-entrypoint.sh:/entrypoint.sh:ro
     healthcheck:
-      test: ["CMD-SHELL", "test -f /data/0_0.tigerbeetle"]
-      interval: 5s
-      timeout: 3s
-      retries: 24
-      start_period: 10s
+      # Check port 3000 is in LISTEN state via the kernel's TCP table.
+      # 0BB8 = 3000 in hex. Avoids relying on nc/curl which may not be in the image.
+      test: ["CMD-SHELL", "grep -q ':0BB8 ' /proc/net/tcp"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
 
   prometheus:
     image: prom/prometheus:v2.51.0
@@ -60,10 +62,13 @@ services:
       BLAZIL_BIND_ADDR: "0.0.0.0:7878"
       BLAZIL_METRICS_PORT: "9090"
       BLAZIL_TB_ADDRESS: "tigerbeetle:3000"
+      BLAZIL_TB_CONNECT_RETRY: "20"
+      BLAZIL_TB_CONNECT_DELAY_MS: "500"
     ports:
       - "7878:7878"
     depends_on:
-      - tigerbeetle
+      tigerbeetle:
+        condition: service_healthy
 
   blazil-payments:
     build:
