@@ -14,14 +14,23 @@
 //! handler thread is a **dedicated pinned thread** — blocking it for an I/O
 //! round-trip is intentional. The async runtime handles the actual I/O
 //! without holding any system threads for the full duration.
+//!
+//! # Latency diagnostics
+//!
+//! Every committed transfer logs `tb_elapsed_ms` — the wall-clock time from
+//! entering `block_on` to returning.  On a healthy 3-node DO VSR cluster this
+//! should be 1–3 ms.  Values > 5 ms emit a `WARN` and are a sign that disk or
+//! network is the bottleneck (expected: max TPS ≈ 1000 / avg_tb_ms per handler
+//! thread).
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use blazil_common::ids::TransferId;
 use blazil_common::timestamp::Timestamp;
 use blazil_ledger::client::LedgerClient;
 use blazil_ledger::transfer::Transfer;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::event::{TransactionEvent, TransactionResult};
 use crate::handler::EventHandler;
@@ -83,25 +92,41 @@ impl<C: LedgerClient + 'static> EventHandler for LedgerHandler<C> {
 
         // block_on is intentional: this is a dedicated handler thread.
         // See module-level doc for rationale.
+        // Measure the full round-trip so we can correlate TPS with TB latency.
+        let tb_t0 = Instant::now();
         match self.runtime.block_on(client.create_transfer(transfer)) {
             Ok(_) => {
+                let tb_elapsed_ms = tb_t0.elapsed().as_millis();
                 let ts = Timestamp::now();
-                info!(
-                    sequence,
-                    transaction_id = %event.transaction_id,
-                    %transfer_id,
-                    "LedgerHandler: committed"
-                );
+                if tb_elapsed_ms > 5 {
+                    warn!(
+                        sequence,
+                        transaction_id = %event.transaction_id,
+                        %transfer_id,
+                        tb_elapsed_ms,
+                        "LedgerHandler: slow TB write (>5 ms)"
+                    );
+                } else {
+                    info!(
+                        sequence,
+                        transaction_id = %event.transaction_id,
+                        %transfer_id,
+                        tb_elapsed_ms,
+                        "LedgerHandler: committed"
+                    );
+                }
                 event.result = Some(TransactionResult::Committed {
                     transfer_id,
                     timestamp: ts,
                 });
             }
             Err(e) => {
+                let tb_elapsed_ms = tb_t0.elapsed().as_millis();
                 error!(
                     sequence,
                     transaction_id = %event.transaction_id,
                     error = %e,
+                    tb_elapsed_ms,
                     "LedgerHandler: failed to commit transfer"
                 );
                 event.result = Some(TransactionResult::Rejected { reason: e });
