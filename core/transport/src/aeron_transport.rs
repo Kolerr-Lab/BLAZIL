@@ -56,7 +56,9 @@ use blazil_engine::event::{TransactionEvent, TransactionResult};
 use blazil_engine::pipeline::Pipeline;
 use blazil_engine::ring_buffer::RingBuffer;
 
-use crate::protocol::{deserialize_request, serialize_response, TransactionRequest, TransactionResponse};
+use crate::protocol::{
+    deserialize_request, serialize_response, TransactionRequest, TransactionResponse,
+};
 use crate::server::TransportServer;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -175,8 +177,8 @@ fn aeron_serve_blocking(
 
     // Aeron::new connects to the running C Media Driver over the IPC dir.
     // No separate .start() call is needed in aeron-rs 0.1.x.
-    let mut aeron = Aeron::new(ctx)
-        .map_err(|e| BlazerError::Transport(format!("Aeron init failed: {e}")))?;
+    let mut aeron =
+        Aeron::new(ctx).map_err(|e| BlazerError::Transport(format!("Aeron init failed: {e}")))?;
 
     let channel_cstr = CString::new(channel.clone())
         .map_err(|e| BlazerError::Transport(format!("invalid channel string: {e}")))?;

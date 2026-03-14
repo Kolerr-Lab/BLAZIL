@@ -26,11 +26,11 @@ use blazil_engine::pipeline::PipelineBuilder;
 use blazil_ledger::account::{Account, AccountFlags};
 use blazil_ledger::client::LedgerClient;
 use blazil_ledger::mock::InMemoryLedgerClient;
+#[cfg(feature = "aeron")]
+use blazil_transport::aeron_transport::{AeronTransportServer, DEFAULT_AERON_CHANNEL};
 use blazil_transport::metrics_server::MetricsServer;
 use blazil_transport::server::TransportServer;
 use blazil_transport::tcp::TcpTransportServer;
-#[cfg(feature = "aeron")]
-use blazil_transport::aeron_transport::{AeronTransportServer, DEFAULT_AERON_CHANNEL};
 use rust_decimal::Decimal;
 use tracing::info;
 #[cfg(feature = "tigerbeetle-client")]
@@ -150,8 +150,7 @@ async fn run_pipeline<C: LedgerClient + 'static>(
     // ── Transport dispatch ──────────────────────────────────────────────────────
     #[cfg(feature = "aeron")]
     if transport == "aeron" {
-        let aeron_dir = std::env::var("AERON_DIR")
-            .unwrap_or_else(|_| "/dev/shm/aeron".to_string());
+        let aeron_dir = std::env::var("AERON_DIR").unwrap_or_else(|_| "/dev/shm/aeron".to_string());
         let channel = std::env::var("BLAZIL_AERON_CHANNEL")
             .unwrap_or_else(|_| DEFAULT_AERON_CHANNEL.to_string());
         let server = Arc::new(AeronTransportServer::new(
