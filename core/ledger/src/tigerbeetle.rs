@@ -120,6 +120,22 @@ impl TigerBeetleClient {
     pub fn address(&self) -> &str {
         &self.address
     }
+
+    /// Sends a no-op read to TigerBeetle to verify the VSR handshake completed.
+    ///
+    /// `tb::Client::new` is lazy — it returns immediately without waiting for
+    /// the binary protocol handshake. Calling this after `connect` ensures the
+    /// cluster is actually reachable and responding before the engine starts.
+    ///
+    /// Looks up account ID 0, which will never exist; an empty response is
+    /// success. Any error means TB is not yet ready.
+    pub async fn probe(&self) -> BlazerResult<()> {
+        self.inner
+            .lookup_accounts(vec![0u128])
+            .await
+            .map_err(|e| BlazerError::Ledger(format!("TigerBeetle probe failed: {e}")))?;
+        Ok(())
+    }
 }
 
 // ── LedgerClient impl ─────────────────────────────────────────────────────────

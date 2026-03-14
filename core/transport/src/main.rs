@@ -58,23 +58,22 @@ async fn try_connect_tb(
             "Connecting to TigerBeetle... attempt {}/{}",
             attempt, max_retries
         );
-        // TCP probe — tokio resolves DNS automatically
-        match tokio::net::TcpStream::connect(addr).await {
-            Ok(_) => {
-                // Port is reachable; initialise the TB client
-                match TigerBeetleClient::connect(addr, 0).await {
-                    Ok(client) => {
-                        info!("✅ TigerBeetle connected ({})", addr);
-                        return Some(Arc::new(client));
-                    }
-                    Err(e) => {
-                        warn!(
-                            "TB client init failed (attempt {}/{}): {}",
-                            attempt, max_retries, e
-                        );
-                    }
+        // Skip the TCP probe: tb::Client::new() is lazy and returns Ok before
+        // the VSR handshake completes. Connect then send a real probe operation
+        // (lookup account 0) to confirm the cluster is actually ready.
+        match TigerBeetleClient::connect(addr, 0).await {
+            Ok(client) => match client.probe().await {
+                Ok(()) => {
+                    info!("✅ TigerBeetle connected ({})", addr);
+                    return Some(Arc::new(client));
                 }
-            }
+                Err(e) => {
+                    warn!(
+                        "TB handshake probe failed (attempt {}/{}): {}",
+                        attempt, max_retries, e
+                    );
+                }
+            },
             Err(e) => {
                 warn!(
                     "TB not yet reachable (attempt {}/{}): {}",
