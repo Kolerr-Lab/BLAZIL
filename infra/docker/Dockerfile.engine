@@ -1,8 +1,16 @@
 # Blazil engine — Rust multi-stage build
-# Compiles with the tigerbeetle-client feature, which requires Zig (used internally
-# by tigerbeetle-unofficial to cross-compile C sources via the Zig C compiler).
-# At runtime the engine detects BLAZIL_TB_ADDRESS: if set it connects to TigerBeetle,
-# otherwise it falls back to the in-memory ledger (dev/demo only).
+# Compiles with the tigerbeetle-client, aeron, and io-uring features.
+# Embeds the aeronmd binary so the Aeron C Media Driver runs inside the
+# engine container — no separate aeron-driver service needed.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 0: extract aeronmd binary from the official neomantra image
+# ─────────────────────────────────────────────────────────────────────────────
+FROM neomantra/aeron-driver:latest AS aeron-source
+# Locate the aeronmd binary regardless of exact install path.
+RUN find /usr/local/bin /opt/aeron/bin /usr/bin -name "aeronmd" 2>/dev/null \
+    | head -1 \
+    | xargs -I{} cp {} /aeronmd
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Stage 1: builder
@@ -31,5 +39,8 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /app/target/release/blazil-transport /usr/local/bin/blazil-transport
+# Embed the Aeron C Media Driver binary so aeronmd runs inside this container.
+COPY --from=aeron-source /aeronmd /usr/local/bin/aeronmd
+RUN chmod +x /usr/local/bin/aeronmd
 EXPOSE 7878 9090
 CMD ["blazil-transport"]

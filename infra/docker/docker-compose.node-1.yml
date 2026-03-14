@@ -56,20 +56,6 @@ services:
       retries: 20
       start_period: 15s
 
-  # ── Aeron C Media Driver ─────────────────────────────────────────────────────
-  # Provides the shared-memory IPC layer for the Aeron UDP transport.
-  # Only needed when BLAZIL_TRANSPORT=aeron is set on blazil-engine.
-  # Listens on UDP 20121 (mapped to host for cross-node benchmarking).
-  aeron-driver:
-    image: aeron/aeron-driver:latest
-    container_name: blazil-aeron-driver
-    network_mode: host
-    ipc: host
-    environment:
-      AERON_DIR: /dev/shm/aeron
-    volumes:
-      - /dev/shm:/dev/shm
-    restart: on-failure
 
   # ── Engine — shard 0 ─────────────────────────────────────────────────────────
 
@@ -92,7 +78,6 @@ services:
       AERON_DIR: /dev/shm/aeron
     volumes:
       - /dev/shm:/dev/shm
-    ipc: host
     ports:
       - "7878:7878"
       - "9095:9090"
@@ -104,8 +89,6 @@ services:
     depends_on:
       tigerbeetle-0:
         condition: service_healthy
-      aeron-driver:
-        condition: service_started
 
   # ── Services — shard 0 ───────────────────────────────────────────────────────
 

@@ -6,9 +6,9 @@
 //! ## Architecture
 //!
 //! ```text
-//! Aeron C Media Driver  (/dev/shm/aeron  shared memory)
-//!    │
-//!    ▼  IPC
+//! spawn_media_driver()  ← starts aeronmd as child process (same container)
+//!    │  waits for CnC file to appear in AERON_DIR (/dev/shm/aeron)
+//!    ▼
 //! AeronTransportServer::serve()
 //!    │  tokio::task::spawn_blocking
 //!    ▼
@@ -27,11 +27,23 @@
 //! publication.offer_part(response_buffer)
 //! ```
 //!
+//! ## Embedded media driver
+//!
+//! `aeron-rs 0.1.8` is a pure Rust client; it communicates with the Aeron
+//! C Media Driver (`aeronmd`) via shared memory under `AERON_DIR`.
+//! Rather than running `aeronmd` in a separate Docker container, Blazil
+//! spawns it as a child process at startup if the `aeronmd` binary is
+//! present in `PATH`.  This keeps everything in one container, saves one
+//! Docker image pull, and reduces IPC latency (same‑host shared memory).
+//!
+//! If `aeronmd` is not found (e.g. local dev without the binary), the server
+//! assumes an already-running external driver and continues unchanged.
+//!
 //! ## Env vars
 //!
 //! | Variable | Default | Purpose |
 //! |---|---|---|
-//! | `AERON_DIR` | `/dev/shm/aeron` | IPC directory shared with the media driver |
+//! | `AERON_DIR` | `/dev/shm/aeron` | Shared-memory IPC directory for aeronmd |
 //! | `BLAZIL_AERON_CHANNEL` | `aeron:udp?endpoint=0.0.0.0:20121` | Aeron channel URI |
 
 use std::str::FromStr;
@@ -86,8 +98,9 @@ const RSP_BUF_CAPACITY: i32 = 65_536;
 /// processes each request through the engine pipeline, and publishes
 /// responses on [`RSP_STREAM_ID`].
 ///
-/// Requires an Aeron C Media Driver to be running — see the `aeron-driver`
-/// service in the node docker-compose files.
+/// Spawns `aeronmd` as an embedded child process on first `serve()` call
+/// if the binary is present in `PATH`.  No separate Docker container is
+/// required.
 pub struct AeronTransportServer {
     /// Aeron channel URI, e.g. `"aeron:udp?endpoint=0.0.0.0:20121"`.
     channel: String,
@@ -162,6 +175,58 @@ impl TransportServer for AeronTransportServer {
 /// All Aeron objects are created and used exclusively on this thread.
 /// `Arc<Mutex<>>` handles inter-thread access to subscription/publication
 /// if aeron-rs uses that internally.
+/// Attempts to spawn `aeronmd` as an in-process child.
+///
+/// If the CnC file already exists the driver is already running — returns
+/// `None` (no new process).  If the binary is not found, logs a warning and
+/// returns `None` so the caller can fall back to an externally-running driver.
+///
+/// The returned `Child` keeps aeronmd alive for as long as it is held.
+/// Dropping it sends SIGKILL, ensuring the media driver stops with the engine.
+fn spawn_media_driver(aeron_dir: &str) -> Option<std::process::Child> {
+    let cnc_path = format!("{}/cnc.dat", aeron_dir);
+
+    if std::path::Path::new(&cnc_path).exists() {
+        info!(aeron_dir = %aeron_dir, "Aeron: CnC file present — using existing media driver");
+        return None;
+    }
+
+    // Ensure the IPC directory exists.
+    if let Err(e) = std::fs::create_dir_all(aeron_dir) {
+        warn!(error = %e, aeron_dir = %aeron_dir, "Aeron: could not create AERON_DIR");
+    }
+
+    match std::process::Command::new("aeronmd")
+        .env("AERON_DIR", aeron_dir)
+        .spawn()
+    {
+        Ok(child) => {
+            info!(
+                aeron_dir = %aeron_dir,
+                pid = child.id(),
+                "Aeron: spawned embedded media driver"
+            );
+            // Wait up to 10 s for the CnC file — aeronmd writes it on ready.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while !std::path::Path::new(&cnc_path).exists() {
+                if std::time::Instant::now() >= deadline {
+                    warn!("Aeron: media driver CnC file did not appear within 10 s — proceeding anyway");
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Some(child)
+        }
+        Err(e) => {
+            warn!(
+                error = %e,
+                "Aeron: aeronmd not in PATH — assuming external media driver"
+            );
+            None
+        }
+    }
+}
+
 fn aeron_serve_blocking(
     channel: String,
     aeron_dir: String,
@@ -170,6 +235,9 @@ fn aeron_serve_blocking(
     shutdown: Arc<AtomicBool>,
 ) -> BlazerResult<()> {
     use std::ffi::CString;
+
+    // Spawn the embedded media driver (RAII — killed when this fn returns).
+    let _driver_guard = spawn_media_driver(&aeron_dir);
 
     // ── Aeron client ──────────────────────────────────────────────────────────
     let mut ctx = Context::new();
