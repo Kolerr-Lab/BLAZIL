@@ -87,3 +87,7 @@ yarn-error.log*
 
 # Benchmark results (keep criterion html reports but not raw data)
 target/criterion/**/*.csv
+
+# Pre-built stresstest binaries (cross-compiled locally, not committed)
+tools/stresstest/stresstest-linux
+tools/stresstest/stresstest-linux-arm64

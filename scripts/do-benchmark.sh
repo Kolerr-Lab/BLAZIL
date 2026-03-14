@@ -3,7 +3,8 @@
 #
 # Prerequisites:
 #   - All 3 DO nodes started with do-start.sh
-#   - Go 1.22+ installed on the machine running this script
+#   - Pre-built stresstest binary at tools/stresstest/stresstest-linux
+#     Build locally: cd tools/stresstest && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o stresstest-linux ./main.go
 #   - All gRPC ports reachable from this machine
 #
 # Usage (run from node-1 or a separate client machine):
@@ -18,8 +19,17 @@ NODE2_IP=${2:-"localhost"}
 NODE3_IP=${3:-"localhost"}
 DURATION=${4:-"60"}
 INSTALL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+STRESSTEST="$INSTALL_DIR/tools/stresstest/stresstest-linux"
 REPORT_PATH="$INSTALL_DIR/docs/do-benchmark-report.md"
 SCREENSHOT_DIR="$INSTALL_DIR/docs/benchmark-screenshots"
+
+# Ensure the binary exists and is executable
+if [ ! -f "$STRESSTEST" ]; then
+  echo "ERROR: pre-built binary not found at $STRESSTEST" >&2
+  echo "Build it locally: cd tools/stresstest && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o stresstest-linux ./main.go" >&2
+  exit 1
+fi
+chmod +x "$STRESSTEST"
 
 echo "🔥 Blazil Multi-Node Benchmark"
 echo "================================"
@@ -46,7 +56,7 @@ echo ""
 # ── Scenario 2: E2E single node ───────────────────────────────────────────────
 echo "▶ Scenario 2: E2E single node"
 cd "$INSTALL_DIR"
-go run ./tools/stresstest/main.go \
+"$STRESSTEST" \
   --mode=local \
   --duration="${DURATION}s" \
   --addr="${NODE1_IP}:50051" \
@@ -57,7 +67,7 @@ echo ""
 
 # ── Scenario 3: E2E 3-node cluster ────────────────────────────────────────────
 echo "▶ Scenario 3: E2E 3-node cluster"
-go run ./tools/stresstest/main.go \
+"$STRESSTEST" \
   --mode=cluster \
   --duration="${DURATION}s" \
   --nodes="$NODES" \
@@ -69,7 +79,7 @@ echo ""
 # ── Scenario 4: Failover test ─────────────────────────────────────────────────
 echo "▶ Scenario 4: Failover test"
 echo "  Starting 30s cluster run, killing node-2 at 15s..."
-go run ./tools/stresstest/main.go \
+"$STRESSTEST" \
   --mode=cluster \
   --duration="30s" \
   --nodes="$NODES" \

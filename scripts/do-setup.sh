@@ -65,6 +65,17 @@ else
   git clone https://github.com/Kolerr-Lab/BLAZIL.git "$INSTALL_DIR"
 fi
 
+# ── Stresstest binary ────────────────────────────────────────────────────────
+# The stresstest tool is pre-compiled for linux/amd64 (no Go required on nodes).
+STRESSTEST_BIN="$INSTALL_DIR/tools/stresstest/stresstest-linux"
+if [ -f "$STRESSTEST_BIN" ]; then
+  chmod +x "$STRESSTEST_BIN"
+  echo "✅ stresstest binary ready"
+else
+  echo "⚠️  stresstest binary not found — benchmark will fail" \
+       "(build locally: cd tools/stresstest && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o stresstest-linux ./main.go)"
+fi
+
 # ── Node environment ──────────────────────────────────────────────────────────
 NODE_ENV_FILE="$INSTALL_DIR/.env.node"
 cat > "$NODE_ENV_FILE" << EOF
