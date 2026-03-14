@@ -10,6 +10,11 @@ repository.workspace = true
 # Required by Dockerfile.engine; unit tests use the default in-memory client.
 tigerbeetle-client = ["blazil-ledger/tigerbeetle-client"]
 
+# Enables the Aeron UDP transport backend.
+# Requires an Aeron C Media Driver process (see infra/docker/docker-compose.node-*.yml).
+# Activate at runtime via BLAZIL_TRANSPORT=aeron.
+aeron = ["dep:aeron-rs"]
+
 [dependencies]
 blazil-common  = { path = "../common" }
 blazil-engine  = { path = "../engine" }
@@ -23,6 +28,7 @@ async-trait    = "0.1"
 axum           = "0.7"
 rmp-serde      = "1"
 rust_decimal   = { version = "1", features = ["serde"] }
+aeron-rs       = { version = "0.1", optional = true }
 
 [dev-dependencies]
 blazil-ledger  = { path = "../ledger", features = ["tigerbeetle-client"] }

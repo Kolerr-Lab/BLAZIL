@@ -1,13 +1,16 @@
 //! Blazil transport server binary.
 //!
-//! Starts the TCP transport server with a configurable ledger backend.
+//! Starts the transport server with a configurable ledger backend.
 //! Env vars:
-//!   BLAZIL_BIND_ADDR    — TCP listen address (default: 0.0.0.0:7878)
-//!   BLAZIL_METRICS_PORT — Prometheus metrics port  (default: 9090)
-//!   BLAZIL_CAPACITY     — Ring buffer capacity, must be power-of-two (default: 65536)
-//!   BLAZIL_TB_ADDRESS   — TigerBeetle address (e.g. tigerbeetle:3000)
-//!                         If set: uses real TigerBeetle (requires tigerbeetle-client feature)
-//!                         If unset: uses in-memory ledger (dev/test only)
+//!   BLAZIL_BIND_ADDR      — TCP listen address (default: 0.0.0.0:7878)
+//!   BLAZIL_METRICS_PORT   — Prometheus metrics port  (default: 9090)
+//!   BLAZIL_CAPACITY       — Ring buffer capacity, must be power-of-two (default: 65536)
+//!   BLAZIL_TB_ADDRESS     — TigerBeetle address (e.g. tigerbeetle:3000)
+//!                           If set: uses real TigerBeetle (requires tigerbeetle-client feature)
+//!                           If unset: uses in-memory ledger (dev/test only)
+//!   BLAZIL_TRANSPORT      — Transport backend: "tcp" (default) or "aeron" (requires feature)
+//!   AERON_DIR             — Aeron C Media Driver IPC dir (default: /dev/shm/aeron)
+//!   BLAZIL_AERON_CHANNEL  — Aeron channel URI (default: aeron:udp?endpoint=0.0.0.0:20121)
 
 use std::sync::Arc;
 
@@ -26,6 +29,8 @@ use blazil_ledger::mock::InMemoryLedgerClient;
 use blazil_transport::metrics_server::MetricsServer;
 use blazil_transport::server::TransportServer;
 use blazil_transport::tcp::TcpTransportServer;
+#[cfg(feature = "aeron")]
+use blazil_transport::aeron_transport::{AeronTransportServer, DEFAULT_AERON_CHANNEL};
 use rust_decimal::Decimal;
 use tracing::info;
 #[cfg(feature = "tigerbeetle-client")]
@@ -95,11 +100,16 @@ async fn try_connect_tb(
 /// This is generic over `C: LedgerClient` so that both `InMemoryLedgerClient`
 /// and `TigerBeetleClient` can be used without boxing (which would break the
 /// `LedgerHandler<C: Sized>` bound).
+///
+/// The `transport` argument selects the network backend:
+///   - `"tcp"`   (default) — [`TcpTransportServer`]
+///   - `"aeron"` — [`AeronTransportServer`] (requires `--features aeron`)
 async fn run_pipeline<C: LedgerClient + 'static>(
     client: Arc<C>,
     bind_addr: String,
     metrics_addr: String,
     capacity: usize,
+    transport: String,
 ) {
     let ledger_rt = Arc::new(
         tokio::runtime::Builder::new_multi_thread()
@@ -137,7 +147,31 @@ async fn run_pipeline<C: LedgerClient + 'static>(
         metrics_svc.serve().await;
     });
 
-    // ── TCP transport ─────────────────────────────────────────────────────────
+    // ── Transport dispatch ──────────────────────────────────────────────────────
+    #[cfg(feature = "aeron")]
+    if transport == "aeron" {
+        let aeron_dir = std::env::var("AERON_DIR")
+            .unwrap_or_else(|_| "/dev/shm/aeron".to_string());
+        let channel = std::env::var("BLAZIL_AERON_CHANNEL")
+            .unwrap_or_else(|_| DEFAULT_AERON_CHANNEL.to_string());
+        let server = Arc::new(AeronTransportServer::new(
+            &channel,
+            &aeron_dir,
+            Arc::clone(&pipeline),
+            ring_buffer,
+        ));
+        info!("blazil-engine ready");
+        server.serve().await.expect("aeron server error");
+        return;
+    }
+
+    // Default: TCP transport
+    if transport != "tcp" && transport != "aeron" {
+        info!(
+            transport = %transport,
+            "unknown BLAZIL_TRANSPORT value — falling back to TCP"
+        );
+    }
     let server = Arc::new(TcpTransportServer::new(
         &bind_addr,
         Arc::clone(&pipeline),
@@ -194,8 +228,13 @@ async fn main() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(DEFAULT_CAPACITY);
+    let transport = std::env::var("BLAZIL_TRANSPORT")
+        .unwrap_or_else(|_| "tcp".to_string())
+        .to_lowercase();
 
-    info!("blazil-engine starting on {bind_addr}, metrics on {metrics_addr}");
+    info!(
+        "blazil-engine starting on {bind_addr}, metrics on {metrics_addr}, transport={transport}"
+    );
 
     // ── Ledger dispatch ───────────────────────────────────────────────────────
     // The tigerbeetle-client feature gates whether we can even attempt a real
@@ -220,21 +259,21 @@ async fn main() {
                 );
                 match try_connect_tb(&addr, max_retries, delay_ms).await {
                     Some(client) => {
-                        run_pipeline(client, bind_addr, metrics_addr, capacity).await;
+                        run_pipeline(client, bind_addr, metrics_addr, capacity, transport).await;
                     }
                     None => {
                         warn!(
                             "⚠️  Engine: in-memory mode (TB unavailable — check BLAZIL_TB_ADDRESS)"
                         );
                         let client = make_in_memory_client().await;
-                        run_pipeline(client, bind_addr, metrics_addr, capacity).await;
+                        run_pipeline(client, bind_addr, metrics_addr, capacity, transport).await;
                     }
                 }
             }
             Err(_) => {
                 info!("⚠️  Engine: in-memory mode (demo/dev only)");
                 let client = make_in_memory_client().await;
-                run_pipeline(client, bind_addr, metrics_addr, capacity).await;
+                run_pipeline(client, bind_addr, metrics_addr, capacity, transport).await;
             }
         }
     }
@@ -243,6 +282,6 @@ async fn main() {
     {
         info!("⚠️  Engine: in-memory mode (demo/dev only)");
         let client = make_in_memory_client().await;
-        run_pipeline(client, bind_addr, metrics_addr, capacity).await;
+        run_pipeline(client, bind_addr, metrics_addr, capacity, transport).await;
     }
 }

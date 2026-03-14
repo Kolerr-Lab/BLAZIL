@@ -28,6 +28,7 @@
 //! | [`protocol`] | Wire frames and MessagePack messages |
 //! | [`server`] | Abstract [`server::TransportServer`] trait |
 //! | [`tcp`] | [`tcp::TcpTransportServer`] implementation |
+//! | [`aeron_transport`] | [`aeron_transport::AeronTransportServer`] (feature = "aeron") |
 //! | [`connection`] | Per-connection request handler |
 //! | [`backpressure`] | Ring buffer fill ratio guard |
 //! | [`mock`] | [`mock::MockTransportClient`] for integration tests |
@@ -40,6 +41,12 @@ pub mod protocol;
 pub mod server;
 pub mod tcp;
 
+#[cfg(feature = "aeron")]
+pub mod aeron_transport;
+
 pub use protocol::{TransactionRequest, TransactionResponse};
 pub use server::TransportServer;
 pub use tcp::TcpTransportServer;
+
+#[cfg(feature = "aeron")]
+pub use aeron_transport::AeronTransportServer;
