@@ -29,6 +29,7 @@
 //! | [`server`] | Abstract [`server::TransportServer`] trait |
 //! | [`tcp`] | [`tcp::TcpTransportServer`] implementation |
 //! | [`aeron_transport`] | [`aeron_transport::AeronTransportServer`] (feature = "aeron") |
+//! | [`io_uring_transport`] | [`io_uring_transport::IoUringTransportServer`] (feature = "io-uring", Linux only) |
 //! | [`connection`] | Per-connection request handler |
 //! | [`backpressure`] | Ring buffer fill ratio guard |
 //! | [`mock`] | [`mock::MockTransportClient`] for integration tests |
@@ -44,9 +45,15 @@ pub mod tcp;
 #[cfg(feature = "aeron")]
 pub mod aeron_transport;
 
+#[cfg(all(target_os = "linux", feature = "io-uring"))]
+pub mod io_uring_transport;
+
 pub use protocol::{TransactionRequest, TransactionResponse};
 pub use server::TransportServer;
 pub use tcp::TcpTransportServer;
 
 #[cfg(feature = "aeron")]
 pub use aeron_transport::AeronTransportServer;
+
+#[cfg(all(target_os = "linux", feature = "io-uring"))]
+pub use io_uring_transport::IoUringTransportServer;

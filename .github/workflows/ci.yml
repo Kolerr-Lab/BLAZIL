@@ -41,13 +41,13 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Check
-        run: cargo check --workspace
+        run: cargo check --workspace --features blazil-transport/aeron,blazil-transport/io-uring
 
       - name: Test
         run: cargo test --workspace
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --features blazil-transport/aeron,blazil-transport/io-uring -- -D warnings
 
       - name: Fmt
         run: cargo fmt --all -- --check

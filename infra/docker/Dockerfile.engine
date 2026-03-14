@@ -21,7 +21,8 @@ RUN curl -fsSL https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.x
     && ln -s /usr/local/zig-linux-x86_64-0.13.0/zig /usr/local/bin/zig
 
 COPY . .
-RUN cargo build --release -p blazil-transport --features blazil-transport/tigerbeetle-client
+RUN cargo build --release -p blazil-transport \
+    --features blazil-transport/tigerbeetle-client,blazil-transport/aeron,blazil-transport/io-uring
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Stage 2: minimal runtime image

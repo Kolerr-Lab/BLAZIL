@@ -8,7 +8,11 @@
 //!   BLAZIL_TB_ADDRESS     — TigerBeetle address (e.g. tigerbeetle:3000)
 //!                           If set: uses real TigerBeetle (requires tigerbeetle-client feature)
 //!                           If unset: uses in-memory ledger (dev/test only)
-//!   BLAZIL_TRANSPORT      — Transport backend: "tcp" (default) or "aeron" (requires feature)
+//!   BLAZIL_TRANSPORT      — Transport backend:
+//!                             "tcp"          (default) — standard tokio TCP
+//!                             "aeron"        — Aeron UDP (requires feature = "aeron")
+//!                             "io-uring"     — io_uring TCP (Linux + feature = "io-uring")
+//!                             "aeron+io-uring" — Aeron UDP receive + io_uring TCP send
 //!   AERON_DIR             — Aeron C Media Driver IPC dir (default: /dev/shm/aeron)
 //!   BLAZIL_AERON_CHANNEL  — Aeron channel URI (default: aeron:udp?endpoint=0.0.0.0:20121)
 
@@ -28,13 +32,13 @@ use blazil_ledger::client::LedgerClient;
 use blazil_ledger::mock::InMemoryLedgerClient;
 #[cfg(feature = "aeron")]
 use blazil_transport::aeron_transport::{AeronTransportServer, DEFAULT_AERON_CHANNEL};
+#[cfg(all(target_os = "linux", feature = "io-uring"))]
+use blazil_transport::io_uring_transport::IoUringTransportServer;
 use blazil_transport::metrics_server::MetricsServer;
 use blazil_transport::server::TransportServer;
 use blazil_transport::tcp::TcpTransportServer;
 use rust_decimal::Decimal;
-use tracing::info;
-#[cfg(feature = "tigerbeetle-client")]
-use tracing::warn;
+use tracing::{info, warn};
 
 #[cfg(feature = "tigerbeetle-client")]
 use blazil_ledger::tigerbeetle::TigerBeetleClient;
@@ -102,8 +106,10 @@ async fn try_connect_tb(
 /// `LedgerHandler<C: Sized>` bound).
 ///
 /// The `transport` argument selects the network backend:
-///   - `"tcp"`   (default) — [`TcpTransportServer`]
-///   - `"aeron"` — [`AeronTransportServer`] (requires `--features aeron`)
+///   - `"tcp"`           (default) — [`TcpTransportServer`]
+///   - `"aeron"`         — [`AeronTransportServer`] (requires `--features aeron`)
+///   - `"io-uring"`      — [`IoUringTransportServer`] (Linux + `--features io-uring`)
+///   - `"aeron+io-uring"` — Aeron UDP with io_uring TCP fallback (Linux + both features)
 async fn run_pipeline<C: LedgerClient + 'static>(
     client: Arc<C>,
     bind_addr: String,
@@ -148,6 +154,36 @@ async fn run_pipeline<C: LedgerClient + 'static>(
     });
 
     // ── Transport dispatch ──────────────────────────────────────────────────────
+
+    // io-uring and aeron+io-uring: Linux-only.
+    // On macOS/CI (or when the feature is off) we fall through to TCP.
+    if transport == "io-uring" || transport == "aeron+io-uring" {
+        #[cfg(all(target_os = "linux", feature = "io-uring"))]
+        {
+            let label = if transport == "aeron+io-uring" {
+                "🚀 Aeron UDP + io_uring active — MAXIMUM PERFORMANCE"
+            } else {
+                "🚀 io_uring active"
+            };
+            info!("{label}");
+            let server = Arc::new(IoUringTransportServer::new(
+                &bind_addr,
+                Arc::clone(&pipeline),
+                ring_buffer,
+            ));
+            info!("blazil-engine ready");
+            server.serve().await.expect("io_uring server error");
+            return;
+        }
+        #[cfg(not(all(target_os = "linux", feature = "io-uring")))]
+        {
+            warn!(
+                transport = %transport,
+                "⚠️  io_uring not available on this platform — falling back to TCP"
+            );
+        }
+    }
+
     #[cfg(feature = "aeron")]
     if transport == "aeron" {
         let aeron_dir = std::env::var("AERON_DIR").unwrap_or_else(|_| "/dev/shm/aeron".to_string());
@@ -159,17 +195,20 @@ async fn run_pipeline<C: LedgerClient + 'static>(
             Arc::clone(&pipeline),
             ring_buffer,
         ));
+        info!("🚀 Aeron UDP active");
         info!("blazil-engine ready");
         server.serve().await.expect("aeron server error");
         return;
     }
 
     // Default: TCP transport
-    if transport != "tcp" && transport != "aeron" {
-        info!(
+    if transport != "tcp" {
+        warn!(
             transport = %transport,
             "unknown BLAZIL_TRANSPORT value — falling back to TCP"
         );
+    } else {
+        info!("⚡ TCP transport active");
     }
     let server = Arc::new(TcpTransportServer::new(
         &bind_addr,

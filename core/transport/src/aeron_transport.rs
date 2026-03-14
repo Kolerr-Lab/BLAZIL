@@ -223,8 +223,8 @@ fn aeron_serve_blocking(
     );
 
     // ── Response buffer (reused across fragments) ─────────────────────────────
-    let mut rsp_aligned = AlignedBuffer::with_capacity(RSP_BUF_CAPACITY);
-    let rsp_buf = AtomicBuffer::from_aligned(&mut rsp_aligned);
+    let rsp_aligned = AlignedBuffer::with_capacity(RSP_BUF_CAPACITY);
+    let rsp_buf = AtomicBuffer::from_aligned(&rsp_aligned);
 
     // ── Poll loop ─────────────────────────────────────────────────────────────
     while !shutdown.load(Ordering::Acquire) {

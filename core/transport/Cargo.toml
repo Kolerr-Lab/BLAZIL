@@ -15,6 +15,11 @@ tigerbeetle-client = ["blazil-ledger/tigerbeetle-client"]
 # Activate at runtime via BLAZIL_TRANSPORT=aeron.
 aeron = ["dep:aeron-rs"]
 
+# Enables the io_uring TCP transport backend (Linux 5.1+ only).
+# Falls back to TcpTransportServer on macOS/non-Linux automatically.
+# Activate at runtime via BLAZIL_TRANSPORT=io-uring or BLAZIL_TRANSPORT=aeron+io-uring.
+io-uring = ["dep:tokio-uring"]
+
 [dependencies]
 blazil-common  = { path = "../common" }
 blazil-engine  = { path = "../engine" }
@@ -29,6 +34,9 @@ axum           = "0.7"
 rmp-serde      = "1"
 rust_decimal   = { version = "1", features = ["serde"] }
 aeron-rs       = { version = "0.1", optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+tokio-uring    = { version = "0.4", optional = true }
 
 [dev-dependencies]
 blazil-ledger  = { path = "../ledger", features = ["tigerbeetle-client"] }

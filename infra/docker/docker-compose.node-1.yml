@@ -86,8 +86,9 @@ services:
       BLAZIL_TB_CONNECT_DELAY_MS: "500"
       BLAZIL_SHARD_ID: "0"
       BLAZIL_NODE_ID: "node-1"
-      # Aeron transport (opt-in). Set BLAZIL_TRANSPORT=aeron to enable.
-      BLAZIL_TRANSPORT: ${BLAZIL_TRANSPORT:-tcp}
+      # Transport backend (aeron+io-uring = maximum performance on Linux).
+      # Override via: BLAZIL_TRANSPORT=tcp docker compose up
+      BLAZIL_TRANSPORT: ${BLAZIL_TRANSPORT:-aeron+io-uring}
       AERON_DIR: /dev/shm/aeron
     volumes:
       - /dev/shm:/dev/shm
