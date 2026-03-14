@@ -20,7 +20,8 @@ NODE3_IP=${3:-"localhost"}
 DURATION=${4:-"60"}
 INSTALL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 STRESSTEST="$INSTALL_DIR/tools/stresstest/stresstest-linux"
-REPORT_PATH="$INSTALL_DIR/docs/do-benchmark-report.md"
+REPORT_SINGLE="$INSTALL_DIR/docs/do-benchmark-report-single.md"
+REPORT_CLUSTER="$INSTALL_DIR/docs/do-benchmark-report-cluster.md"
 SCREENSHOT_DIR="$INSTALL_DIR/docs/benchmark-screenshots"
 
 # Ensure the binary exists and is executable
@@ -37,7 +38,8 @@ echo " Node 1:  $NODE1_IP"
 echo " Node 2:  $NODE2_IP"
 echo " Node 3:  $NODE3_IP"
 echo " Duration: ${DURATION}s per scenario"
-echo " Report:   $REPORT_PATH"
+echo " Reports:  $REPORT_SINGLE"
+echo "           $REPORT_CLUSTER"
 echo ""
 
 mkdir -p "$SCREENSHOT_DIR"
@@ -57,22 +59,20 @@ echo ""
 echo "▶ Scenario 2: E2E single node"
 cd "$INSTALL_DIR"
 "$STRESSTEST" \
-  --mode=local \
-  --duration="${DURATION}s" \
-  --addr="${NODE1_IP}:50051" \
-  --report="$REPORT_PATH" \
-  --scenario=single-node \
+  -mode=local \
+  -target="${NODE1_IP}:50051" \
+  -duration="${DURATION}s" \
+  -report="$REPORT_SINGLE" \
   2>&1 | tee /tmp/bench_single.txt
 echo ""
 
 # ── Scenario 3: E2E 3-node cluster ────────────────────────────────────────────
 echo "▶ Scenario 3: E2E 3-node cluster"
 "$STRESSTEST" \
-  --mode=cluster \
-  --duration="${DURATION}s" \
-  --nodes="$NODES" \
-  --report="$REPORT_PATH" \
-  --scenario=cluster \
+  -mode=cluster \
+  -nodes="$NODES" \
+  -duration="${DURATION}s" \
+  -report="$REPORT_CLUSTER" \
   2>&1 | tee /tmp/bench_cluster.txt
 echo ""
 
@@ -80,11 +80,10 @@ echo ""
 echo "▶ Scenario 4: Failover test"
 echo "  Starting 30s cluster run, killing node-2 at 15s..."
 "$STRESSTEST" \
-  --mode=cluster \
-  --duration="30s" \
-  --nodes="$NODES" \
-  --report="$REPORT_PATH" \
-  --scenario=failover \
+  -mode=cluster \
+  -nodes="$NODES" \
+  -duration=30s \
+  -report="$REPORT_CLUSTER" \
   2>&1 | tee /tmp/bench_failover.txt &
 BENCH_PID=$!
 sleep 15
@@ -96,7 +95,7 @@ echo ""
 
 # ── Screenshot prompt ─────────────────────────────────────────────────────────
 echo "📸 Grafana dashboard screenshots:"
-echo "   http://${NODE1_IP}:3000  — save to $SCREENSHOT_DIR/"
+echo "   http://${NODE1_IP}:3001  — save to $SCREENSHOT_DIR/"
 echo "   Dashboards: 'Blazil Overview' and 'Blazil Trading'"
 echo ""
 echo "✅ Benchmark complete!"
