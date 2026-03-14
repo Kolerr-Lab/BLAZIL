@@ -76,6 +76,7 @@ services:
       AERON_DIR: /dev/shm/aeron
     volumes:
       - /dev/shm:/dev/shm
+    ipc: host
     ports:
       - "7878:7878"
       - "9096:9090"

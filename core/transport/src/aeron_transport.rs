@@ -27,23 +27,28 @@
 //! publication.offer_part(response_buffer)
 //! ```
 //!
-//! ## Embedded media driver
+//! ## How aeronmd is provided
 //!
-//! `aeron-rs 0.1.8` is a pure Rust client; it communicates with the Aeron
-//! C Media Driver (`aeronmd`) via shared memory under `AERON_DIR`.
-//! Rather than running `aeronmd` in a separate Docker container, Blazil
-//! spawns it as a child process at startup if the `aeronmd` binary is
-//! present in `PATH`.  This keeps everything in one container, saves one
-//! Docker image pull, and reduces IPC latency (same‑host shared memory).
+//! `aeron-rs 0.1.8` is a pure Rust client library — it has no embedded media
+//! driver.  The Aeron C Media Driver (`aeronmd`) must be a running process that
+//! owns the shared-memory CnC file under `AERON_DIR`.
 //!
-//! If `aeronmd` is not found (e.g. local dev without the binary), the server
-//! assumes an already-running external driver and continues unchanged.
+//! In the Docker build (`Dockerfile.engine`) `aeronmd` is compiled from the
+//! official `real-logic/aeron` source in a separate build stage and copied
+//! into the runtime image at `/usr/local/bin/aeronmd`.
+//!
+//! At runtime, `spawn_media_driver()` (called from `aeron_serve_blocking`)
+//! starts `aeronmd` as a child process before the Aeron client connects.
+//! The child is kept alive for the lifetime of the blocking thread; dropping
+//! it sends SIGKILL, ensuring the driver stops with the engine.
+//! If `aeronmd` is not found in PATH (local dev), the server falls back to
+//! assuming an already-running driver and proceeds unchanged.
 //!
 //! ## Env vars
 //!
 //! | Variable | Default | Purpose |
 //! |---|---|---|
-//! | `AERON_DIR` | `/dev/shm/aeron` | Shared-memory IPC directory for aeronmd |
+//! | `AERON_DIR` | `/dev/shm/aeron` | Shared-memory IPC directory (`/dev/shm` — same-host, kernel-bypass) |
 //! | `BLAZIL_AERON_CHANNEL` | `aeron:udp?endpoint=0.0.0.0:20121` | Aeron channel URI |
 
 use std::str::FromStr;
