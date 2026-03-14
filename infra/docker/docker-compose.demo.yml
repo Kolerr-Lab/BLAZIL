@@ -7,7 +7,7 @@ name: blazil
 services:
 
   tigerbeetle:
-    image: ghcr.io/tigerbeetle/tigerbeetle:0.16.75
+    image: ghcr.io/tigerbeetle/tigerbeetle:0.16.72
     container_name: blazil-tigerbeetle
     entrypoint: ["/entrypoint.sh"]
     security_opt:

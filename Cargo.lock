@@ -1456,9 +1456,9 @@ dependencies = [
 
 [[package]]
 name = "tigerbeetle-unofficial"
-version = "0.14.24+0.16.75"
+version = "0.14.21+0.16.72"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f4314b7a34cd7e42c15fbb0a1f61ac13bc6003afa514100d82e522f6a71ccec7"
+checksum = "54591c1c640843bb2b04c1c98bd48aa18cca15e5ee05885e7290de9f0dec9bbd"
 dependencies = [
  "bytemuck",
  "fastrand",
@@ -1468,9 +1468,9 @@ dependencies = [
 
 [[package]]
 name = "tigerbeetle-unofficial-core"
-version = "0.14.24+0.16.75"
+version = "0.14.21+0.16.72"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "696fe0602f42b99caaab47e301d8386c4fe1727dc7cc534b7225bd8e37e72e68"
+checksum = "4256d7828e47008237e9013f8990621885b8a97330029b6ae67c6c107b20c88c"
 dependencies = [
  "bytemuck",
  "sptr",
@@ -1479,9 +1479,9 @@ dependencies = [
 
 [[package]]
 name = "tigerbeetle-unofficial-sys"
-version = "0.14.24+0.16.75"
+version = "0.14.21+0.16.72"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a145092b4a2b3d5f0eb0fcac806bce6b2ed89e2d1117bfeb199defc01eba6bf2"
+checksum = "e47ae49c778cbb7ee17e8ec4af8372923c46422f2062a697a08e0608b9b262f0"
 dependencies = [
  "bindgen",
  "bitflags",
