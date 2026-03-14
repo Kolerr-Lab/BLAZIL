@@ -72,16 +72,29 @@ pub struct TigerBeetleClient {
 /// helper performs a one-shot DNS lookup so callers (e.g. Docker Compose
 /// service names like `"tigerbeetle:3000"`) don't need to know the IP.
 async fn resolve_tb_address(addr: &str) -> BlazerResult<String> {
-    // Fast path: already a valid IP:port — no lookup needed.
-    if addr.parse::<SocketAddr>().is_ok() {
-        return Ok(addr.to_owned());
+    // TB_ADDRESSES may be a comma-separated list (e.g. "10.0.0.1:3000,10.0.0.2:3001,10.0.0.3:3002").
+    // Resolve each entry individually and rejoin with commas.
+    let mut resolved = Vec::new();
+    for entry in addr.split(',') {
+        let entry = entry.trim();
+        // Fast path: already a valid IP:port — no lookup needed.
+        if entry.parse::<SocketAddr>().is_ok() {
+            resolved.push(entry.to_owned());
+            continue;
+        }
+        let ip = tokio::net::lookup_host(entry)
+            .await
+            .map_err(|e| {
+                BlazerError::Ledger(format!("Failed to resolve TB address '{entry}': {e}"))
+            })?
+            .next()
+            .map(|sa| sa.to_string())
+            .ok_or_else(|| {
+                BlazerError::Ledger(format!("No DNS result for TB address '{entry}'"))
+            })?;
+        resolved.push(ip);
     }
-    tokio::net::lookup_host(addr)
-        .await
-        .map_err(|e| BlazerError::Ledger(format!("Failed to resolve TB address '{addr}': {e}")))?
-        .next()
-        .map(|sa| sa.to_string())
-        .ok_or_else(|| BlazerError::Ledger(format!("No DNS result for TB address '{addr}'")))
+    Ok(resolved.join(","))
 }
 
 impl TigerBeetleClient {
