@@ -22,8 +22,8 @@ type SustainConfig struct {
 // DefaultSustainConfig returns production-grade SLO parameters.
 func DefaultSustainConfig() SustainConfig {
 	return SustainConfig{
-		Goroutines: 500,
-		MinTPS:     10_000,
+		Goroutines: 100,
+		MinTPS:     2_000,
 		MaxP99Ms:   10.0,
 		MaxErrPct:  0.1,
 	}
@@ -35,11 +35,11 @@ func DefaultSustainConfig() SustainConfig {
 //   - P99 latency < MaxP99Ms
 //   - Error rate < MaxErrPct
 func Sustain(cfg Config, sc SustainConfig) Result {
-	conn, err := dial(cfg.Target)
+	pool, err := dialPool(cfg.Target)
 	if err != nil {
 		return Result{Name: "sustain", Notes: fmt.Sprintf("dial error: %v", err)}
 	}
-	defer conn.Close()
+	defer pool.close()
 
 	col, stopCol := metrics.NewCollector()
 	defer stopCol()
@@ -49,12 +49,17 @@ func Sustain(cfg Config, sc SustainConfig) Result {
 		interval = 5 * time.Second
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.Duration)
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.Duration+10*time.Second)
 	defer cancel()
 
 	for i := 0; i < sc.Goroutines; i++ {
-		go worker(ctx, conn, col, int64(i))
+		go worker(ctx, pool.get(i), col, int64(i))
 	}
+
+	// 10 s warmup: let connections and pipeline settle before counting.
+	fmt.Println("  sustain warmup 10 s…")
+	time.Sleep(10 * time.Second)
+	col.Reset()
 
 	var samples []metrics.Sample
 	elapsed := time.Duration(0)

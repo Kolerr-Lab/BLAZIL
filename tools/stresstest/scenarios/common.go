@@ -11,6 +11,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/protobuf/encoding/protowire"
 
 	"github.com/blazil/stresstest/metrics"
@@ -66,8 +67,58 @@ func dial(target string) (*grpc.ClientConn, error) {
 	conn, err := grpc.Dial(target,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithDefaultCallOptions(grpc.ForceCodec(rawProtoCodec{})),
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:    10 * time.Second,
+			Timeout: 5 * time.Second,
+		}),
 	)
 	return conn, err
+}
+
+// poolSize is the number of shared gRPC connections each scenario maintains.
+// gRPC multiplexes thousands of concurrent streams per connection, so a small
+// pool supports hundreds of goroutines without triggering server-side
+// connection limits.
+const poolSize = 10
+
+// Pool holds a fixed set of reusable gRPC connections.
+type Pool [poolSize]*grpc.ClientConn
+
+// dialPool creates poolSize connections to target, all using the raw-proto
+// codec and keepalive tuned for sustained load.
+func dialPool(target string) (Pool, error) {
+	var p Pool
+	for i := range p {
+		//nolint:staticcheck
+		conn, err := grpc.Dial(target,
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+			grpc.WithDefaultCallOptions(grpc.ForceCodec(rawProtoCodec{})),
+			grpc.WithKeepaliveParams(keepalive.ClientParameters{
+				Time:    10 * time.Second,
+				Timeout: 5 * time.Second,
+			}),
+		)
+		if err != nil {
+			for j := 0; j < i; j++ {
+				_ = p[j].Close()
+			}
+			return p, err
+		}
+		p[i] = conn
+	}
+	return p, nil
+}
+
+// get returns the connection that goroutine id should use.
+func (p Pool) get(id int) *grpc.ClientConn { return p[id%poolSize] }
+
+// close closes every connection in the pool.
+func (p Pool) close() {
+	for _, c := range p {
+		if c != nil {
+			_ = c.Close()
+		}
+	}
 }
 
 // encodePaymentRequest hand-encodes a ProcessPaymentRequest proto message

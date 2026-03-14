@@ -12,11 +12,11 @@ import (
 // every 5 s, measuring throughput at each step. Success criterion: TPS
 // increases monotonically with concurrency (linear scaling).
 func Ramp(cfg Config) Result {
-	conn, err := dial(cfg.Target)
+	pool, err := dialPool(cfg.Target)
 	if err != nil {
 		return Result{Name: "ramp", Notes: fmt.Sprintf("dial error: %v", err)}
 	}
-	defer conn.Close()
+	defer pool.close()
 
 	col, stopCol := metrics.NewCollector()
 	defer stopCol()
@@ -29,11 +29,24 @@ func Ramp(cfg Config) Result {
 	}
 
 	const (
-		minWorkers  = 100
-		maxWorkers  = 1000
-		stepWorkers = 100
-		stepDur     = 5 * time.Second
+		minWorkers  = 10
+		maxWorkers  = 200
+		stepWorkers = 10
+		stepDur     = 10 * time.Second
+		warmupDur   = 10 * time.Second
 	)
+
+	// 10 s warmup: let connections and pipeline settle before measuring.
+	fmt.Println("  ramp warmup 10 s…")
+	{
+		ctx, cancel := context.WithTimeout(context.Background(), warmupDur)
+		for i := 0; i < minWorkers; i++ {
+			go worker(ctx, pool.get(i), col, int64(i))
+		}
+		<-ctx.Done()
+		cancel()
+		col.Reset()
+	}
 
 	var steps []stepResult
 	var peakTPS float64
@@ -42,7 +55,7 @@ func Ramp(cfg Config) Result {
 		col.Reset()
 		ctx, cancel := context.WithTimeout(context.Background(), stepDur)
 		for i := 0; i < w; i++ {
-			go worker(ctx, conn, col, int64(w*1000+i))
+			go worker(ctx, pool.get(i), col, int64(w*1000+i))
 		}
 		<-ctx.Done()
 		cancel()

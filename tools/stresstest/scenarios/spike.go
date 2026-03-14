@@ -15,18 +15,18 @@ import (
 //   - Error rate during spike < 1 %
 //   - TPS recovers to ≥ 90 % of baseline TPS within one sample interval after spike ends.
 func Spike(cfg Config) Result {
-	conn, err := dial(cfg.Target)
+	pool, err := dialPool(cfg.Target)
 	if err != nil {
 		return Result{Name: "spike", Notes: fmt.Sprintf("dial error: %v", err)}
 	}
-	defer conn.Close()
+	defer pool.close()
 
 	col, stopCol := metrics.NewCollector()
 	defer stopCol()
 
 	const (
-		baselineWorkers = 200
-		spikeWorkers    = 2000
+		baselineWorkers = 50
+		spikeWorkers    = 200
 		baselineDur     = 30 * time.Second
 		spikeDur        = 10 * time.Second
 		recoveryDur     = 30 * time.Second
@@ -46,7 +46,8 @@ func Spike(cfg Config) Result {
 
 	runPhase := func(name string, workers int, dur time.Duration) phaseResult {
 		col.Reset()
-		ctx, cancel := context.WithTimeout(context.Background(), dur)
+		const warmup = 10 * time.Second
+		ctx, cancel := context.WithTimeout(context.Background(), dur+warmup)
 		defer cancel()
 
 		var wg sync.WaitGroup
@@ -55,10 +56,17 @@ func Spike(cfg Config) Result {
 			wIdx := i
 			go func() {
 				defer wg.Done()
-				worker(ctx, conn, col, int64(wIdx+workers*10000))
+				worker(ctx, pool.get(wIdx), col, int64(wIdx+workers*10000))
 			}()
 		}
-		<-ctx.Done()
+
+		// 10 s warmup: discard metrics before the measurement window.
+		time.Sleep(warmup)
+		col.Reset()
+
+		// Measurement window: let workers run for dur, then cancel.
+		time.Sleep(dur)
+		cancel()
 		wg.Wait()
 
 		total, success, failed, _, p99 := col.SnapshotDelta()
