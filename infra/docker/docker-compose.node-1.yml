@@ -1,0 +1,192 @@
+name: blazil-node-1
+
+# Blazil Node-1 — runs on the first DigitalOcean droplet.
+#
+# Runs:
+#   tigerbeetle-0  replica 0, port 3000
+#   blazil-engine  shard 0,   port 7878
+#   payments       shard 0,   port 50051
+#   banking        shard 0,   port 50052
+#   trading        shard 0,   port 50053
+#   crypto         shard 0,   port 50054
+#   prometheus     :9090  (Grafana source — scrapes engine on all 3 nodes)
+#   grafana        :3000
+#
+# Required env vars (pass real IPs — TigerBeetle rejects DNS hostnames):
+#   TB_ADDRESSES   e.g. 10.0.0.1:3000,10.0.0.2:3001,10.0.0.3:3002
+#   BLAZIL_NODES   e.g. node-1:10.0.0.1:7878,node-2:10.0.0.2:7878,node-3:10.0.0.3:7878
+#
+# Usage:
+#   TB_ADDRESSES=... BLAZIL_NODES=... \
+#     docker compose -f infra/docker/docker-compose.node-1.yml up --build -d
+
+networks:
+  blazil-node-1:
+    driver: bridge
+
+volumes:
+  tb-0-data:
+
+services:
+
+  # ── TigerBeetle replica 0 ────────────────────────────────────────────────────
+
+  tigerbeetle-0:
+    image: ghcr.io/tigerbeetle/tigerbeetle:latest
+    container_name: blazil-tigerbeetle-0
+    entrypoint: ["/entrypoint.sh"]
+    environment:
+      TB_REPLICA: "0"
+      TB_REPLICA_COUNT: "3"
+      TB_ADDRESSES: ${TB_ADDRESSES}
+    volumes:
+      - tb-0-data:/data
+      - ./tigerbeetle-entrypoint.sh:/entrypoint.sh:ro
+    ports:
+      - "3000:3000"
+    networks:
+      - blazil-node-1
+    security_opt:
+      - seccomp:unconfined
+    healthcheck:
+      # 0BB8 = 3000 in hex. Reads kernel TCP table — reliable in busybox.
+      test: ["CMD-SHELL", "grep -q ':0BB8 ' /proc/net/tcp"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+
+  # ── Engine — shard 0 ─────────────────────────────────────────────────────────
+
+  blazil-engine:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.engine
+    container_name: blazil-engine
+    environment:
+      BLAZIL_BIND_ADDR: "0.0.0.0:7878"
+      BLAZIL_METRICS_PORT: "9090"
+      BLAZIL_TB_ADDRESS: ${TB_ADDRESSES}
+      BLAZIL_TB_CONNECT_RETRY: "20"
+      BLAZIL_TB_CONNECT_DELAY_MS: "500"
+      BLAZIL_SHARD_ID: "0"
+      BLAZIL_NODE_ID: "node-1"
+    ports:
+      - "7878:7878"
+      - "9095:9090"
+    networks:
+      - blazil-node-1
+    security_opt:
+      - seccomp:unconfined
+    restart: on-failure
+    depends_on:
+      tigerbeetle-0:
+        condition: service_healthy
+
+  # ── Services — shard 0 ───────────────────────────────────────────────────────
+
+  blazil-payments:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.payments
+    container_name: blazil-payments
+    environment:
+      BLAZIL_ENGINE_ADDR: "blazil-engine:7878"
+      BLAZIL_METRICS_ADDR: "0.0.0.0:9091"
+      BLAZIL_SHARD_ID: "0"
+      BLAZIL_NODE_ID: "node-1"
+      BLAZIL_SHARDING_ENABLED: "true"
+      BLAZIL_NODES: ${BLAZIL_NODES}
+      BLAZIL_AUTH_REQUIRED: "false"
+    ports:
+      - "50051:50051"
+      - "9091:9091"
+    networks:
+      - blazil-node-1
+    depends_on:
+      - blazil-engine
+
+  blazil-banking:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.banking
+    container_name: blazil-banking
+    environment:
+      BLAZIL_ENGINE_ADDR: "blazil-engine:7878"
+      BANKING_METRICS_ADDR: "0.0.0.0:9092"
+      BLAZIL_NODE_ID: "node-1"
+      BLAZIL_AUTH_REQUIRED: "false"
+    ports:
+      - "50052:50052"
+      - "9092:9092"
+    networks:
+      - blazil-node-1
+    depends_on:
+      - blazil-engine
+
+  blazil-trading:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.trading
+    container_name: blazil-trading
+    environment:
+      BLAZIL_ENGINE_ADDR: "blazil-engine:7878"
+      METRICS_ADDR: "0.0.0.0:9093"
+      BLAZIL_NODE_ID: "node-1"
+      BLAZIL_AUTH_REQUIRED: "false"
+    ports:
+      - "50053:50053"
+      - "9093:9093"
+    networks:
+      - blazil-node-1
+    depends_on:
+      - blazil-engine
+
+  blazil-crypto:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.crypto
+    container_name: blazil-crypto
+    environment:
+      BLAZIL_ENGINE_ADDR: "blazil-engine:7878"
+      METRICS_ADDR: "0.0.0.0:9094"
+      BLAZIL_NODE_ID: "node-1"
+      BLAZIL_AUTH_REQUIRED: "false"
+    ports:
+      - "50054:50054"
+      - "9094:9094"
+    networks:
+      - blazil-node-1
+    depends_on:
+      - blazil-engine
+
+  # ── Monitoring (node-1 only) ─────────────────────────────────────────────────
+
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: blazil-prometheus
+    volumes:
+      - ./prometheus/prometheus.cluster.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    networks:
+      - blazil-node-1
+    depends_on:
+      - blazil-engine
+
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: blazil-grafana
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: blazil
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/provisioning/dashboards/blazil-overview.json
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "3000:3000"
+    networks:
+      - blazil-node-1
+    depends_on:
+      - prometheus

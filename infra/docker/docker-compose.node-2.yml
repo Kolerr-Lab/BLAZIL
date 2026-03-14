@@ -1,0 +1,159 @@
+name: blazil-node-2
+
+# Blazil Node-2 — runs on the second DigitalOcean droplet.
+#
+# Runs:
+#   tigerbeetle-1  replica 1, port 3001
+#   blazil-engine  shard 1,   port 7878
+#   payments       shard 1,   port 50061
+#   banking        shard 1,   port 50062
+#   trading        shard 1,   port 50063
+#   crypto         shard 1,   port 50064
+#
+# Required env vars (pass real IPs — TigerBeetle rejects DNS hostnames):
+#   TB_ADDRESSES   e.g. 10.0.0.1:3000,10.0.0.2:3001,10.0.0.3:3002
+#   BLAZIL_NODES   e.g. node-1:10.0.0.1:7878,node-2:10.0.0.2:7878,node-3:10.0.0.3:7878
+#
+# Usage:
+#   TB_ADDRESSES=... BLAZIL_NODES=... \
+#     docker compose -f infra/docker/docker-compose.node-2.yml up --build -d
+
+networks:
+  blazil-node-2:
+    driver: bridge
+
+volumes:
+  tb-1-data:
+
+services:
+
+  # ── TigerBeetle replica 1 ────────────────────────────────────────────────────
+
+  tigerbeetle-1:
+    image: ghcr.io/tigerbeetle/tigerbeetle:latest
+    container_name: blazil-tigerbeetle-1
+    entrypoint: ["/entrypoint.sh"]
+    environment:
+      TB_REPLICA: "1"
+      TB_REPLICA_COUNT: "3"
+      TB_ADDRESSES: ${TB_ADDRESSES}
+    volumes:
+      - tb-1-data:/data
+      - ./tigerbeetle-entrypoint.sh:/entrypoint.sh:ro
+    ports:
+      - "3001:3001"
+    networks:
+      - blazil-node-2
+    security_opt:
+      - seccomp:unconfined
+    healthcheck:
+      # 0BB9 = 3001 in hex. Reads kernel TCP table — reliable in busybox.
+      test: ["CMD-SHELL", "grep -q ':0BB9 ' /proc/net/tcp"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+
+  # ── Engine — shard 1 ─────────────────────────────────────────────────────────
+
+  blazil-engine:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.engine
+    container_name: blazil-engine
+    environment:
+      BLAZIL_BIND_ADDR: "0.0.0.0:7878"
+      BLAZIL_METRICS_PORT: "9090"
+      BLAZIL_TB_ADDRESS: ${TB_ADDRESSES}
+      BLAZIL_TB_CONNECT_RETRY: "20"
+      BLAZIL_TB_CONNECT_DELAY_MS: "500"
+      BLAZIL_SHARD_ID: "1"
+      BLAZIL_NODE_ID: "node-2"
+    ports:
+      - "7878:7878"
+      - "9096:9090"
+    networks:
+      - blazil-node-2
+    security_opt:
+      - seccomp:unconfined
+    restart: on-failure
+    depends_on:
+      tigerbeetle-1:
+        condition: service_healthy
+
+  # ── Services — shard 1 ───────────────────────────────────────────────────────
+
+  blazil-payments:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.payments
+    container_name: blazil-payments
+    environment:
+      BLAZIL_ENGINE_ADDR: "blazil-engine:7878"
+      BLAZIL_METRICS_ADDR: "0.0.0.0:9091"
+      BLAZIL_SHARD_ID: "1"
+      BLAZIL_NODE_ID: "node-2"
+      BLAZIL_SHARDING_ENABLED: "true"
+      BLAZIL_NODES: ${BLAZIL_NODES}
+      BLAZIL_AUTH_REQUIRED: "false"
+    ports:
+      - "50061:50051"
+      - "9101:9091"
+    networks:
+      - blazil-node-2
+    depends_on:
+      - blazil-engine
+
+  blazil-banking:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.banking
+    container_name: blazil-banking
+    environment:
+      BLAZIL_ENGINE_ADDR: "blazil-engine:7878"
+      BANKING_METRICS_ADDR: "0.0.0.0:9092"
+      BLAZIL_NODE_ID: "node-2"
+      BLAZIL_AUTH_REQUIRED: "false"
+    ports:
+      - "50062:50052"
+      - "9102:9092"
+    networks:
+      - blazil-node-2
+    depends_on:
+      - blazil-engine
+
+  blazil-trading:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.trading
+    container_name: blazil-trading
+    environment:
+      BLAZIL_ENGINE_ADDR: "blazil-engine:7878"
+      METRICS_ADDR: "0.0.0.0:9093"
+      BLAZIL_NODE_ID: "node-2"
+      BLAZIL_AUTH_REQUIRED: "false"
+    ports:
+      - "50063:50053"
+      - "9103:9093"
+    networks:
+      - blazil-node-2
+    depends_on:
+      - blazil-engine
+
+  blazil-crypto:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.crypto
+    container_name: blazil-crypto
+    environment:
+      BLAZIL_ENGINE_ADDR: "blazil-engine:7878"
+      METRICS_ADDR: "0.0.0.0:9094"
+      BLAZIL_NODE_ID: "node-2"
+      BLAZIL_AUTH_REQUIRED: "false"
+    ports:
+      - "50064:50054"
+      - "9104:9094"
+    networks:
+      - blazil-node-2
+    depends_on:
+      - blazil-engine
