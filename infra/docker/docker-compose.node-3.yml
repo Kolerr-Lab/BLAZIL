@@ -70,9 +70,10 @@ services:
       BLAZIL_TB_CONNECT_DELAY_MS: "500"
       BLAZIL_SHARD_ID: "2"
       BLAZIL_NODE_ID: "node-3"
-      # Transport backend (aeron+io-uring = maximum performance on Linux).
+      # Transport backend. Default: io-uring (zero-syscall TCP, Linux kernel 5.1+).
+      # Use BLAZIL_TRANSPORT=aeron when an external aeronmd is available.
       # Override via: BLAZIL_TRANSPORT=tcp docker compose up
-      BLAZIL_TRANSPORT: ${BLAZIL_TRANSPORT:-aeron+io-uring}
+      BLAZIL_TRANSPORT: ${BLAZIL_TRANSPORT:-io-uring}
       AERON_DIR: /dev/shm/aeron
     volumes:
       - /dev/shm:/dev/shm

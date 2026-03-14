@@ -1,28 +1,8 @@
 # Blazil engine — Rust multi-stage build
-# Compiles with tigerbeetle-client, aeron, and io-uring features.
-# Builds the Aeron C Media Driver (aeronmd) from the official real-logic/aeron
-# source — no third-party Docker image required.  aeronmd runs inside the
-# engine container via spawn_media_driver() in aeron_transport.rs.
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Stage 0: build aeronmd from real-logic/aeron source
-# Aeron C++ driver requires: cmake, g++, Java (for Gradle wrapper).
-# ─────────────────────────────────────────────────────────────────────────────
-FROM ubuntu:22.04 AS aeron-builder
-ARG AERON_VERSION=1.44.1
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    cmake g++ libbsd-dev openjdk-17-jdk-headless git ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-RUN git clone --depth=1 --branch ${AERON_VERSION} \
-    https://github.com/real-logic/aeron.git /aeron
-WORKDIR /aeron
-RUN mkdir cppbuild-out && cd cppbuild-out \
-    && cmake -DCMAKE_BUILD_TYPE=Release \
-             -DAERON_TESTS=OFF \
-             -DAERON_SAMPLES=OFF \
-             -DAERON_SYSTEM_TESTS=OFF \
-             .. \
-    && make -j"$(nproc)" aeronmd
+# aeron-rs is a pure-Rust crate (no C bindings, no cmake, no aeronmd binary
+# needed at build time).  The aeron feature compiles in purely through cargo.
+# At runtime, set BLAZIL_TRANSPORT=aeron only when an external aeronmd is
+# available.  Default cluster transport is io-uring.
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Stage 1: Rust builder
@@ -51,9 +31,5 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /app/target/release/blazil-transport /usr/local/bin/blazil-transport
-# Embed the Aeron C Media Driver — built from source in Stage 0.
-# spawn_media_driver() in aeron_transport.rs starts it as a child process.
-COPY --from=aeron-builder /aeron/cppbuild-out/binaries/aeronmd /usr/local/bin/aeronmd
-RUN chmod +x /usr/local/bin/aeronmd
 EXPOSE 7878 9090
 CMD ["blazil-transport"]
