@@ -39,7 +39,7 @@ echo "════════════════════════�
 
 cd "$INSTALL_DIR"
 
-BLAZIL_TB_ADDRESS="$TB_ADDRESSES" \
+TB_ADDRESSES="$TB_ADDRESSES" \
 BLAZIL_NODES="$BLAZIL_NODES" \
 BLAZIL_NODE_ID="$NODE_ID" \
 BLAZIL_SHARD_ID="$SHARD_ID" \

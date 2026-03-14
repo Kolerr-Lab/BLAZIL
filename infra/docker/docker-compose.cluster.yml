@@ -34,7 +34,10 @@ services:
     environment:
       TB_REPLICA: "0"
       TB_REPLICA_COUNT: "3"
-      TB_ADDRESSES: "tigerbeetle-0:3000,tigerbeetle-1:3001,tigerbeetle-2:3002"
+      # TB_ADDRESSES must be passed as real IPs at runtime — TigerBeetle rejects
+      # DNS hostnames. Example:
+      #   TB_ADDRESSES=10.0.0.1:3000,10.0.0.2:3001,10.0.0.3:3002 docker compose up
+      TB_ADDRESSES: ${TB_ADDRESSES}
     volumes:
       - tb-0-data:/data
       - ./tigerbeetle-entrypoint.sh:/entrypoint.sh:ro
@@ -45,10 +48,12 @@ services:
     security_opt:
       - seccomp:unconfined
     healthcheck:
-      test: ["CMD", "nc", "-z", "localhost", "3000"]
-      interval: 5s
-      retries: 15
-      start_period: 10s
+      # 0BB8 = port 3000 in hex. Reads kernel TCP table — reliable in busybox.
+      test: ["CMD-SHELL", "grep -q ':0BB8 ' /proc/net/tcp"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
 
   tigerbeetle-1:
     image: ghcr.io/tigerbeetle/tigerbeetle:latest
@@ -57,7 +62,7 @@ services:
     environment:
       TB_REPLICA: "1"
       TB_REPLICA_COUNT: "3"
-      TB_ADDRESSES: "tigerbeetle-0:3000,tigerbeetle-1:3001,tigerbeetle-2:3002"
+      TB_ADDRESSES: ${TB_ADDRESSES}
     volumes:
       - tb-1-data:/data
       - ./tigerbeetle-entrypoint.sh:/entrypoint.sh:ro
@@ -68,10 +73,12 @@ services:
     security_opt:
       - seccomp:unconfined
     healthcheck:
-      test: ["CMD", "nc", "-z", "localhost", "3001"]
-      interval: 5s
-      retries: 15
-      start_period: 10s
+      # 0BB9 = port 3001 in hex.
+      test: ["CMD-SHELL", "grep -q ':0BB9 ' /proc/net/tcp"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
 
   tigerbeetle-2:
     image: ghcr.io/tigerbeetle/tigerbeetle:latest
@@ -80,7 +87,7 @@ services:
     environment:
       TB_REPLICA: "2"
       TB_REPLICA_COUNT: "3"
-      TB_ADDRESSES: "tigerbeetle-0:3000,tigerbeetle-1:3001,tigerbeetle-2:3002"
+      TB_ADDRESSES: ${TB_ADDRESSES}
     volumes:
       - tb-2-data:/data
       - ./tigerbeetle-entrypoint.sh:/entrypoint.sh:ro
@@ -91,10 +98,12 @@ services:
     security_opt:
       - seccomp:unconfined
     healthcheck:
-      test: ["CMD", "nc", "-z", "localhost", "3002"]
-      interval: 5s
-      retries: 15
-      start_period: 10s
+      # 0BBA = port 3002 in hex.
+      test: ["CMD-SHELL", "grep -q ':0BBA ' /proc/net/tcp"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
 
   # ── Node 1 — Shard 0 ─────────────────────────────────────────────────────────
 
@@ -106,7 +115,10 @@ services:
     environment:
       BLAZIL_BIND_ADDR: "0.0.0.0:7878"
       BLAZIL_METRICS_PORT: "9090"
-      BLAZIL_TB_ADDRESS: "tigerbeetle-0:3000,tigerbeetle-1:3001,tigerbeetle-2:3002"
+      # Pass real IPs at runtime: BLAZIL_TB_ADDRESS=10.0.0.1:3000,... docker compose up
+      BLAZIL_TB_ADDRESS: ${TB_ADDRESSES}
+      BLAZIL_TB_CONNECT_RETRY: "20"
+      BLAZIL_TB_CONNECT_DELAY_MS: "500"
       BLAZIL_SHARD_ID: "0"
       BLAZIL_NODE_ID: "node-1"
     ports:
@@ -153,7 +165,9 @@ services:
     environment:
       BLAZIL_BIND_ADDR: "0.0.0.0:7878"
       BLAZIL_METRICS_PORT: "9090"
-      BLAZIL_TB_ADDRESS: "tigerbeetle-0:3000,tigerbeetle-1:3001,tigerbeetle-2:3002"
+      BLAZIL_TB_ADDRESS: ${TB_ADDRESSES}
+      BLAZIL_TB_CONNECT_RETRY: "20"
+      BLAZIL_TB_CONNECT_DELAY_MS: "500"
       BLAZIL_SHARD_ID: "1"
       BLAZIL_NODE_ID: "node-2"
     ports:
@@ -254,7 +268,9 @@ services:
     environment:
       BLAZIL_BIND_ADDR: "0.0.0.0:7878"
       BLAZIL_METRICS_PORT: "9090"
-      BLAZIL_TB_ADDRESS: "tigerbeetle-0:3000,tigerbeetle-1:3001,tigerbeetle-2:3002"
+      BLAZIL_TB_ADDRESS: ${TB_ADDRESSES}
+      BLAZIL_TB_CONNECT_RETRY: "20"
+      BLAZIL_TB_CONNECT_DELAY_MS: "500"
       BLAZIL_SHARD_ID: "2"
       BLAZIL_NODE_ID: "node-3"
     ports:
