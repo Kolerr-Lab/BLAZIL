@@ -10,7 +10,7 @@ name: blazil-node-1
 #   trading        shard 0,   port 50053
 #   crypto         shard 0,   port 50054
 #   prometheus     :9090  (Grafana source — scrapes engine on all 3 nodes)
-#   grafana        :3000
+#   grafana        :3001
 #
 # Required env vars (pass real IPs — TigerBeetle rejects DNS hostnames):
 #   TB_ADDRESSES   e.g. 10.0.0.1:3000,10.0.0.2:3001,10.0.0.3:3002
@@ -185,7 +185,7 @@ services:
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
     ports:
-      - "3000:3000"
+      - "3001:3000"
     networks:
       - blazil-node-1
     depends_on:
