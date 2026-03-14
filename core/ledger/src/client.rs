@@ -96,6 +96,31 @@ pub trait LedgerClient: Send + Sync {
     ///   this ID exists.
     async fn get_transfer(&self, id: &TransferId) -> BlazerResult<Transfer>;
 
+    /// Batch-commits multiple transfers in a **single** ledger round-trip.
+    ///
+    /// Returns one `BlazerResult<TransferId>` per input transfer, preserving
+    /// order.  `Ok(id)` means the transfer was committed; `Err(e)` means it
+    /// was rejected (other transfers in the same batch are unaffected unless
+    /// the `LINKED` flag is used).
+    ///
+    /// # Default implementation
+    ///
+    /// Falls back to sequential [`create_transfer`] calls.  Override in
+    /// production implementations to submit the entire vec in one
+    /// TigerBeetle VSR consensus round.
+    ///
+    /// [`create_transfer`]: LedgerClient::create_transfer
+    async fn create_transfers_batch(
+        &self,
+        transfers: Vec<Transfer>,
+    ) -> Vec<BlazerResult<TransferId>> {
+        let mut results = Vec::with_capacity(transfers.len());
+        for t in transfers {
+            results.push(self.create_transfer(t).await);
+        }
+        results
+    }
+
     /// Batch-looks up accounts by a slice of [`AccountId`]s.
     ///
     /// More efficient than calling [`get_account`] in a loop. Missing IDs are

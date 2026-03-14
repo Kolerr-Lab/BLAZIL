@@ -192,34 +192,7 @@ impl LedgerClient for TigerBeetleClient {
         let transfer_id = *transfer.id();
         tracing::debug!(transfer_id = %transfer_id, "submitting create_transfer to TigerBeetle");
 
-        let tb_id = convert::transfer_id_to_u128(&transfer_id);
-        let debit_id = convert::account_id_to_u128(transfer.debit_account_id());
-        let credit_id = convert::account_id_to_u128(transfer.credit_account_id());
-        let ledger = convert::ledger_id_to_u32(transfer.ledger_id());
-        let amount = convert::amount_to_minor_units(transfer.amount())?;
-
-        let mut flags = tb::transfer::Flags::empty();
-        if transfer.flags().linked {
-            flags.insert(tb::transfer::Flags::LINKED);
-        }
-        if transfer.flags().pending {
-            flags.insert(tb::transfer::Flags::PENDING);
-        }
-        if transfer.flags().post_pending_transfer {
-            flags.insert(tb::transfer::Flags::POST_PENDING_TRANSFER);
-        }
-        if transfer.flags().void_pending_transfer {
-            flags.insert(tb::transfer::Flags::VOID_PENDING_TRANSFER);
-        }
-
-        let tb_transfer = tb::Transfer::new(tb_id)
-            .with_debit_account_id(debit_id)
-            .with_credit_account_id(credit_id)
-            .with_ledger(ledger)
-            .with_code(transfer.code())
-            .with_amount(amount)
-            .with_flags(flags)
-            .with_user_data_32(u32::from(transfer.amount().currency().numeric()));
+        let tb_transfer = domain_transfer_to_tb(&transfer)?;
 
         let t0 = Instant::now();
         self.inner
@@ -228,6 +201,87 @@ impl LedgerClient for TigerBeetleClient {
             .map_err(|e| BlazerError::Ledger(format!("create_transfers failed: {e}")))?;
         tracing::info!(transfer_id = %transfer_id, elapsed_ms = t0.elapsed().as_millis(), "transfer committed to TigerBeetle");
         Ok(transfer_id)
+    }
+
+    async fn create_transfers_batch(
+        &self,
+        transfers: Vec<Transfer>,
+    ) -> Vec<BlazerResult<TransferId>> {
+        if transfers.is_empty() {
+            return Vec::new();
+        }
+
+        let n = transfers.len();
+        let mut results: Vec<Option<BlazerResult<TransferId>>> = (0..n).map(|_| None).collect();
+        let mut tb_transfers: Vec<tb::Transfer> = Vec::with_capacity(n);
+        // Maps position in the submitted tb_transfers slice → original index in `transfers`.
+        let mut tb_to_orig: Vec<usize> = Vec::with_capacity(n);
+
+        for (i, t) in transfers.iter().enumerate() {
+            match domain_transfer_to_tb(t) {
+                Ok(tb_t) => {
+                    tb_transfers.push(tb_t);
+                    tb_to_orig.push(i);
+                }
+                Err(e) => {
+                    results[i] = Some(Err(e));
+                }
+            }
+        }
+
+        if !tb_transfers.is_empty() {
+            let submitted = tb_transfers.len();
+            let t0 = Instant::now();
+            match self.inner.create_transfers(tb_transfers).await {
+                Ok(()) => {
+                    for &orig_i in &tb_to_orig {
+                        results[orig_i] = Some(Ok(*transfers[orig_i].id()));
+                    }
+                    tracing::info!(
+                        count = submitted,
+                        elapsed_ms = t0.elapsed().as_millis(),
+                        "batch create_transfers committed to TigerBeetle"
+                    );
+                }
+                Err(tb::error::CreateTransfersError::Api(api_err)) => {
+                    // Some transfers failed; those not in the error slice succeeded.
+                    let failed: std::collections::HashSet<usize> =
+                        api_err.as_slice().iter().map(|e| e.index() as usize).collect();
+                    for (tb_pos, &orig_i) in tb_to_orig.iter().enumerate() {
+                        if let Some(e) =
+                            api_err.as_slice().iter().find(|e| e.index() as usize == tb_pos)
+                        {
+                            results[orig_i] = Some(Err(BlazerError::Ledger(format!(
+                                "TB transfer error {:?} at batch index {tb_pos}",
+                                e.kind()
+                            ))));
+                        } else {
+                            results[orig_i] = Some(Ok(*transfers[orig_i].id()));
+                        }
+                    }
+                    tracing::warn!(
+                        count = submitted,
+                        failed = failed.len(),
+                        elapsed_ms = t0.elapsed().as_millis(),
+                        "batch create_transfers partial failure"
+                    );
+                }
+                Err(e) => {
+                    for &orig_i in &tb_to_orig {
+                        results[orig_i] = Some(Err(BlazerError::Ledger(format!(
+                            "create_transfers batch failed: {e}"
+                        ))));
+                    }
+                    tracing::error!(
+                        count = submitted,
+                        error = %e,
+                        "batch create_transfers transport error"
+                    );
+                }
+            }
+        }
+
+        results.into_iter().map(|r| r.unwrap()).collect()
     }
 
     #[instrument(skip(self))]
@@ -298,6 +352,41 @@ impl LedgerClient for TigerBeetleClient {
 }
 
 // ── Internal conversion helpers ───────────────────────────────────────────────
+
+/// Converts a Blazil [`Transfer`] to a TigerBeetle [`tb::Transfer`].
+///
+/// Shared by both `create_transfer` (single) and `create_transfers_batch` to
+/// keep the wire-encoding logic in one place.
+fn domain_transfer_to_tb(transfer: &Transfer) -> BlazerResult<tb::Transfer> {
+    let tb_id = convert::transfer_id_to_u128(transfer.id());
+    let debit_id = convert::account_id_to_u128(transfer.debit_account_id());
+    let credit_id = convert::account_id_to_u128(transfer.credit_account_id());
+    let ledger = convert::ledger_id_to_u32(transfer.ledger_id());
+    let amount = convert::amount_to_minor_units(transfer.amount())?;
+
+    let mut flags = tb::transfer::Flags::empty();
+    if transfer.flags().linked {
+        flags.insert(tb::transfer::Flags::LINKED);
+    }
+    if transfer.flags().pending {
+        flags.insert(tb::transfer::Flags::PENDING);
+    }
+    if transfer.flags().post_pending_transfer {
+        flags.insert(tb::transfer::Flags::POST_PENDING_TRANSFER);
+    }
+    if transfer.flags().void_pending_transfer {
+        flags.insert(tb::transfer::Flags::VOID_PENDING_TRANSFER);
+    }
+
+    Ok(tb::Transfer::new(tb_id)
+        .with_debit_account_id(debit_id)
+        .with_credit_account_id(credit_id)
+        .with_ledger(ledger)
+        .with_code(transfer.code())
+        .with_amount(amount)
+        .with_flags(flags)
+        .with_user_data_32(u32::from(transfer.amount().currency().numeric())))
+}
 
 /// Converts a TigerBeetle [`tb::Account`] back to a Blazil [`Account`].
 ///
