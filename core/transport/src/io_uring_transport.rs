@@ -67,7 +67,7 @@ const RESULT_TIMEOUT: Duration = Duration::from_millis(100);
 
 // ── Rate limiting ─────────────────────────────────────────────────────────────
 
-const RATE_LIMIT_TPS: u64 = 55_000;  // Max 55K TPS to prevent OOM
+const RATE_LIMIT_TPS: u64 = 55_000; // Max 55K TPS to prevent OOM
 const RATE_LIMIT_BURST: u64 = 1_000; // Allow 1-second burst headroom
 
 // ── IoUringTransportServer ────────────────────────────────────────────────────

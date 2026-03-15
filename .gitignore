@@ -15,7 +15,11 @@ bin/
 # Go service binaries (compiled in-place)
 services/compliance/compliance
 services/gateway/gateway
+services/payments/payments-linux
+services/payments/server
 tools/loadgen/loadgen
+tools/stresstest/stresstest-linux
+tools/stresstest/stresstest
 
 # Infrastructure
 .terraform/

@@ -82,8 +82,8 @@ impl TokenBucket {
                 Ordering::Release,
                 Ordering::Acquire,
             ) {
-                Ok(_) => return true,  // Successfully consumed token
-                Err(_) => continue,     // CAS failed, retry
+                Ok(_) => return true, // Successfully consumed token
+                Err(_) => continue,   // CAS failed, retry
             }
         }
     }
@@ -134,8 +134,8 @@ impl TokenBucket {
                 Ordering::Release,
                 Ordering::Acquire,
             ) {
-                Ok(_) => break,      // Successfully refilled
-                Err(_) => continue,  // CAS failed, retry
+                Ok(_) => break,     // Successfully refilled
+                Err(_) => continue, // CAS failed, retry
             }
         }
     }
@@ -191,6 +191,10 @@ mod tests {
                 allowed += 1;
             }
         }
-        assert!(allowed >= 45 && allowed <= 55, "expected ~50, got {}", allowed);
+        assert!(
+            (45..=55).contains(&allowed),
+            "expected ~50, got {}",
+            allowed
+        );
     }
 }
