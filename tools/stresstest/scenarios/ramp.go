@@ -8,8 +8,8 @@ import (
 	"github.com/blazil/stresstest/metrics"
 )
 
-// Ramp increases concurrency from 100 → 1000 goroutines in steps of 100
-// every 5 s, measuring throughput at each step. Success criterion: TPS
+// Ramp increases concurrency from 10 → 200 goroutines in steps of 10
+// every 10 s, measuring throughput at each step. Success criterion: TPS
 // increases monotonically with concurrency (linear scaling).
 func Ramp(cfg Config) Result {
 	pool, err := dialPool(cfg.Target)
