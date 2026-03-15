@@ -6,7 +6,6 @@ package scenarios
 import (
 	"context"
 	"fmt"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -165,164 +164,73 @@ func encodePaymentRequest(idempotencyKey, debit, credit string, amount int64, cu
 	return b
 }
 
-const paymentsMethodStream = "/payments.v1.PaymentsService/ProcessPaymentStream"
+const paymentsMethod = "/payments.v1.PaymentsService/ProcessPayment"
 
-// Fixed window size for FIX 2: "Few focused workers beat a crowd stepping on each other"
-// 8 goroutines × 256 window = 2,048 concurrent requests
-// Math: 67,000 TPS × 0.030s avg latency = ~2,010 concurrent needed
-const fixedWindowSize = 256
+// worker sends payment requests in a tight loop until ctx is cancelled.
+// It uses workerID and a per-worker counter to generate unique idempotency
+// keys so every request exercises the full processing path (no cache hits).
+// WindowSize controls how many in-flight requests each worker maintains.
+// Higher values = better throughput but higher memory usage.
+// Optimal range: 20-50 for high-throughput scenarios.
+const WindowSize = 30
 
-// Vegas congestion control DISABLED for FIX 2 (fixed window provides stability)
-const (
-	minWindowSize    = 256 // Fixed window (no dynamic adjustment)
-	maxWindowSize    = 256 // Fixed window (no dynamic adjustment)
-	vegasAdjustEvery = 100 // Disabled (window never changes)
-)
-
-// worker uses gRPC bidirectional streaming with Vegas-style congestion control.
-//
-// TCP Vegas Algorithm (adapted for gRPC streaming):
-//   - Measure RTT for each response
-//   - Track min_rtt (baseline when system is healthy)
-//   - If current_rtt > min_rtt: system congested → reduce window
-//   - If current_rtt ≈ min_rtt: system healthy → slowly increase window
-//   - target_window = current_window * (min_rtt / current_rtt)
-//   - Clamp to [5, 50] to prevent thrashing or OOM
-//
-// This keeps throughput at the "sweet spot" (45K-55K TPS) without collapse.
+// worker now uses async pipelining with a sliding window via goroutine pool.
+// Instead of stop-and-wait (send → wait → send), it maintains WindowSize
+// concurrent request handlers, fully utilizing gRPC's duplex streams.
 func worker(ctx context.Context, conn *grpc.ClientConn, col *metrics.Collector, workerID int64) {
-	type inflight struct {
-		start time.Time
+	type request struct {
+		key   string
 		seq   int64
+		start time.Time
 	}
 
-	// Open bidirectional stream (ONE per worker, reused for all requests).
-	stream, err := conn.NewStream(ctx, &grpc.StreamDesc{
-		StreamName:    "ProcessPaymentStream",
-		ServerStreams: true,
-		ClientStreams: true,
-	}, paymentsMethodStream)
-	if err != nil {
-		// Stream creation failed — record error and exit.
-		col.Record(0, err)
-		return
-	}
-
-	// Fixed window (FIX 2): No Vegas adjustment, just fixed 256 per worker
-	var (
-		windowSize     = fixedWindowSize
-		minRTT         = time.Duration(1<<63 - 1) // Tracked but no adjustment
-		responseCount  int64
-		totalRTT       time.Duration
-		mu             sync.Mutex // Protects stats (window never changes)
-	)
-
-	// Buffered channel acts as sliding window for flow control.
-	// Fixed size = 256 per worker for stability under load.
-	inflightCh := make(chan inflight, windowSize)
-	doneCh := make(chan struct{})
+	// Request queue with backpressure (acts as sliding window).
+	reqCh := make(chan request, WindowSize*2)
 	var seq int64
 
-	// Receiver goroutine: drains responses and applies Vegas congestion control.
-	go func() {
-		defer close(doneCh)
-		for {
-			var resp []byte
-			err := stream.RecvMsg(&resp)
-			if err != nil {
-				// Stream closed or error — exit receiver.
-				return
+	// Spawn WindowSize concurrent request handlers.
+	for i := 0; i < WindowSize; i++ {
+		go func() {
+			for req := range reqCh {
+				payload := encodePaymentRequest(req.key,
+					"ext-debit-acct-stress",
+					"ext-credit-acct-stress",
+					100,   // $1.00
+					"USD",
+					1,     // USD ledger
+				)
+				var resp []byte
+				err := conn.Invoke(ctx, paymentsMethod, payload, &resp)
+				ns := time.Since(req.start).Nanoseconds()
+				col.Record(ns, err)
 			}
+		}()
+	}
 
-			// Pop oldest in-flight request (FIFO order maintained by gRPC).
-			select {
-			case inf := <-inflightCh:
-				rtt := time.Since(inf.start)
-				ns := rtt.Nanoseconds()
-				col.Record(ns, nil)
-
-				// Vegas congestion control: adjust window based on RTT
-				mu.Lock()
-				responseCount++
-				totalRTT += rtt
-
-				// Track minimum RTT (baseline)
-				if rtt < minRTT && rtt > 0 {
-					minRTT = rtt
-				}
-
-				// Vegas DISABLED (FIX 2): Window fixed at 256, never adjusted.
-				// Just track stats for monitoring (no action taken).
-				if responseCount%vegasAdjustEvery == 0 && minRTT > 0 {
-					// Reset stats (keep memory bounded)
-					totalRTT = 0
-					responseCount = 0
-				}
-				mu.Unlock()
-
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-
-	// Sender loop: fires requests continuously with dynamic window sizing.
+	// Producer loop: generate requests and queue them.
+	// If all WindowSize handlers are busy, this blocks (flow control).
 	for {
 		select {
 		case <-ctx.Done():
-			stream.CloseSend()
-			<-doneCh // Wait for receiver to drain
+			close(reqCh)
 			return
 		default:
 		}
 
 		n := atomic.AddInt64(&seq, 1)
 		key := fmt.Sprintf("st-%d-%d-%d", workerID, n, time.Now().UnixNano())
-		payload := encodePaymentRequest(key,
-			"ext-debit-acct-stress",
-			"ext-credit-acct-stress",
-			100,   // $1.00
-			"USD",
-			1,     // USD ledger
-		)
 
-		start := time.Now()
-
-		// Send request on stream (non-blocking unless window is full).
-		if err := stream.SendMsg(payload); err != nil {
-			// Stream error — record and exit.
-			col.Record(time.Since(start).Nanoseconds(), err)
-			stream.CloseSend()
-			<-doneCh
-			return
+		req := request{
+			key:   key,
+			seq:   n,
+			start: time.Now(),
 		}
 
-		// Vegas flow control: respect dynamic window size
-		// Block if we've hit the current window limit
-		mu.Lock()
-		currentWindow := windowSize
-		mu.Unlock()
-
-		// Enforce window limit by checking in-flight count
-		for len(inflightCh) >= currentWindow {
-			// Window full — wait briefly for responses to drain
-			select {
-			case <-ctx.Done():
-				stream.CloseSend()
-				<-doneCh
-				return
-			case <-time.After(100 * time.Microsecond):
-				// Check again
-			}
-		}
-
-		// Push to in-flight queue (should not block due to above check)
 		select {
-		case inflightCh <- inflight{start: start, seq: n}:
-			// Successfully queued.
+		case reqCh <- req:
+			// Request queued successfully.
 		case <-ctx.Done():
-			stream.CloseSend()
-			<-doneCh
+			close(reqCh)
 			return
 		}
 	}
