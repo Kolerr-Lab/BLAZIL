@@ -1,10 +1,9 @@
 name: Benchmarks
 
+# Temporarily disabled to save GitHub Actions minutes.
+# Run manually via Actions tab: workflow_dispatch
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  workflow_dispatch:  # Manual trigger only
 
 jobs:
   benchmark:
