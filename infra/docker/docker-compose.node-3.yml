@@ -46,7 +46,6 @@ services:
       - blazil-node-3
     security_opt:
       - seccomp:unconfined
-    cpuset: "1"      # CPU core 1: TigerBeetle VSR
     cpu_shares: 512       # Medium priority
     mem_limit: 2g
     healthcheck:
