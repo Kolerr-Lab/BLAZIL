@@ -46,6 +46,9 @@ services:
       - blazil-node-3
     security_opt:
       - seccomp:unconfined
+    cpuset_cpus: "1"      # CPU core 1: TigerBeetle VSR
+    cpu_shares: 512       # Medium priority
+    mem_limit: 2g
     healthcheck:
       # 0BBA = 3002 in hex. Reads kernel TCP table — reliable in busybox.
       test: ["CMD-SHELL", "grep -q ':0BBA ' /proc/net/tcp"]
@@ -85,6 +88,15 @@ services:
       - blazil-node-3
     security_opt:
       - seccomp:unconfined
+    privileged: true       # Required for real-time scheduling
+    cpuset_cpus: "0"       # CPU core 0: hot path (pinned)
+    cpu_shares: 1024       # Highest priority
+    mem_limit: 4g
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+      rtprio: 99           # Real-time priority
     restart: on-failure
     depends_on:
       tigerbeetle-2:
@@ -110,6 +122,9 @@ services:
       - "9111:9091"
     networks:
       - blazil-node-3
+    cpuset_cpus: "2"       # CPU core 2: services
+    cpu_shares: 256
+    mem_limit: 1g
     depends_on:
       - blazil-engine
 
@@ -128,6 +143,9 @@ services:
       - "9112:9092"
     networks:
       - blazil-node-3
+    cpuset_cpus: "2"       # CPU core 2: services
+    cpu_shares: 256
+    mem_limit: 1g
     depends_on:
       - blazil-engine
 
@@ -146,6 +164,9 @@ services:
       - "9113:9093"
     networks:
       - blazil-node-3
+    cpuset_cpus: "2"       # CPU core 2: services
+    cpu_shares: 256
+    mem_limit: 1g
     depends_on:
       - blazil-engine
 
@@ -164,5 +185,8 @@ services:
       - "9114:9094"
     networks:
       - blazil-node-3
+    cpuset_cpus: "2"       # CPU core 2: services
+    cpu_shares: 256
+    mem_limit: 1g
     depends_on:
       - blazil-engine
