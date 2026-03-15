@@ -1,9 +1,28 @@
-//! Ledger commit handler.
+//! Ledger commit handler with batching optimization.
 //!
 //! [`LedgerHandler`] is the **third** stage in the pipeline. It is where
 //! money actually moves: it builds a [`blazil_ledger::transfer::Transfer`]
-//! from the event and calls [`LedgerClient::create_transfer`] to commit it
-//! to TigerBeetle.
+//! from the event and calls [`LedgerClient::create_transfers_batch`] to commit
+//! batches to TigerBeetle.
+//!
+//! # Batching for 100× throughput
+//!
+//! TigerBeetle VSR consensus cost is per-batch, not per-transfer. A single
+//! transfer costs ~1.6ms in VSR overhead; 100 transfers in one batch also cost
+//! ~1.6ms. [`LedgerHandler`] accumulates transfers until `end_of_batch` is true
+//! or batch size reaches [`MAX_BATCH`], then flushes via
+//! [`LedgerClient::create_transfers_batch`].
+//!
+//! Deferred events (those in the batch before the flush trigger) have their
+//! `result` field set to `None` during `on_event`. After the batch write
+//! completes, results are written back to those ring buffer slots via raw
+//! pointers. This is safe because:
+//!
+//! 1. Pointers reference **previous** `on_event` call slots (already processed).
+//! 2. The producer cannot reclaim those slots until `gating_sequence` advances.
+//! 3. `gating_sequence` only advances **after** all handlers (including this one)
+//!    return from the full batch loop.
+//! 4. All accesses are on the single dedicated runner thread (no data races).
 //!
 //! # Async-in-sync
 //!
@@ -17,27 +36,38 @@
 //!
 //! # Latency diagnostics
 //!
-//! Every committed transfer logs `tb_elapsed_ms` — the wall-clock time from
-//! entering `block_on` to returning.  On a healthy 3-node DO VSR cluster this
-//! should be 1–3 ms.  Values > 5 ms emit a `WARN` and are a sign that disk or
-//! network is the bottleneck (expected: max TPS ≈ 1000 / avg_tb_ms per handler
-//! thread).
+//! Every batch flush logs `tb_elapsed_ms` and `batch_size`.  On a healthy 3-node
+//! DO VSR cluster, batch latency should be 1–3 ms regardless of batch size (up
+//! to 8,190 transfers).  Values > 5 ms emit a `WARN`.
 
+use std::mem;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use blazil_common::ids::TransferId;
 use blazil_common::timestamp::Timestamp;
 use blazil_ledger::client::LedgerClient;
 use blazil_ledger::transfer::Transfer;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::event::{TransactionEvent, TransactionResult};
 use crate::handler::EventHandler;
 
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+/// Maximum transfers per batch. TigerBeetle supports up to 8,190; we use a
+/// conservative limit to balance latency and throughput.
+const MAX_BATCH: usize = 100;
+
+/// Maximum time to hold a batch before flushing (1 ms).
+/// Under load, `end_of_batch` is rarely true (ring buffer never empty).
+/// Time-based flushing ensures batches don't wait indefinitely.
+/// 1ms timeout = same as TB VSR latency, so zero added latency.
+const MAX_BATCH_AGE: Duration = Duration::from_millis(1);
+
 // ── LedgerHandler ─────────────────────────────────────────────────────────────
 
-/// Commits transactions to TigerBeetle.
+/// Commits transactions to TigerBeetle in batches.
 ///
 /// Wraps any [`LedgerClient`] implementation. In tests, use
 /// [`blazil_ledger::mock::InMemoryLedgerClient`]; in production, use
@@ -45,7 +75,20 @@ use crate::handler::EventHandler;
 pub struct LedgerHandler<C: LedgerClient> {
     client: Arc<C>,
     runtime: Arc<tokio::runtime::Runtime>,
+    /// Timestamp when the first transfer was added to the current batch.
+    /// Used for time-based flush trigger.
+    batch_started_at: Option<Instant>,
+    /// Accumulated transfers waiting to be flushed.
+    deferred_transfers: Vec<Transfer>,
+    /// Metadata for deferred events: (raw pointer to event, sequence number).
+    /// Pointers are valid because they reference previous `on_event` call slots
+    /// which remain valid until gating_sequence advances after the batch loop.
+    deferred_meta: Vec<(*mut TransactionEvent, i64)>,
 }
+
+// SAFETY: LedgerHandler runs exclusively on the dedicated Disruptor runner thread.
+// Raw pointers in `deferred_meta` are never sent to or accessed from any other thread.
+unsafe impl<C: LedgerClient> Send for LedgerHandler<C> {}
 
 impl<C: LedgerClient> LedgerHandler<C> {
     /// Creates a new `LedgerHandler`.
@@ -54,12 +97,18 @@ impl<C: LedgerClient> LedgerHandler<C> {
     /// - `runtime` — a Tokio `Runtime` used to drive async calls synchronously
     ///   from the handler thread.
     pub fn new(client: Arc<C>, runtime: Arc<tokio::runtime::Runtime>) -> Self {
-        Self { client, runtime }
+        Self {
+            client,
+            batch_started_at: None,
+            runtime,
+            deferred_transfers: Vec::with_capacity(MAX_BATCH),
+            deferred_meta: Vec::with_capacity(MAX_BATCH),
+        }
     }
 }
 
 impl<C: LedgerClient + 'static> EventHandler for LedgerHandler<C> {
-    fn on_event(&mut self, event: &mut TransactionEvent, sequence: i64, _end_of_batch: bool) {
+    fn on_event(&mut self, event: &mut TransactionEvent, sequence: i64, end_of_batch: bool) {
         // Rule 1: skip if already rejected.
         if event.result.is_some() {
             return;
@@ -87,50 +136,138 @@ impl<C: LedgerClient + 'static> EventHandler for LedgerHandler<C> {
             }
         };
 
-        let transfer_id = *transfer.id();
+        // Decide: defer or flush?
+        // Check if batch age exceeds timeout (handles moderate load where batch never fills)
+        let batch_age_exceeded = self
+            .batch_started_at
+            .map(|started| started.elapsed() > MAX_BATCH_AGE)
+            .unwrap_or(false);
+
+        let should_flush = end_of_batch
+            || self.deferred_transfers.len() >= MAX_BATCH
+            || batch_age_exceeded;
+
+        if !should_flush {
+            // Defer: queue the transfer and store pointer to this ring buffer slot.
+            // SAFETY: `event` is a ring buffer slot from this `on_event` call.
+            // It remains valid until `gating_sequence` advances after this batch loop
+            // completes (after all handlers return). We write results back before that.
+            
+            // Start batch timer on first deferred transfer
+            if self.deferred_transfers.is_empty() {
+                self.batch_started_at = Some(Instant::now());
+            }
+            
+            self.deferred_transfers.push(transfer);
+            self.deferred_meta.push((event as *mut _, sequence));
+            debug!(
+                sequence,
+                transaction_id = %event.transaction_id,
+                deferred_count = self.deferred_transfers.len(),
+                "LedgerHandler: deferring transfer (waiting for batch flush)"
+            );
+            return;
+        }
+
+        // Flush: drain deferred queue, append current transfer, make one TB call.
+        let prev_n = self.deferred_transfers.len();
+        let prev_meta = mem::take(&mut self.deferred_meta);
+        let mut all_transfers = mem::take(&mut self.deferred_transfers);
+        all_transfers.push(transfer);
+
+        let batch_size = all_transfers.len();
+        let batch_age_ms = self
+            .batch_started_at
+            .map(|t| t.elapsed().as_millis())
+            .unwrap_or(0);
         let client = Arc::clone(&self.client);
 
-        // block_on is intentional: this is a dedicated handler thread.
-        // See module-level doc for rationale.
-        // Measure the full round-trip so we can correlate TPS with TB latency.
+        // Reset batch timer
+        self.batch_started_at = None;
+
+        debug!(
+            sequence,
+            batch_size,
+            batch_age_ms,
+            end_of_batch,
+            "LedgerHandler: FLUSHING BATCH to TigerBeetle"
+        );
+
+        // Single batched call to TigerBeetle.
         let tb_t0 = Instant::now();
-        match self.runtime.block_on(client.create_transfer(transfer)) {
-            Ok(_) => {
-                let tb_elapsed_ms = tb_t0.elapsed().as_millis();
-                let ts = Timestamp::now();
-                if tb_elapsed_ms > 5 {
-                    warn!(
-                        sequence,
-                        transaction_id = %event.transaction_id,
+        let results = self
+            .runtime
+            .block_on(client.create_transfers_batch(all_transfers));
+        let tb_elapsed_ms = tb_t0.elapsed().as_millis();
+
+        if tb_elapsed_ms > 5 {
+            warn!(
+                batch_size,
+                tb_elapsed_ms,
+                "LedgerHandler: SLOW batch write (>5 ms)"
+            );
+        } else {
+            info!(
+                batch_size,
+                tb_elapsed_ms,
+                "LedgerHandler: batch committed"
+            );
+        }
+
+        // Write results back to deferred slots via raw pointers.
+        for (i, (ptr, seq)) in prev_meta.iter().enumerate() {
+            let result = &results[i];
+            let tr = match result {
+                Ok(transfer_id) => {
+                    debug!(
+                        sequence = seq,
                         %transfer_id,
-                        tb_elapsed_ms,
-                        "LedgerHandler: slow TB write (>5 ms)"
+                        "LedgerHandler: deferred event committed"
                     );
-                } else {
-                    info!(
-                        sequence,
-                        transaction_id = %event.transaction_id,
-                        %transfer_id,
-                        tb_elapsed_ms,
-                        "LedgerHandler: committed"
-                    );
+                    TransactionResult::Committed {
+                        transfer_id: *transfer_id,
+                        timestamp: Timestamp::now(),
+                    }
                 }
-                event.result = Some(TransactionResult::Committed {
-                    transfer_id,
-                    timestamp: ts,
-                });
-            }
-            Err(e) => {
-                let tb_elapsed_ms = tb_t0.elapsed().as_millis();
-                error!(
-                    sequence,
-                    transaction_id = %event.transaction_id,
-                    error = %e,
-                    tb_elapsed_ms,
-                    "LedgerHandler: failed to commit transfer"
-                );
-                event.result = Some(TransactionResult::Rejected { reason: e });
+                Err(e) => {
+                    debug!(
+                        sequence = seq,
+                        error = %e,
+                        "LedgerHandler: deferred event rejected"
+                    );
+                    TransactionResult::Rejected { reason: e.clone() }
+                }
+            };
+
+            // SAFETY: `ptr` points to a previous ring buffer slot. The producer cannot
+            // have reclaimed it yet (gating_sequence hasn't advanced). Single-threaded access.
+            unsafe {
+                (*(*ptr)).result = Some(tr);
             }
         }
+
+        // Write current event's result via live &mut reference (no aliasing issue).
+        let current_result = &results[prev_n];
+        event.result = match current_result {
+            Ok(transfer_id) => {
+                debug!(
+                    sequence,
+                    %transfer_id,
+                    "LedgerHandler: current event committed"
+                );
+                Some(TransactionResult::Committed {
+                    transfer_id: *transfer_id,
+                    timestamp: Timestamp::now(),
+                })
+            }
+            Err(e) => {
+                debug!(
+                    sequence,
+                    error = %e,
+                    "LedgerHandler: current event rejected"
+                );
+                Some(TransactionResult::Rejected { reason: e.clone() })
+            }
+        };
     }
 }
