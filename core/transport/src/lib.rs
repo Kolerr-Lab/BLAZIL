@@ -39,6 +39,7 @@ pub mod connection;
 pub mod metrics_server;
 pub mod mock;
 pub mod protocol;
+pub mod rate_limit;
 pub mod server;
 pub mod tcp;
 

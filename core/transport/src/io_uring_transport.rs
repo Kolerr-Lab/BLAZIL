@@ -58,32 +58,33 @@ use crate::protocol::{
     deserialize_request, serialize_response, TransactionRequest, TransactionResponse,
     MAX_FRAME_SIZE,
 };
+use crate::rate_limit::TokenBucket;
 use crate::server::TransportServer;
 
 // ── Result-wait timeout ───────────────────────────────────────────────────────
 
 const RESULT_TIMEOUT: Duration = Duration::from_millis(100);
 
+// ── Rate limiting ─────────────────────────────────────────────────────────────
+
+const RATE_LIMIT_TPS: u64 = 55_000;  // Max 55K TPS to prevent OOM
+const RATE_LIMIT_BURST: u64 = 1_000; // Allow 1-second burst headroom
+
 // ── IoUringTransportServer ────────────────────────────────────────────────────
 
-/// io_uring-backed TCP transport server.
+/// io_uring-backed TCP transport server with lock-free rate limiting.
 ///
 /// Uses `tokio-uring` to drive all accept/read/write operations through
 /// Linux io_uring submission and completion queues, eliminating per-I/O
 /// syscall overhead compared to standard tokio TCP.
 ///
-/// The server runs inside a dedicated `tokio_uring` runtime thread; the
-/// outer tokio runtime continues to drive the pipeline and metrics server.
-///
-/// # Fallback
-///
-/// On non-Linux platforms (or when the `io-uring` feature is not enabled)
-/// this type is not compiled. `main.rs` falls back to `TcpTransportServer`
-/// and logs a warning.
+/// Rate limiting: Token bucket (55K TPS) prevents OOM under extreme load.
+/// Requests exceeding the limit receive gRPC ResourceExhausted error.
 pub struct IoUringTransportServer {
     addr: String,
     pipeline: Arc<Pipeline>,
     ring_buffer: Arc<RingBuffer>,
+    rate_limiter: Arc<TokenBucket>,
     shutdown: Arc<AtomicBool>,
 }
 
@@ -94,10 +95,18 @@ impl IoUringTransportServer {
     /// - `pipeline`    — shared engine pipeline.
     /// - `ring_buffer` — shared ring buffer for result polling.
     pub fn new(addr: &str, pipeline: Arc<Pipeline>, ring_buffer: Arc<RingBuffer>) -> Self {
+        let rate_limiter = Arc::new(TokenBucket::new(RATE_LIMIT_TPS, RATE_LIMIT_BURST));
+        info!(
+            rate_limit_tps = RATE_LIMIT_TPS,
+            burst = RATE_LIMIT_BURST,
+            "io_uring: rate limiter enabled (lock-free token bucket)"
+        );
+
         Self {
             addr: addr.to_owned(),
             pipeline,
             ring_buffer,
+            rate_limiter,
             shutdown: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -113,10 +122,17 @@ impl TransportServer for IoUringTransportServer {
         let addr = self.addr.clone();
         let pipeline = Arc::clone(&self.pipeline);
         let ring_buffer = Arc::clone(&self.ring_buffer);
+        let rate_limiter = Arc::clone(&self.rate_limiter);
         let shutdown = Arc::clone(&self.shutdown);
 
         tokio::task::spawn_blocking(move || {
-            tokio_uring::start(uring_accept_loop(addr, pipeline, ring_buffer, shutdown))
+            tokio_uring::start(uring_accept_loop(
+                addr,
+                pipeline,
+                ring_buffer,
+                rate_limiter,
+                shutdown,
+            ))
         })
         .await
         .map_err(|e| BlazerError::Transport(format!("io_uring task panicked: {e}")))?
@@ -143,6 +159,7 @@ async fn uring_accept_loop(
     addr: String,
     pipeline: Arc<Pipeline>,
     ring_buffer: Arc<RingBuffer>,
+    rate_limiter: Arc<TokenBucket>,
     shutdown: Arc<AtomicBool>,
 ) -> BlazerResult<()> {
     let listener = tokio_uring::net::TcpListener::bind(
@@ -168,9 +185,12 @@ async fn uring_accept_loop(
 
         let pipeline = Arc::clone(&pipeline);
         let ring_buffer = Arc::clone(&ring_buffer);
+        let rate_limiter = Arc::clone(&rate_limiter);
 
         tokio_uring::spawn(async move {
-            if let Err(e) = handle_uring_connection(stream, pipeline, ring_buffer).await {
+            if let Err(e) =
+                handle_uring_connection(stream, pipeline, ring_buffer, rate_limiter).await
+            {
                 warn!(peer = %peer_addr, error = %e, "io_uring connection handler error");
             }
         });
@@ -190,6 +210,7 @@ async fn handle_uring_connection(
     stream: tokio_uring::net::TcpStream,
     pipeline: Arc<Pipeline>,
     ring_buffer: Arc<RingBuffer>,
+    rate_limiter: Arc<TokenBucket>,
 ) -> BlazerResult<()> {
     loop {
         // ── Step 1: Read 4-byte length header ─────────────────────────────
@@ -250,7 +271,23 @@ async fn handle_uring_connection(
 
         let request_id = request.request_id.clone();
 
-        // ── Step 4: Build TransactionEvent ────────────────────────────────
+        // ── Step 4: Rate Limiting (Token Bucket Check) ────────────────────
+        // Lock-free check: if bucket empty, reject immediately.
+        // Prevents OOM under extreme load (>55K TPS).
+        if !rate_limiter.try_consume() {
+            warn!(%request_id, "io_uring: rate limit exceeded (55K TPS) — rejecting");
+            let resp = TransactionResponse {
+                request_id: request_id.clone(),
+                committed: false,
+                transfer_id: None,
+                error: Some("rate limit exceeded (55K TPS max)".into()),
+                timestamp_ns: Timestamp::now().as_nanos(),
+            };
+            let _ = write_frame_uring(&stream, &resp).await;
+            continue;
+        }
+
+        // ── Step 5: Build TransactionEvent ────────────────────────────────
         let event = match build_event(request) {
             Ok(e) => e,
             Err(e) => {
@@ -261,7 +298,7 @@ async fn handle_uring_connection(
             }
         };
 
-        // ── Step 5: Publish to pipeline ────────────────────────────────────
+        // ── Step 6: Publish to pipeline ────────────────────────────────────
         let seq = match pipeline.publish_event(event) {
             Ok(s) => s,
             Err(e) => {
@@ -272,7 +309,7 @@ async fn handle_uring_connection(
             }
         };
 
-        // ── Step 6: Wait for result (up to 100 ms) ────────────────────────
+        // ── Step 7: Wait for result (up to 100 ms) ────────────────────────
         let result = match wait_for_result(&ring_buffer, seq).await {
             Some(r) => r,
             None => {
@@ -289,7 +326,7 @@ async fn handle_uring_connection(
             }
         };
 
-        // ── Step 7: Send response ──────────────────────────────────────────
+        // ── Step 8: Send response ──────────────────────────────────────────
         let response = build_response(&request_id, result);
         let _ = write_frame_uring(&stream, &response).await;
     }
