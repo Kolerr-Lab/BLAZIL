@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/sync/semaphore"
+
 	blazilauth "github.com/blazil/auth"
 	"github.com/blazil/observability"
 	"github.com/blazil/sharding"
@@ -43,6 +45,12 @@ var (
 	streamResponsesDropped = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "blazil_payments_stream_responses_dropped_total",
 		Help: "Total number of streaming responses dropped due to buffer overflow (backpressure)",
+	})
+
+	// concurrencyLimitReached tracks requests rejected due to semaphore limit.
+	concurrencyLimitReached = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "blazil_payments_concurrency_limit_reached_total",
+		Help: "Total number of requests rejected due to concurrent processing limit",
 	})
 )
 
@@ -157,9 +165,18 @@ func main() {
 			Timeout:               1 * time.Second,
 		}),
 	)
+
+	// BACKPRESSURE PROTECTION: Limit max concurrent requests to prevent OOM at high load.
+	// 1 goroutine × 256 window = 256 in-flight + 44 buffer = 300 max concurrent.
+	// System crashes at 3+ goroutines (768+ concurrent) — reject excess immediately.
+	const maxConcurrent = 300
+	concurrencySem := semaphore.NewWeighted(maxConcurrent)
+	logger.Info("backpressure protection enabled", zap.Int64("max_concurrent", maxConcurrent))
+
 	paymentsv1.RegisterPaymentsServiceServer(grpcServer, &paymentsServer{
-		processor: processor,
-		logger:    logger,
+		processor:      processor,
+		logger:         logger,
+		concurrencySem: concurrencySem,
 	})
 
 	// ── Graceful shutdown ─────────────────────────────────────────────────────
@@ -186,8 +203,9 @@ func main() {
 // paymentsServer implements paymentsv1.PaymentsServiceServer.
 type paymentsServer struct {
 	paymentsv1.UnimplementedPaymentsServiceServer
-	processor *lifecycle.PaymentProcessor
-	logger    *zap.Logger
+	processor      *lifecycle.PaymentProcessor
+	logger         *zap.Logger
+	concurrencySem *semaphore.Weighted // Limits max concurrent requests (prevents OOM)
 }
 
 // ── Ring Buffer (LIFO drop strategy) ──────────────────────────────────────────
@@ -348,6 +366,20 @@ func (s *paymentsServer) ProcessPaymentStream(
 			return status.Errorf(codes.Internal, "sender error: %v", err)
 		default:
 		}
+
+		// BACKPRESSURE: Try acquire semaphore (non-blocking).
+		// If at capacity, reject immediately with ResourceExhausted.
+		if !s.concurrencySem.TryAcquire(1) {
+			concurrencyLimitReached.Inc()
+			resp := &paymentsv1.ProcessPaymentResponse{
+				PaymentId:     "",
+				Status:        "failed",
+				FailureReason: "server overloaded: max concurrent requests exceeded",
+			}
+			respBuf.push(resp)
+			continue
+		}
+		defer s.concurrencySem.Release(1)
 
 		// Process payment (same logic as unary handler).
 		currency, err := domain.CurrencyByCode(req.CurrencyCode)
