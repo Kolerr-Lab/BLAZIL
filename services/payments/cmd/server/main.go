@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/blazil/observability"
 	"github.com/blazil/sharding"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -30,6 +32,17 @@ import (
 	"github.com/blazil/services/payments/internal/engine"
 	"github.com/blazil/services/payments/internal/lifecycle"
 	"github.com/blazil/services/payments/internal/routing"
+)
+
+// ── Metrics ───────────────────────────────────────────────────────────────────
+
+var (
+	// streamResponsesDropped tracks responses dropped due to backpressure.
+	// When client drains slower than server produces, oldest responses are dropped (LIFO).
+	streamResponsesDropped = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "blazil_payments_stream_responses_dropped_total",
+		Help: "Total number of streaming responses dropped due to buffer overflow (backpressure)",
+	})
 )
 
 func main() {
@@ -168,6 +181,65 @@ type paymentsServer struct {
 	logger    *zap.Logger
 }
 
+// ── Ring Buffer (LIFO drop strategy) ──────────────────────────────────────────
+
+// responseRingBuffer implements a fixed-capacity ring buffer with drop-oldest semantics.
+// When full, new entries overwrite the oldest (LIFO policy). This prevents OOM under
+// backpressure when clients drain slower than the server produces.
+type responseRingBuffer struct {
+	buf     []*paymentsv1.ProcessPaymentResponse
+	head    int       // Next write position
+	tail    int       // Next read position
+	size    int       // Current number of entries
+	cap     int       // Maximum capacity
+	dropped int64     // Atomic counter for dropped messages
+}
+
+func newResponseRingBuffer(capacity int) *responseRingBuffer {
+	return &responseRingBuffer{
+		buf: make([]*paymentsv1.ProcessPaymentResponse, capacity),
+		cap: capacity,
+	}
+}
+
+// push adds a response to the buffer. If full, drops the oldest entry (LIFO).
+// Never blocks — always accepts new entries.
+func (rb *responseRingBuffer) push(resp *paymentsv1.ProcessPaymentResponse) {
+	if rb.size == rb.cap {
+		// Buffer full: drop oldest (advance tail)
+		rb.tail = (rb.tail + 1) % rb.cap
+		rb.size--
+		atomic.AddInt64(&rb.dropped, 1)
+		streamResponsesDropped.Inc()
+	}
+
+	rb.buf[rb.head] = resp
+	rb.head = (rb.head + 1) % rb.cap
+	rb.size++
+}
+
+// pop removes and returns the oldest entry. Returns nil if empty.
+func (rb *responseRingBuffer) pop() *paymentsv1.ProcessPaymentResponse {
+	if rb.size == 0 {
+		return nil
+	}
+
+	resp := rb.buf[rb.tail]
+	rb.tail = (rb.tail + 1) % rb.cap
+	rb.size--
+	return resp
+}
+
+// len returns the current number of buffered responses.
+func (rb *responseRingBuffer) len() int {
+	return rb.size
+}
+
+// droppedCount returns the total number of dropped responses.
+func (rb *responseRingBuffer) droppedCount() int64 {
+	return atomic.LoadInt64(&rb.dropped)
+}
+
 // ProcessPayment implements PaymentsServiceServer.
 func (s *paymentsServer) ProcessPayment(
 	ctx context.Context,
@@ -201,35 +273,82 @@ func (s *paymentsServer) ProcessPayment(
 	}, nil
 }
 
-// ProcessPaymentStream implements bidirectional streaming for high-throughput
-// payment processing. Eliminates per-request RTT overhead, enabling 50,000+ TPS.
-// Order is preserved: response N corresponds to request N.
+// ProcessPaymentStream implements bidirectional streaming with backpressure protection.
+//
+// Uses a fixed-capacity ring buffer (1000 entries) with drop-oldest policy. When
+// client drains slower than server produces, oldest responses are dropped to prevent
+// OOM. Dropped count is tracked in Prometheus metrics.
+//
+// Architecture:
+//   - Main goroutine: Recv() → Process() → Push to buffer (never blocks)
+//   - Sender goroutine: Pop from buffer → Send() (blocks on slow client)
+//   - If buffer full: Drop oldest, increment counter, continue
+//
+// This is the LMAX Disruptor strategy: producer never blocks, slow consumers
+// lose data rather than crashing the system.
 func (s *paymentsServer) ProcessPaymentStream(
 	stream paymentsv1.PaymentsService_ProcessPaymentStreamServer,
 ) error {
+	const bufferCapacity = 1000
+
+	respBuf := newResponseRingBuffer(bufferCapacity)
+	done := make(chan struct{})
+	senderErr := make(chan error, 1)
+
+	// Sender goroutine: drains buffer and sends to stream.
+	// Blocks on stream.Send() if client is slow — this is intentional.
+	// Buffer absorbs bursts; drops prevent OOM.
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stream.Context().Done():
+				return
+			default:
+			}
+
+			resp := respBuf.pop()
+			if resp == nil {
+				// Buffer empty, wait a bit before polling again
+				time.Sleep(100 * time.Microsecond)
+				continue
+			}
+
+			if err := stream.Send(resp); err != nil {
+				senderErr <- err
+				return
+			}
+		}
+	}()
+
+	// Main loop: receive requests, process, push to buffer (never blocks).
 	for {
 		req, err := stream.Recv()
 		if err == io.EOF {
-			// Client closed the stream, we're done.
-			return nil
+			// Client closed stream — drain buffer and exit.
+			break
 		}
 		if err != nil {
 			s.logger.Error("stream receive error", zap.Error(err))
 			return status.Errorf(codes.Internal, "stream error: %v", err)
 		}
 
+		// Check if sender goroutine failed.
+		select {
+		case err := <-senderErr:
+			return status.Errorf(codes.Internal, "sender error: %v", err)
+		default:
+		}
+
 		// Process payment (same logic as unary handler).
 		currency, err := domain.CurrencyByCode(req.CurrencyCode)
 		if err != nil {
-			// Send error response on stream instead of returning.
 			resp := &paymentsv1.ProcessPaymentResponse{
 				PaymentId:     "",
 				Status:        "failed",
 				FailureReason: fmt.Sprintf("unsupported currency: %s", req.CurrencyCode),
 			}
-			if sendErr := stream.Send(resp); sendErr != nil {
-				return status.Errorf(codes.Internal, "failed to send error response: %v", sendErr)
-			}
+			respBuf.push(resp)
 			continue
 		}
 
@@ -250,23 +369,48 @@ func (s *paymentsServer) ProcessPaymentStream(
 				Status:        "failed",
 				FailureReason: fmt.Sprintf("internal error: %v", err),
 			}
-			if sendErr := stream.Send(resp); sendErr != nil {
-				return status.Errorf(codes.Internal, "failed to send error response: %v", sendErr)
-			}
+			respBuf.push(resp)
 			continue
 		}
 
-		// Send success response on stream.
+		// Push success response to buffer (never blocks).
 		resp := &paymentsv1.ProcessPaymentResponse{
 			PaymentId:     string(payment.ID),
 			Status:        payment.Status.String(),
 			Rails:         payment.Rails.String(),
 			FailureReason: payment.FailureReason,
 		}
-		if err := stream.Send(resp); err != nil {
-			return status.Errorf(codes.Internal, "failed to send response: %v", err)
+		respBuf.push(resp)
+	}
+
+	// Client closed stream — wait for sender to drain remaining responses.
+	// Give it 5 seconds max, then force shutdown.
+	drainTimeout := time.After(5 * time.Second)
+	for respBuf.len() > 0 {
+		select {
+		case <-drainTimeout:
+			s.logger.Warn("stream drain timeout", zap.Int("remaining", respBuf.len()))
+			goto shutdown
+		case <-done:
+			// Sender exited (probably error)
+			goto shutdown
+		default:
+			time.Sleep(10 * time.Millisecond)
 		}
 	}
+
+shutdown:
+	// Log backpressure statistics.
+	dropped := respBuf.droppedCount()
+	if dropped > 0 {
+		s.logger.Warn("stream completed with dropped responses",
+			zap.Int64("dropped", dropped),
+			zap.Int("buffer_capacity", bufferCapacity),
+		)
+	}
+
+	<-done // Wait for sender goroutine to exit
+	return nil
 }
 
 // GetPayment implements PaymentsServiceServer.
