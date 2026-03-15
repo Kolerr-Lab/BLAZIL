@@ -49,7 +49,6 @@ services:
     security_opt:
       - seccomp:unconfined
     cpu_shares: 512       # Medium priority
-    mem_limit: 2g
     healthcheck:
       test: ["CMD-SHELL", "netstat -tln | grep -q ':3000 '"]      interval: 5s
       timeout: 10s
