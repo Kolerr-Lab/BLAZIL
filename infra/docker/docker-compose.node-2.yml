@@ -121,7 +121,7 @@ services:
       - blazil-node-2
     cpuset: "2"       # CPU core 2: services
     cpu_shares: 256
-    mem_limit: 1g
+    mem_limit: 2g       # Increased for streaming: 22K+ TPS needs buffering headroom
     depends_on:
       - blazil-engine
 

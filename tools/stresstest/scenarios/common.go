@@ -168,8 +168,9 @@ const paymentsMethodStream = "/payments.v1.PaymentsService/ProcessPaymentStream"
 
 // WindowSize controls how many in-flight requests each worker maintains on its
 // bidirectional stream. Higher values = better throughput but higher memory.
-// Optimal range: 30-100 for maximum throughput (50,000+ TPS with 100 workers).
-const WindowSize = 50
+// Reduced from 50 to 30 after observing OOM kills at 22K TPS (payments hit 1GB limit).
+// 30 provides backpressure while maintaining high throughput.
+const WindowSize = 30
 
 // worker uses gRPC bidirectional streaming for zero per-request RTT overhead.
 // Each worker opens ONE persistent stream and maintains WindowSize in-flight
