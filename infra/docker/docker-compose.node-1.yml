@@ -48,7 +48,7 @@ services:
       - blazil-node-1
     security_opt:
       - seccomp:unconfined
-    cpuset_cpus: "1"      # CPU core 1: TigerBeetle VSR
+    cpuset: "1"      # CPU core 1: TigerBeetle VSR
     cpu_shares: 512       # Medium priority
     mem_limit: 2g
     healthcheck:
@@ -91,7 +91,7 @@ services:
     security_opt:
       - seccomp:unconfined
     privileged: true       # Required for real-time scheduling
-    cpuset_cpus: "0"       # CPU core 0: hot path (pinned)
+    cpuset: "0"       # CPU core 0: hot path (pinned)
     cpu_shares: 1024       # Highest priority
     mem_limit: 4g
     ulimits:
@@ -124,7 +124,7 @@ services:
       - "9091:9091"
     networks:
       - blazil-node-1
-    cpuset_cpus: "2"       # CPU core 2: services
+    cpuset: "2"       # CPU core 2: services
     cpu_shares: 256
     mem_limit: 1g
     depends_on:
@@ -145,7 +145,7 @@ services:
       - "9092:9092"
     networks:
       - blazil-node-1
-    cpuset_cpus: "2"       # CPU core 2: services
+    cpuset: "2"       # CPU core 2: services
     cpu_shares: 256
     mem_limit: 1g
     depends_on:
@@ -166,7 +166,7 @@ services:
       - "9093:9093"
     networks:
       - blazil-node-1
-    cpuset_cpus: "2"       # CPU core 2: services
+    cpuset: "2"       # CPU core 2: services
     cpu_shares: 256
     mem_limit: 1g
     depends_on:
@@ -187,7 +187,7 @@ services:
       - "9094:9094"
     networks:
       - blazil-node-1
-    cpuset_cpus: "2"       # CPU core 2: services
+    cpuset: "2"       # CPU core 2: services
     cpu_shares: 256
     mem_limit: 1g
     depends_on:
@@ -204,7 +204,7 @@ services:
       - "9090:9090"
     networks:
       - blazil-node-1
-    cpuset_cpus: "3"       # CPU core 3: observability
+    cpuset: "3"       # CPU core 3: observability
     cpu_shares: 128
     mem_limit: 512m
     depends_on:
@@ -224,7 +224,7 @@ services:
       - "3001:3000"
     networks:
       - blazil-node-1
-    cpuset_cpus: "3"       # CPU core 3: observability
+    cpuset: "3"       # CPU core 3: observability
     cpu_shares: 128
     mem_limit: 512m
     depends_on:

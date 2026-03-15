@@ -46,7 +46,7 @@ services:
       - blazil-node-2
     security_opt:
       - seccomp:unconfined
-    cpuset_cpus: "1"      # CPU core 1: TigerBeetle VSR
+    cpuset: "1"      # CPU core 1: TigerBeetle VSR
     cpu_shares: 512       # Medium priority
     mem_limit: 2g
     healthcheck:
@@ -89,7 +89,7 @@ services:
     security_opt:
       - seccomp:unconfined
     privileged: true       # Required for real-time scheduling
-    cpuset_cpus: "0"       # CPU core 0: hot path (pinned)
+    cpuset: "0"       # CPU core 0: hot path (pinned)
     cpu_shares: 1024       # Highest priority
     mem_limit: 4g
     ulimits:
@@ -122,7 +122,7 @@ services:
       - "9101:9091"
     networks:
       - blazil-node-2
-    cpuset_cpus: "2"       # CPU core 2: services
+    cpuset: "2"       # CPU core 2: services
     cpu_shares: 256
     mem_limit: 1g
     depends_on:
@@ -143,7 +143,7 @@ services:
       - "9102:9092"
     networks:
       - blazil-node-2
-    cpuset_cpus: "2"       # CPU core 2: services
+    cpuset: "2"       # CPU core 2: services
     cpu_shares: 256
     mem_limit: 1g
     depends_on:
@@ -164,7 +164,7 @@ services:
       - "9103:9093"
     networks:
       - blazil-node-2
-    cpuset_cpus: "2"       # CPU core 2: services
+    cpuset: "2"       # CPU core 2: services
     cpu_shares: 256
     mem_limit: 1g
     depends_on:
@@ -185,7 +185,7 @@ services:
       - "9104:9094"
     networks:
       - blazil-node-2
-    cpuset_cpus: "2"       # CPU core 2: services
+    cpuset: "2"       # CPU core 2: services
     cpu_shares: 256
     mem_limit: 1g
     depends_on:
