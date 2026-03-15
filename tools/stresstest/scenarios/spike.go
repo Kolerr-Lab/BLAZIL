@@ -24,9 +24,11 @@ func Spike(cfg Config) Result {
 	col, stopCol := metrics.NewCollector()
 	defer stopCol()
 
+	// FIX 2: baseline 4 workers, spike to 8 workers
+	// 4×256 = 1,024 concurrent → 8×256 = 2,048 concurrent
 	const (
-		baselineWorkers = 50
-		spikeWorkers    = 200
+		baselineWorkers = 4
+		spikeWorkers    = 8
 		baselineDur     = 30 * time.Second
 		spikeDur        = 10 * time.Second
 		recoveryDur     = 30 * time.Second

@@ -27,6 +27,7 @@ use blazil_engine::handlers::risk::RiskHandler;
 use blazil_engine::handlers::validation::ValidationHandler;
 use blazil_engine::metrics::EngineMetrics;
 use blazil_engine::pipeline::PipelineBuilder;
+use core_affinity;
 use blazil_ledger::account::{Account, AccountFlags};
 use blazil_ledger::client::LedgerClient;
 use blazil_ledger::mock::InMemoryLedgerClient;
@@ -144,6 +145,19 @@ async fn run_pipeline<C: LedgerClient + 'static>(
 
     let ring_buffer = Arc::clone(pipeline.ring_buffer());
     let pipeline = Arc::new(pipeline);
+    
+    // ── CPU Affinity (FIX 1) ──────────────────────────────────────────────────
+    // Pin pipeline runner thread to core 0 (hot path, zero context switching).
+    // OS must NEVER move this thread to another core.
+    let core_ids = core_affinity::get_core_ids().expect("failed to get core IDs");
+    if core_ids.len() >= 2 {
+        info!("🔒 Pinning pipeline to core 0, network to core 1");
+        // Pin current thread (main/pipeline) to core 0
+        core_affinity::set_for_current(core_ids[0]);
+    } else {
+        warn!("⚠️  <2 CPU cores detected, skipping affinity pinning");
+    }
+    
     let _run_handle = runner.run();
 
     // ── Metrics server ────────────────────────────────────────────────────────

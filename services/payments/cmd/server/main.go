@@ -23,6 +23,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/status"
 
 	paymentsv1 "github.com/blazil/services/payments/api/proto/payments/v1"
@@ -142,11 +143,19 @@ func main() {
 		logger.Fatal("failed to listen", zap.String("addr", cfg.GRPCAddr), zap.Error(err))
 	}
 
+	// FIX 3: gRPC server with aggressive keepalive parameters
 	grpcServer := grpc.NewServer(
 		grpc.ChainUnaryInterceptor(
 			observability.UnaryServerInterceptor("payments"),
 			blazilauth.AuthInterceptor(blazilauth.NewJWTValidator()),
 		),
+		grpc.KeepaliveParams(keepalive.ServerParameters{
+			MaxConnectionIdle:     15 * time.Second,
+			MaxConnectionAge:      30 * time.Second,
+			MaxConnectionAgeGrace: 5 * time.Second,
+			Time:                  5 * time.Second,
+			Timeout:               1 * time.Second,
+		}),
 	)
 	paymentsv1.RegisterPaymentsServiceServer(grpcServer, &paymentsServer{
 		processor: processor,

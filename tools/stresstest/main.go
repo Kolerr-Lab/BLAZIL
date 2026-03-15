@@ -62,19 +62,19 @@ func main() {
 	var results []scenarios.Result
 
 	// ── Ramp ─────────────────────────────────────────────────────────────────
-	fmt.Println("==> Scenario: ramp (10→200 goroutines, 10 s per step, 10 s warmup)")
+	fmt.Println("==> Scenario: ramp (1→8 goroutines, 10 s per step, 10 s warmup, 256 window each)")
 	rampResult := scenarios.Ramp(cfg)
 	results = append(results, rampResult)
 	printResult(rampResult)
 
 	// ── Sustain ───────────────────────────────────────────────────────────────
-	fmt.Printf("==> Scenario: sustain (100 goroutines, %s, 10 s warmup)\n", *duration)
+	fmt.Printf("==> Scenario: sustain (8 goroutines × 256 window, %s, 10 s warmup)\n", *duration)
 	sustainResult := scenarios.Sustain(cfg, scenarios.DefaultSustainConfig())
 	results = append(results, sustainResult)
 	printResult(sustainResult)
 
 	// ── Spike ─────────────────────────────────────────────────────────────────
-	fmt.Println("==> Scenario: spike (50→200→50 goroutines, 10 s warmup per phase)")
+	fmt.Println("==> Scenario: spike (4→8→4 goroutines × 256 window, 10 s warmup per phase)")
 	spikeResult := scenarios.Spike(cfg)
 	results = append(results, spikeResult)
 	printResult(spikeResult)

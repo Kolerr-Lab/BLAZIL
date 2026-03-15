@@ -26,7 +26,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 
 # ── Network stack ─────────────────────────────────────────────────────────────
 
-echo "⚙️  Network: BBR congestion control + TCP fast open"
+echo "⚙️  Network: BBR congestion control + TCP fast open + FIX 3 tuning"
 sysctl -w net.core.somaxconn=65535
 sysctl -w net.core.netdev_max_backlog=65535
 sysctl -w net.ipv4.tcp_rmem="4096 87380 134217728"
@@ -36,7 +36,17 @@ sysctl -w net.core.default_qdisc=fq
 sysctl -w net.ipv4.tcp_fastopen=3
 sysctl -w net.ipv4.tcp_tw_reuse=1
 sysctl -w net.ipv4.tcp_fin_timeout=15
-sysctl -w net.ipv4.tcp_max_syn_backlog=8192
+sysctl -w net.ipv4.tcp_max_syn_backlog=65535
+
+# FIX 3: TCP KeepAlive (detect dead connections faster)
+echo "⚙️  TCP KeepAlive: aggressive detection of dead connections"
+sysctl -w net.ipv4.tcp_keepalive_time=10
+sysctl -w net.ipv4.tcp_keepalive_intvl=3
+sysctl -w net.ipv4.tcp_keepalive_probes=3
+
+# FIX 3: Increase local port range (support more concurrent connections)
+echo "⚙️  Local port range: 1024-65535"
+sysctl -w net.ipv4.ip_local_port_range="1024 65535"
 
 # ── Memory ────────────────────────────────────────────────────────────────────
 
@@ -106,7 +116,13 @@ net.core.default_qdisc=fq
 net.ipv4.tcp_fastopen=3
 net.ipv4.tcp_tw_reuse=1
 net.ipv4.tcp_fin_timeout=15
-net.ipv4.tcp_max_syn_backlog=8192
+net.ipv4.tcp_max_syn_backlog=65535
+# FIX 3: TCP KeepAlive + port range
+net.ipv4.tcp_keepalive_time=10
+net.ipv4.tcp_keepalive_intvl=3
+net.ipv4.tcp_keepalive_probes=3
+net.ipv4.ip_local_port_range=1024 65535
+# Memory
 vm.swappiness=0
 vm.dirty_ratio=40
 vm.dirty_background_ratio=10

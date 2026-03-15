@@ -28,10 +28,12 @@ func Ramp(cfg Config) Result {
 		errPct     float64
 	}
 
+	// FIX 2: Ramp 1 → 8 goroutines (step 1), each with window=256
+	// Total concurrent: 1×256 → 8×256 = 256 → 2,048 requests
 	const (
-		minWorkers  = 10
-		maxWorkers  = 200
-		stepWorkers = 10
+		minWorkers  = 1
+		maxWorkers  = 8
+		stepWorkers = 1
 		stepDur     = 10 * time.Second
 		warmupDur   = 10 * time.Second
 	)

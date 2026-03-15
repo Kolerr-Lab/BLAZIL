@@ -167,15 +167,16 @@ func encodePaymentRequest(idempotencyKey, debit, credit string, amount int64, cu
 
 const paymentsMethodStream = "/payments.v1.PaymentsService/ProcessPaymentStream"
 
-// Initial window size for Vegas-style congestion control.
-// Dynamically adjusted based on RTT measurements (min=5, max=50).
-const initialWindowSize = 30
+// Fixed window size for FIX 2: "Few focused workers beat a crowd stepping on each other"
+// 8 goroutines × 256 window = 2,048 concurrent requests
+// Math: 67,000 TPS × 0.030s avg latency = ~2,010 concurrent needed
+const fixedWindowSize = 256
 
-// Vegas congestion control parameters
+// Vegas congestion control DISABLED for FIX 2 (fixed window provides stability)
 const (
-	minWindowSize    = 5   // Minimum window to maintain throughput
-	maxWindowSize    = 50  // Maximum window to prevent OOM
-	vegasAdjustEvery = 100 // Adjust window every N responses
+	minWindowSize    = 256 // Fixed window (no dynamic adjustment)
+	maxWindowSize    = 256 // Fixed window (no dynamic adjustment)
+	vegasAdjustEvery = 100 // Disabled (window never changes)
 )
 
 // worker uses gRPC bidirectional streaming with Vegas-style congestion control.
@@ -207,17 +208,17 @@ func worker(ctx context.Context, conn *grpc.ClientConn, col *metrics.Collector, 
 		return
 	}
 
-	// Vegas congestion control state
+	// Fixed window (FIX 2): No Vegas adjustment, just fixed 256 per worker
 	var (
-		windowSize     = initialWindowSize
-		minRTT         = time.Duration(1<<63 - 1) // Initialize to max
+		windowSize     = fixedWindowSize
+		minRTT         = time.Duration(1<<63 - 1) // Tracked but no adjustment
 		responseCount  int64
 		totalRTT       time.Duration
-		mu             sync.Mutex // Protects window resizing
+		mu             sync.Mutex // Protects stats (window never changes)
 	)
 
 	// Buffered channel acts as sliding window for flow control.
-	// Dynamically resized based on Vegas algorithm.
+	// Fixed size = 256 per worker for stability under load.
 	inflightCh := make(chan inflight, windowSize)
 	doneCh := make(chan struct{})
 	var seq int64
@@ -250,38 +251,12 @@ func worker(ctx context.Context, conn *grpc.ClientConn, col *metrics.Collector, 
 					minRTT = rtt
 				}
 
-				// Adjust window every vegasAdjustEvery responses
+				// Vegas DISABLED (FIX 2): Window fixed at 256, never adjusted.
+				// Just track stats for monitoring (no action taken).
 				if responseCount%vegasAdjustEvery == 0 && minRTT > 0 {
-					avgRTT := totalRTT / time.Duration(responseCount)
-
-					// Vegas formula: target_window = current * (min_rtt / current_rtt)
-					targetWindow := float64(windowSize) * (float64(minRTT) / float64(avgRTT))
-
-					// Clamp to [min, max]
-					if targetWindow < minWindowSize {
-						targetWindow = minWindowSize
-					} else if targetWindow > maxWindowSize {
-						targetWindow = maxWindowSize
-					}
-
-					newWindowSize := int(targetWindow)
-
-					// Only resize if change is significant (>10% or crossing thresholds)
-					if newWindowSize != windowSize {
-						oldSize := windowSize
-						windowSize = newWindowSize
-
-						// Note: We don't recreate the channel (would be complex).
-						// Instead, sender respects current windowSize by checking len(inflightCh).
-						// This is a simplified Vegas implementation for production use.
-						
-						// Reset stats for next adjustment period
-						totalRTT = 0
-						responseCount = 0
-
-						// Log window adjustment (visible in metrics)
-						_ = oldSize // Avoid unused variable warning
-					}
+					// Reset stats (keep memory bounded)
+					totalRTT = 0
+					responseCount = 0
 				}
 				mu.Unlock()
 
