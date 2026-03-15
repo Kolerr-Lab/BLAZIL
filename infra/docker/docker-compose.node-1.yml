@@ -50,7 +50,8 @@ services:
       - seccomp:unconfined
     cpu_shares: 512       # Medium priority
     healthcheck:
-      test: ["CMD-SHELL", "netstat -tln | grep -q ':3000 '"]      interval: 5s
+      test: ["CMD-SHELL", "netstat -tln | grep -q ':3000 '"]
+      interval: 5s
       timeout: 10s
       retries: 30
       start_period: 30s
