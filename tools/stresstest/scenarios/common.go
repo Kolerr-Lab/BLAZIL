@@ -169,27 +169,69 @@ const paymentsMethod = "/payments.v1.PaymentsService/ProcessPayment"
 // worker sends payment requests in a tight loop until ctx is cancelled.
 // It uses workerID and a per-worker counter to generate unique idempotency
 // keys so every request exercises the full processing path (no cache hits).
+// WindowSize controls how many in-flight requests each worker maintains.
+// Higher values = better throughput but higher memory usage.
+// Optimal range: 20-50 for high-throughput scenarios.
+const WindowSize = 30
+
+// worker now uses async pipelining with a sliding window via goroutine pool.
+// Instead of stop-and-wait (send → wait → send), it maintains WindowSize
+// concurrent request handlers, fully utilizing gRPC's duplex streams.
 func worker(ctx context.Context, conn *grpc.ClientConn, col *metrics.Collector, workerID int64) {
+	type request struct {
+		key   string
+		seq   int64
+		start time.Time
+	}
+
+	// Request queue with backpressure (acts as sliding window).
+	reqCh := make(chan request, WindowSize*2)
 	var seq int64
+
+	// Spawn WindowSize concurrent request handlers.
+	for i := 0; i < WindowSize; i++ {
+		go func() {
+			for req := range reqCh {
+				payload := encodePaymentRequest(req.key,
+					"ext-debit-acct-stress",
+					"ext-credit-acct-stress",
+					100,   // $1.00
+					"USD",
+					1,     // USD ledger
+				)
+				var resp []byte
+				err := conn.Invoke(ctx, paymentsMethod, payload, &resp)
+				ns := time.Since(req.start).Nanoseconds()
+				col.Record(ns, err)
+			}
+		}()
+	}
+
+	// Producer loop: generate requests and queue them.
+	// If all WindowSize handlers are busy, this blocks (flow control).
 	for {
 		select {
 		case <-ctx.Done():
+			close(reqCh)
 			return
 		default:
 		}
+
 		n := atomic.AddInt64(&seq, 1)
 		key := fmt.Sprintf("st-%d-%d-%d", workerID, n, time.Now().UnixNano())
-		req := encodePaymentRequest(key,
-			"ext-debit-acct-stress",
-			"ext-credit-acct-stress",
-			100,   // $1.00
-			"USD",
-			1,     // USD ledger
-		)
-		var resp []byte
-		start := time.Now()
-		err := conn.Invoke(ctx, paymentsMethod, req, &resp)
-		ns := time.Since(start).Nanoseconds()
-		col.Record(ns, err)
+
+		req := request{
+			key:   key,
+			seq:   n,
+			start: time.Now(),
+		}
+
+		select {
+		case reqCh <- req:
+			// Request queued successfully.
+		case <-ctx.Done():
+			close(reqCh)
+			return
+		}
 	}
 }

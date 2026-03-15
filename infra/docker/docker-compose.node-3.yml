@@ -86,7 +86,7 @@ services:
     security_opt:
       - seccomp:unconfined
     privileged: true       # Required for real-time scheduling
-    cpuset: "0"       # CPU core 0: hot path (pinned)
+    cpuset: "0,1"       # CPU cores 0,1: hot path (avoid single-core bottleneck)
     cpu_shares: 1024       # Highest priority
     mem_limit: 4g
     ulimits:
