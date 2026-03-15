@@ -143,21 +143,20 @@ impl<C: LedgerClient + 'static> EventHandler for LedgerHandler<C> {
             .map(|started| started.elapsed() > MAX_BATCH_AGE)
             .unwrap_or(false);
 
-        let should_flush = end_of_batch
-            || self.deferred_transfers.len() >= MAX_BATCH
-            || batch_age_exceeded;
+        let should_flush =
+            end_of_batch || self.deferred_transfers.len() >= MAX_BATCH || batch_age_exceeded;
 
         if !should_flush {
             // Defer: queue the transfer and store pointer to this ring buffer slot.
             // SAFETY: `event` is a ring buffer slot from this `on_event` call.
             // It remains valid until `gating_sequence` advances after this batch loop
             // completes (after all handlers return). We write results back before that.
-            
+
             // Start batch timer on first deferred transfer
             if self.deferred_transfers.is_empty() {
                 self.batch_started_at = Some(Instant::now());
             }
-            
+
             self.deferred_transfers.push(transfer);
             self.deferred_meta.push((event as *mut _, sequence));
             debug!(
@@ -187,10 +186,7 @@ impl<C: LedgerClient + 'static> EventHandler for LedgerHandler<C> {
 
         debug!(
             sequence,
-            batch_size,
-            batch_age_ms,
-            end_of_batch,
-            "LedgerHandler: FLUSHING BATCH to TigerBeetle"
+            batch_size, batch_age_ms, end_of_batch, "LedgerHandler: FLUSHING BATCH to TigerBeetle"
         );
 
         // Single batched call to TigerBeetle.
@@ -203,15 +199,10 @@ impl<C: LedgerClient + 'static> EventHandler for LedgerHandler<C> {
         if tb_elapsed_ms > 5 {
             warn!(
                 batch_size,
-                tb_elapsed_ms,
-                "LedgerHandler: SLOW batch write (>5 ms)"
+                tb_elapsed_ms, "LedgerHandler: SLOW batch write (>5 ms)"
             );
         } else {
-            info!(
-                batch_size,
-                tb_elapsed_ms,
-                "LedgerHandler: batch committed"
-            );
+            info!(batch_size, tb_elapsed_ms, "LedgerHandler: batch committed");
         }
 
         // Write results back to deferred slots via raw pointers.
