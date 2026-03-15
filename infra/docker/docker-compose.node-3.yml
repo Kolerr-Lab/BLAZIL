@@ -49,12 +49,11 @@ services:
     cpu_shares: 512       # Medium priority
     mem_limit: 2g
     healthcheck:
-      # 0BBA = 3002 in hex. Reads kernel TCP table — reliable in busybox.
-      test: ["CMD-SHELL", "grep -q ':0BBA ' /proc/net/tcp"]
-      interval: 3s
-      timeout: 5s
-      retries: 20
-      start_period: 15s
+      test: ["CMD-SHELL", "netstat -tln | grep -q ':3002 '"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 30s
 
 
   # ── Engine — shard 2 ─────────────────────────────────────────────────────────
