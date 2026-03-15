@@ -379,7 +379,6 @@ func (s *paymentsServer) ProcessPaymentStream(
 			respBuf.push(resp)
 			continue
 		}
-		defer s.concurrencySem.Release(1)
 
 		// Process payment (same logic as unary handler).
 		currency, err := domain.CurrencyByCode(req.CurrencyCode)
@@ -390,6 +389,7 @@ func (s *paymentsServer) ProcessPaymentStream(
 				FailureReason: fmt.Sprintf("unsupported currency: %s", req.CurrencyCode),
 			}
 			respBuf.push(resp)
+			s.concurrencySem.Release(1)
 			continue
 		}
 
@@ -411,6 +411,7 @@ func (s *paymentsServer) ProcessPaymentStream(
 				FailureReason: fmt.Sprintf("internal error: %v", err),
 			}
 			respBuf.push(resp)
+			s.concurrencySem.Release(1)
 			continue
 		}
 
@@ -422,6 +423,7 @@ func (s *paymentsServer) ProcessPaymentStream(
 			FailureReason: payment.FailureReason,
 		}
 		respBuf.push(resp)
+		s.concurrencySem.Release(1)
 	}
 
 	// Client closed stream — wait for sender to drain remaining responses.
