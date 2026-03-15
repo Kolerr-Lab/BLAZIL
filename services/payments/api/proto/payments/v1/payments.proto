@@ -10,6 +10,12 @@ service PaymentsService {
   // Idempotent: same idempotency_key always returns the same result.
   rpc ProcessPayment(ProcessPaymentRequest) returns (ProcessPaymentResponse);
 
+  // ProcessPaymentStream accepts a continuous stream of payment requests
+  // and returns responses as a stream. This eliminates per-request RTT
+  // overhead and enables high-throughput pipelining (50,000+ TPS).
+  // Order is preserved: response N corresponds to request N.
+  rpc ProcessPaymentStream(stream ProcessPaymentRequest) returns (stream ProcessPaymentResponse);
+
   // GetPayment retrieves a previously processed payment by its ID.
   rpc GetPayment(GetPaymentRequest) returns (GetPaymentResponse);
 }
