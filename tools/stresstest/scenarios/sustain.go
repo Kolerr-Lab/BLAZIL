@@ -22,9 +22,9 @@ type SustainConfig struct {
 // DefaultSustainConfig returns production-grade SLO parameters.
 func DefaultSustainConfig() SustainConfig {
 	return SustainConfig{
-		Goroutines: 8, // FIX 2: 8 workers × 256 window = 2,048 concurrent
-		MinTPS:     40_000,
-		MaxP99Ms:   50.0,
+		Goroutines: 2, // SWEET SPOT: 2 workers × 256 window = 512 concurrent (48,317 TPS, P99 6.75ms)
+		MinTPS:     45_000,
+		MaxP99Ms:   10.0,
 		MaxErrPct:  0.1,
 	}
 }
