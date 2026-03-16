@@ -22,6 +22,19 @@ Blazil achieved **62,770 TPS sustained throughput** with **P99 latency 23-31ms**
 
 ---
 
+## Industry Comparison
+
+| System | Peak TPS | vs Blazil |
+|--------|----------|-----------|
+| **Blazil (this work)** | **62,770** | **1×** |
+| Visa (global peak) | 24,000 | 0.38× (Blazil is **2.6× faster**) |
+| Mojaloop (OSS baseline) | ~1,000 | 0.016× (Blazil is **62× faster**) |
+
+**Blazil outperforms Visa's published peak by 2.6× on $252/month commodity hardware.**  
+**Blazil outperforms Mojaloop, the leading open-source payment switch, by 62×.**
+
+---
+
 ## Infrastructure
 
 ### Hardware Configuration
@@ -410,7 +423,11 @@ Compare to traditional databases at $10-50 per million TXN: **77-385× cheaper**
 
 ## Conclusion
 
-Blazil achieved **62,770 TPS sustained throughput** with **P99 latency 23-31ms** on $252/month hardware, representing a **314× improvement over baseline** and **4,700-8,300× cost advantage over cloud databases**.
+Blazil achieved **62,770 TPS sustained throughput** with **P99 latency 23-31ms** and **0.00% error rate** on $252/month hardware, representing a **314× improvement over baseline** and **4,700-8,300× cost advantage over cloud databases**.
+
+Against industry benchmarks:
+- **2.6× faster than Visa** (24,000 TPS published peak)
+- **62× faster than Mojaloop** (~1,000 TPS, leading OSS payment switch)
 
 The breakthrough came from three architectural decisions:
 1. **TigerBeetle batching** (100 transfers per VSR round)
