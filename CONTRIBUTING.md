@@ -1,6 +1,6 @@
 # Contributing to Blazil
 
-Blazil is an open-source financial infrastructure project. We welcome contributions of all kinds — bug fixes, performance improvements, new payment rails, documentation, and more.
+Blazil is a source-available financial infrastructure project. We welcome contributions of all kinds — bug fixes, performance improvements, new payment rails, documentation, and more.
 
 ---
 
@@ -22,7 +22,7 @@ Blazil is an open-source financial infrastructure project. We welcome contributi
 - Check [open issues](https://github.com/Kolerr-Lab/BLAZIL/issues) before filing a new one.
 - For large changes, open an issue first to discuss the approach.
 - For security vulnerabilities, do **not** open a public issue — see [SECURITY.md](SECURITY.md).
-- By contributing you agree your work will be licensed under Apache 2.0.
+- By contributing you agree your work will be licensed under BSL 1.1.
 
 ---
 

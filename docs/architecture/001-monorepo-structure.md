@@ -202,7 +202,7 @@ Centralized monitoring configuration in `observability/`:
 ### Negative
 - **Repository size**: Will grow larger over time (mitigated by Git's efficiency)
 - **CI complexity**: Need to detect changed components and run targeted tests
-- **Access control**: Can't easily restrict access to specific components (acceptable for open source)
+- **Access control**: Can't easily restrict access to specific components (acceptable for source-available projects)
 - **Clone time**: Initial clone is larger (one-time cost)
 
 ### Neutral

@@ -11,7 +11,7 @@ members = [
 
 [workspace.package]
 edition = "2021"
-license = "Apache-2.0"
+license = "BSL-1.1"
 repository = "https://github.com/Kolerr-Lab/BLAZIL"
 
 [workspace.dependencies]

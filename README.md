@@ -1,10 +1,10 @@
 # Blazil
 
-**Open-source financial infrastructure.**  
+**Source-available financial infrastructure.**  
 **62,770 TPS on commodity cloud hardware.**
 
 [![Build](https://github.com/Kolerr-Lab/BLAZIL/actions/workflows/ci.yml/badge.svg)](https://github.com/Kolerr-Lab/BLAZIL/actions)
-[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![License: BSL 1.1](https://img.shields.io/badge/license-BSL%201.1-orange.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-stable%202021-orange.svg)](https://www.rust-lang.org)
 [![Go](https://img.shields.io/badge/go-1.22%2B-00ADD8.svg)](https://go.dev)
 [![TPS](https://img.shields.io/badge/peak%20TPS-62%2C770-brightgreen.svg)](docs/do-benchmark-report-final.md)
@@ -240,5 +240,10 @@ For security issues, see [SECURITY.md](SECURITY.md).
 
 ## License
 
-Copyright 2026 Blazil Contributors — Licensed under the [Apache License, Version 2.0](LICENSE).
+Copyright 2026 Kolerr Lab — Licensed under the [Business Source License 1.1](LICENSE).
+
+Blazil is **free for non-commercial use**. Commercial production use requires a separate license.  
+For commercial licensing, contact: **hello@blazil.com**
+
+The Business Source License automatically converts to Apache 2.0 four years after each release.
 

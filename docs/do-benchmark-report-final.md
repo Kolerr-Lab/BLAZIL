@@ -31,7 +31,7 @@ Blazil achieved **62,770 TPS sustained throughput** with **P99 latency 23-31ms**
 | Mojaloop (OSS baseline) | ~1,000 | 0.016× (Blazil is **62× faster**) |
 
 **Blazil outperforms Visa's published peak by 2.6× on $252/month commodity hardware.**  
-**Blazil outperforms Mojaloop, the leading open-source payment switch, by 62×.**
+**Blazil outperforms Mojaloop, the leading source-available payment switch, by 62×.**
 
 ---
 
