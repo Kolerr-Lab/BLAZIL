@@ -5,7 +5,7 @@
 **Open-core financial infrastructure.**  
 **Built for the speed of modern markets.**
 
-[![Build](https://github.com/Kolerr-Lab/BLAZIL/actions/workflows/ci.yml/badge.svg)](https://github.com/Kolerr-Lab/BLAZIL/actions)
+[![Build](https://github.com/Kolerr-Lab/BLAZIL/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Kolerr-Lab/BLAZIL/actions)
 [![License: BSL 1.1](https://img.shields.io/badge/License-BSL%201.1-blue?style=flat-square)](LICENSE)
 
 [![Rust](https://img.shields.io/badge/Rust-stable%202021-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
