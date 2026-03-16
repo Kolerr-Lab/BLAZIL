@@ -1,6 +1,6 @@
 module github.com/blazil/banking
 
-go 1.24.0
+go 1.25.0
 
 require (
 	github.com/blazil/auth v0.0.0
@@ -8,9 +8,9 @@ require (
 	github.com/blazil/secrets v0.0.0
 	github.com/google/uuid v1.6.0
 	github.com/prometheus/client_golang v1.19.0
-	go.uber.org/zap v1.27.0
-	google.golang.org/grpc v1.64.0
-	google.golang.org/protobuf v1.34.2
+	go.uber.org/zap v1.27.1
+	google.golang.org/grpc v1.79.2
+	google.golang.org/protobuf v1.36.11
 )
 
 require (
@@ -33,11 +33,11 @@ require (
 	go.opentelemetry.io/otel/trace v1.40.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.3.1 // indirect
 	go.uber.org/multierr v1.10.0 // indirect
-	golang.org/x/net v0.26.0 // indirect
-	golang.org/x/sys v0.40.0 // indirect
-	golang.org/x/text v0.16.0 // indirect
-	google.golang.org/genproto/googleapis/api v0.0.0-20240701130421-f6361c86f094 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20240701130421-f6361c86f094 // indirect
+	golang.org/x/net v0.52.0 // indirect
+	golang.org/x/sys v0.42.0 // indirect
+	golang.org/x/text v0.35.0 // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20251202230838-ff82c1b0f217 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260311181403-84a4fc48630c // indirect
 )
 
 replace (
