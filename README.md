@@ -243,7 +243,7 @@ For security issues, see [SECURITY.md](SECURITY.md).
 Copyright 2026 Kolerr Lab — Licensed under the [Business Source License 1.1](LICENSE).
 
 Blazil is **free for non-commercial use**. Commercial production use requires a separate license.  
-For commercial licensing, contact: **hello@blazil.com**
+For commercial licensing, contact: **lab.kolerr@kolerr.com**
 
 The Business Source License automatically converts to Apache 2.0 four years after each release.
 
