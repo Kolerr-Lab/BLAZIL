@@ -192,8 +192,16 @@ func worker(ctx context.Context, conn *grpc.ClientConn, col *metrics.Collector, 
 		seq   int64
 	}
 
+	// Use a separate long-lived stream context so the gRPC deadline is NOT
+	// propagated to the server during active measurement phases.  Embedding
+	// the phase deadline in the stream metadata causes the server to return
+	// DeadlineExceeded as the phase timer approaches zero, producing 0 TPS.
+	// The phase context (ctx) still controls when the worker stops sending.
+	streamCtx, streamCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer streamCancel()
+
 	// Open bidirectional stream (ONE per worker, reused for all requests).
-	stream, err := conn.NewStream(ctx, &grpc.StreamDesc{
+	stream, err := conn.NewStream(streamCtx, &grpc.StreamDesc{
 		StreamName:    "ProcessPaymentStream",
 		ServerStreams: true,
 		ClientStreams: true,
