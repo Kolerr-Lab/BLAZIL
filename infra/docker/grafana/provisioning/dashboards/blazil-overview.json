@@ -91,7 +91,7 @@
       },
       "targets": [
         {
-          "expr": "blazil_ring_buffer_utilization_ratio{instance=\"engine\"}",
+          "expr": "blazil_ring_buffer_utilization_ratio",
           "legendFormat": "{{ node }}",
           "refId": "A"
         }
@@ -127,6 +127,57 @@
         {
           "expr": "blazil_pipeline_avg_latency_ns",
           "legendFormat": "avg {{ node }}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Cross-Shard Transactions",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "fieldConfig": {
+        "defaults": { "unit": "reqps", "custom": { "lineWidth": 2 } }
+      },
+      "targets": [
+        {
+          "expr": "rate(blazil_cross_shard_total[1m])",
+          "legendFormat": "cross-shard {{ node }}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Payments: Concurrency Limit Reached",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 16 },
+      "fieldConfig": {
+        "defaults": { "unit": "cps", "custom": { "lineWidth": 2 } }
+      },
+      "targets": [
+        {
+          "expr": "rate(blazil_payments_concurrency_limit_reached_total[1m])",
+          "legendFormat": "limit reached {{ node }}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Payments: Stream Responses Dropped",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 16 },
+      "fieldConfig": {
+        "defaults": { "unit": "cps", "custom": { "lineWidth": 2 } }
+      },
+      "targets": [
+        {
+          "expr": "rate(blazil_payments_stream_responses_dropped_total[1m])",
+          "legendFormat": "dropped {{ node }}",
           "refId": "A"
         }
       ]
@@ -169,5 +220,5 @@
   "timezone": "browser",
   "title": "Blazil Overview",
   "uid": "blazil-overview",
-  "version": 2
+  "version": 3
 }
