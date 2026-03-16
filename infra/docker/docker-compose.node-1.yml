@@ -197,6 +197,7 @@ services:
     container_name: blazil-prometheus
     volumes:
       - ./prometheus/prometheus.cluster.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/targets:/etc/prometheus/targets:ro
     ports:
       - "9090:9090"
     networks:

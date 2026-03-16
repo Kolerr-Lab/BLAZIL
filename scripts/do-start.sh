@@ -57,6 +57,17 @@ echo "════════════════════════�
 
 cd "$INSTALL_DIR"
 
+# Write file_sd target files for remote nodes so Prometheus can scrape them.
+# These are mounted into the Prometheus container at /etc/prometheus/targets/.
+if [ "$NODE_ID" = "node-1" ]; then
+  mkdir -p "$INSTALL_DIR/infra/docker/prometheus/targets"
+  printf -- '- targets: [\x27%s:9096\x27]\n  labels:\n    node: node-2\n    shard: \x271\x27\n' "$TB_NODE2" \
+    > "$INSTALL_DIR/infra/docker/prometheus/targets/node-2.yml"
+  printf -- '- targets: [\x27%s:9097\x27]\n  labels:\n    node: node-3\n    shard: \x272\x27\n' "$TB_NODE3" \
+    > "$INSTALL_DIR/infra/docker/prometheus/targets/node-3.yml"
+  echo "  Prometheus targets written for nodes 2+3"
+fi
+
 TB_ADDRESSES="$TB_ADDRESSES" \
 BLAZIL_NODES="$BLAZIL_NODES" \
 BLAZIL_NODE_ID="$NODE_ID" \
@@ -71,7 +82,7 @@ echo "✅ Node $NODE_ID started"
 echo "   Engine:   ${LOCAL_IP}:7878"
 echo "   Metrics:  http://${LOCAL_IP}:9090  (Prometheus)"
 if [ "$NODE_ID" = "node-1" ]; then
-  echo "   Grafana:  http://${LOCAL_IP}:3000  (admin / blazil)"
+  echo "   Grafana:  http://${LOCAL_IP}:3001  (admin / blazil)"
 fi
 echo ""
 echo "To tail logs:  docker compose -f $COMPOSE_FILE logs -f"

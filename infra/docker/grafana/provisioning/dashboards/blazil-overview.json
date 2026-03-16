@@ -5,7 +5,7 @@
     { "type": "datasource", "id": "prometheus", "name": "Prometheus", "version": "1.0.0" }
   ],
   "annotations": { "list": [] },
-  "description": "Blazil platform-wide overview: transactions, latency, ring buffer, gRPC",
+  "description": "Blazil platform-wide overview: pipeline throughput, latency, ring buffer",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -14,45 +14,56 @@
   "panels": [
     {
       "id": 1,
-      "title": "Transaction Rate (all services)",
+      "title": "Committed TPS (per node)",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": { "unit": "reqps", "custom": { "lineWidth": 2 } }
+      },
       "targets": [
         {
-          "expr": "sum by (service) (rate(blazil_transactions_total{service=~\"$service\"}[5m]))",
-          "legendFormat": "{{ service }}",
+          "expr": "rate(blazil_pipeline_events_committed_total[1m])",
+          "legendFormat": "{{ node }}",
           "refId": "A"
         }
       ]
     },
     {
       "id": 2,
-      "title": "Transaction Error Rate",
+      "title": "Published vs Committed (backpressure)",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": {
+        "defaults": { "unit": "reqps", "custom": { "lineWidth": 2 } }
+      },
       "targets": [
         {
-          "expr": "sum by (service, status) (rate(blazil_transactions_total{status!=\"success\",status!=\"settled\",status!=\"cleared\",service=~\"$service\"}[5m]))",
-          "legendFormat": "{{ service }}/{{ status }}",
+          "expr": "rate(blazil_pipeline_events_published_total[1m])",
+          "legendFormat": "published {{ node }}",
           "refId": "A"
+        },
+        {
+          "expr": "rate(blazil_pipeline_events_committed_total[1m])",
+          "legendFormat": "committed {{ node }}",
+          "refId": "B"
         }
       ]
     },
     {
       "id": 3,
-      "title": "Transaction P99 Latency",
+      "title": "Rejected Event Rate (per node)",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
       "fieldConfig": {
-        "defaults": { "unit": "s" }
+        "defaults": { "unit": "reqps", "custom": { "lineWidth": 2 } }
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.99, sum by (le, service) (rate(blazil_transaction_duration_seconds_bucket{service=~\"$service\"}[5m])))",
-          "legendFormat": "p99 {{ service }}",
+          "expr": "rate(blazil_pipeline_events_rejected_total[1m])",
+          "legendFormat": "rejected {{ node }}",
           "refId": "A"
         }
       ]
@@ -81,80 +92,41 @@
       "targets": [
         {
           "expr": "blazil_ring_buffer_utilization_ratio{instance=\"engine\"}",
-          "legendFormat": "Ring buffer",
+          "legendFormat": "{{ node }}",
           "refId": "A"
         }
       ]
     },
     {
       "id": 5,
-      "title": "Engine P99 Pipeline Latency",
+      "title": "P99 Pipeline Latency",
       "type": "stat",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 8 },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 8 },
       "fieldConfig": {
         "defaults": { "unit": "ns" }
       },
       "targets": [
         {
           "expr": "blazil_pipeline_p99_ns",
-          "legendFormat": "p99 latency",
+          "legendFormat": "p99 {{ node }}",
           "refId": "A"
         }
       ]
     },
     {
       "id": 6,
-      "title": "gRPC Request Rate",
-      "type": "timeseries",
+      "title": "Avg Pipeline Latency",
+      "type": "stat",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 12 },
+      "fieldConfig": {
+        "defaults": { "unit": "ns" }
+      },
       "targets": [
         {
-          "expr": "sum by (service, method) (rate(blazil_grpc_requests_total{service=~\"$service\"}[5m]))",
-          "legendFormat": "{{ service }} {{ method }}",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "id": 7,
-      "title": "gRPC Error Rate",
-      "type": "timeseries",
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
-      "targets": [
-        {
-          "expr": "sum by (service, code) (rate(blazil_grpc_requests_total{code!=\"OK\",service=~\"$service\"}[5m]))",
-          "legendFormat": "{{ service }}/{{ code }}",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "id": 8,
-      "title": "Deposits by Chain",
-      "type": "timeseries",
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
-      "targets": [
-        {
-          "expr": "sum by (chain, status) (rate(blazil_deposits_total[5m]))",
-          "legendFormat": "{{ chain }}/{{ status }}",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "id": 9,
-      "title": "Withdrawals by Chain",
-      "type": "timeseries",
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
-      "targets": [
-        {
-          "expr": "sum by (chain, status) (rate(blazil_withdrawals_total[5m]))",
-          "legendFormat": "{{ chain }}/{{ status }}",
+          "expr": "blazil_pipeline_avg_latency_ns",
+          "legendFormat": "avg {{ node }}",
           "refId": "A"
         }
       ]
@@ -178,14 +150,14 @@
       {
         "current": { "selected": true, "text": "All", "value": "$__all" },
         "datasource": { "type": "prometheus", "uid": "${datasource}" },
-        "definition": "label_values(blazil_transactions_total, service)",
+        "definition": "label_values(blazil_pipeline_events_committed_total, node)",
         "hide": 0,
         "includeAll": true,
-        "label": "Service",
+        "label": "Node",
         "multi": true,
-        "name": "service",
+        "name": "node",
         "options": [],
-        "query": "label_values(blazil_transactions_total, service)",
+        "query": "label_values(blazil_pipeline_events_committed_total, node)",
         "refresh": 2,
         "sort": 1,
         "type": "query"
@@ -197,5 +169,5 @@
   "timezone": "browser",
   "title": "Blazil Overview",
   "uid": "blazil-overview",
-  "version": 1
+  "version": 2
 }

@@ -5,7 +5,7 @@
     { "type": "datasource", "id": "prometheus", "name": "Prometheus", "version": "1.0.0" }
   ],
   "annotations": { "list": [] },
-  "description": "Blazil trading service: order placement rate, trade rate, order book depth, settlement latency",
+  "description": "Blazil trading node: engine pipeline throughput and latency",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -14,64 +14,68 @@
   "panels": [
     {
       "id": 1,
-      "title": "Trade Rate",
+      "title": "Committed Event Rate",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": { "unit": "reqps", "custom": { "lineWidth": 2 } }
+      },
       "targets": [
         {
-          "expr": "sum(rate(blazil_transactions_total{service=\"trading\",status=\"matched\"}[5m]))",
-          "legendFormat": "Trades / sec",
+          "expr": "rate(blazil_pipeline_events_committed_total[1m])",
+          "legendFormat": "committed {{ node }}",
           "refId": "A"
         }
       ]
     },
     {
       "id": 2,
-      "title": "Order Book Depth",
+      "title": "Rejected Event Rate",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": {
+        "defaults": { "unit": "reqps", "custom": { "lineWidth": 2 } }
+      },
       "targets": [
         {
-          "expr": "blazil_orderbook_depth{instrument=~\"$instrument\",side=\"bid\"}",
-          "legendFormat": "Bid {{ instrument }}",
+          "expr": "rate(blazil_pipeline_events_rejected_total[1m])",
+          "legendFormat": "rejected {{ node }}",
           "refId": "A"
-        },
-        {
-          "expr": "blazil_orderbook_depth{instrument=~\"$instrument\",side=\"ask\"}",
-          "legendFormat": "Ask {{ instrument }}",
-          "refId": "B"
         }
       ]
     },
     {
       "id": 3,
-      "title": "Order Placement Latency P99",
+      "title": "P99 Pipeline Latency",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
       "fieldConfig": {
-        "defaults": { "unit": "s" }
+        "defaults": { "unit": "ns", "custom": { "lineWidth": 2 } }
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(blazil_transaction_duration_seconds_bucket{service=\"trading\"}[5m])))",
-          "legendFormat": "p99 latency",
+          "expr": "blazil_pipeline_p99_ns",
+          "legendFormat": "p99 {{ node }}",
           "refId": "A"
         }
       ]
     },
     {
       "id": 4,
-      "title": "gRPC Trading Request Rate",
+      "title": "Avg Pipeline Latency",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "fieldConfig": {
+        "defaults": { "unit": "ns", "custom": { "lineWidth": 2 } }
+      },
       "targets": [
         {
-          "expr": "sum by (method, code) (rate(blazil_grpc_requests_total{service=\"trading\"}[5m]))",
-          "legendFormat": "{{ method }}/{{ code }}",
+          "expr": "blazil_pipeline_avg_latency_ns",
+          "legendFormat": "avg {{ node }}",
           "refId": "A"
         }
       ]
@@ -95,14 +99,14 @@
       {
         "current": { "selected": true, "text": "All", "value": "$__all" },
         "datasource": { "type": "prometheus", "uid": "${datasource}" },
-        "definition": "label_values(blazil_orderbook_depth, instrument)",
+        "definition": "label_values(blazil_pipeline_events_committed_total, node)",
         "hide": 0,
         "includeAll": true,
-        "label": "Instrument",
+        "label": "Node",
         "multi": true,
-        "name": "instrument",
+        "name": "node",
         "options": [],
-        "query": "label_values(blazil_orderbook_depth, instrument)",
+        "query": "label_values(blazil_pipeline_events_committed_total, node)",
         "refresh": 2,
         "sort": 1,
         "type": "query"
@@ -114,5 +118,5 @@
   "timezone": "browser",
   "title": "Blazil Trading",
   "uid": "blazil-trading",
-  "version": 1
+  "version": 2
 }

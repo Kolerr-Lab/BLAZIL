@@ -1,53 +1,38 @@
 # Prometheus configuration for Blazil 3-node cluster.
-# Scrapes engine metrics from all three nodes via the Docker bridge network.
-# Each engine exposes Prometheus metrics at container port 9090.
+# Scrapes engine metrics from all three nodes.
+# Node-1: locally via Docker bridge (container name).
+# Nodes 2+3: via file_sd — target files written by do-start.sh with real IPs.
 
 global:
-  scrape_interval: 15s
-  evaluation_interval: 15s
+  scrape_interval: 5s
+  evaluation_interval: 5s
 
 scrape_configs:
-  - job_name: blazil-node-1
+  # Node-1 engine — same Docker bridge, use container name directly.
+  - job_name: blazil-engine-node-1
     static_configs:
-      - targets: ['blazil-node-1:9090']
+      - targets: ['blazil-engine:9090']
         labels:
           node: 'node-1'
           shard: '0'
 
-  - job_name: blazil-node-2
-    static_configs:
-      - targets: ['blazil-node-2:9090']
-        labels:
-          node: 'node-2'
-          shard: '1'
+  # Node-2 engine — separate host; targets written by do-start.sh.
+  - job_name: blazil-engine-node-2
+    file_sd_configs:
+      - files: ['/etc/prometheus/targets/node-2.yml']
+        refresh_interval: 30s
 
-  - job_name: blazil-node-3
-    static_configs:
-      - targets: ['blazil-node-3:9090']
-        labels:
-          node: 'node-3'
-          shard: '2'
+  # Node-3 engine — separate host; targets written by do-start.sh.
+  - job_name: blazil-engine-node-3
+    file_sd_configs:
+      - files: ['/etc/prometheus/targets/node-3.yml']
+        refresh_interval: 30s
 
+  # Node-1 payments service — same Docker bridge.
   - job_name: blazil-payments-node-1
     static_configs:
-      - targets: ['blazil-node-1-payments:9091']
+      - targets: ['blazil-payments:9091']
         labels:
           node: 'node-1'
           shard: '0'
-          service: 'payments'
-
-  - job_name: blazil-payments-node-2
-    static_configs:
-      - targets: ['blazil-node-2-payments:9091']
-        labels:
-          node: 'node-2'
-          shard: '1'
-          service: 'payments'
-
-  - job_name: blazil-payments-node-3
-    static_configs:
-      - targets: ['blazil-node-3-payments:9091']
-        labels:
-          node: 'node-3'
-          shard: '2'
           service: 'payments'
