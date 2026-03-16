@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `bench/src/scenarios/tigerbeetle_scenario.rs`: real TigerBeetle scenario (env-gated)
 - `bench/benches/ring_buffer.rs` and `bench/benches/latency.rs`: Criterion micro-benchmarks
 - `InMemoryLedgerClient::new_unbounded()`: bench-only mode that skips balance validation
-- Measured numbers on Apple Silicon: ring buffer 12.5M TPS, pipeline 19.6M TPS, TCP 39K TPS
+- Measured numbers on Apple Silicon: ring buffer 12.5M TPS, pipeline 18.8M TPS, TCP 40K TPS
 - Updated `scripts/bench.sh` to run both scenario suite and Criterion
 - README Benchmarks section with full results table
 
