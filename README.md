@@ -14,7 +14,7 @@
 ![62,770 TPS](https://img.shields.io/badge/62%2C770_TPS-E2E_Cluster-brightgreen?style=flat-square)
 ![P99 23ms](https://img.shields.io/badge/P99_23ms-3--node-blue?style=flat-square)
 ![2.6x Visa](https://img.shields.io/badge/2.6×_Visa-peak_vs_peak-red?style=flat-square)
-![18.8M TPS](https://img.shields.io/badge/18.8M_TPS-Pipeline-orange?style=flat-square)
+![19.6M TPS](https://img.shields.io/badge/19.6M_TPS-Pipeline-orange?style=flat-square)
 
 </div>
 
@@ -26,7 +26,7 @@ Real hardware. Real replication. Real benchmarks.
 
 | Benchmark | Result | Hardware | Notes |
 |-----------|--------|----------|-------|
-| **Pipeline throughput** | **18,867,924 TPS** | MacBook Air M4 | In-memory, single node, lock-free |
+| **Pipeline throughput** | **19,607,843 TPS** | MacBook Air M4 | In-memory, single node, lock-free |
 | **E2E peak throughput** | **62,770 TPS** | 3× DO c2-4vcpu-8GB | Real VSR consensus + disk writes |
 | **P99 latency** | **26.8 ms** | 3-node cluster | gRPC bidirectional streaming |
 | **vs Visa (peak)** | **2.6×** | $252/month cloud | Published peak: 24,000 TPS |
@@ -151,7 +151,7 @@ vs Mojaloop (~1,000 TPS):     62×
 
 ```
 Ring buffer (raw):    12,500,000 ops/s   P99  84 ns
-Pipeline (no I/O):    18,867,924 ops/s   P99  83 ns
+Pipeline (no I/O):    19,607,843 ops/s   P99  83 ns
 End-to-end TCP:           39,947 TPS     P99  38 µs
 ```
 
