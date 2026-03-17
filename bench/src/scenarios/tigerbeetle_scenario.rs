@@ -15,7 +15,6 @@ pub async fn run(events: u64) -> Option<BenchmarkResult> {
     use std::time::Instant;
 
     use crate::scenarios::ring_buffer_scenario::{publish_with_backpressure, wait_for_drain};
-    use blazil_common::amount::Amount;
     use blazil_common::currency::parse_currency;
     use blazil_common::ids::TransactionId;
     use blazil_common::ids::{AccountId, LedgerId};
@@ -28,7 +27,6 @@ pub async fn run(events: u64) -> Option<BenchmarkResult> {
     use blazil_ledger::account::{Account, AccountFlags};
     use blazil_ledger::client::LedgerClient;
     use blazil_ledger::tigerbeetle::TigerBeetleClient;
-    use rust_decimal::Decimal;
 
     let addr = match std::env::var("BLAZIL_TB_ADDRESS") {
         Ok(a) => a,
@@ -78,19 +76,15 @@ pub async fn run(events: u64) -> Option<BenchmarkResult> {
         )))
         .expect("credit account");
 
-    let amount = Amount::new(Decimal::new(1_00, 2), usd).expect("amount");
-    let max_amount = Amount::new(
-        Decimal::new(100_000_000_000, 2),
-        parse_currency("USD").expect("USD"),
-    )
-    .expect("max amount");
+    let max_amount_units: u64 = 100_000_000_000_u64; // $1 billion in cents
 
-    let (pipeline, runner) = PipelineBuilder::new()
-        .with_capacity(65_536)
-        .add_handler(ValidationHandler)
-        .add_handler(RiskHandler::new(max_amount))
-        .add_handler(LedgerHandler::new(tb.clone(), rt.clone()))
-        .add_handler(PublishHandler::new())
+    let builder = PipelineBuilder::new().with_capacity(65_536);
+    let results = builder.results();
+    let (pipeline, runner) = builder
+        .add_handler(ValidationHandler::new(Arc::clone(&results)))
+        .add_handler(RiskHandler::new(max_amount_units, Arc::clone(&results)))
+        .add_handler(LedgerHandler::new(tb.clone(), rt.clone(), Arc::clone(&results)))
+        .add_handler(PublishHandler::new(Arc::clone(&results)))
         .build()
         .expect("pipeline build");
 
@@ -101,7 +95,7 @@ pub async fn run(events: u64) -> Option<BenchmarkResult> {
         TransactionId::new(),
         debit_id,
         credit_id,
-        amount,
+        1_00_u64, // $1.00 in cents
         LedgerId::USD,
         1,
     );

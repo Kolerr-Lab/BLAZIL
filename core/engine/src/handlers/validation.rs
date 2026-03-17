@@ -6,18 +6,19 @@
 //!
 //! # Rules (applied in order)
 //!
-//! 1. `transaction_id` must not be the nil UUID.
+//! 1. `transaction_id` must not be the zero sentinel.
 //! 2. `debit_account_id` ≠ `credit_account_id` (no self-transfers).
-//! 3. `amount.value()` must be strictly positive.
-//! 4. `amount.value().scale()` must be ≤ 8.
-//! 5. `debit_account_id` must not be the nil UUID.
-//! 6. `credit_account_id` must not be the nil UUID.
+//! 3. `amount_units` must be > 0.
+//! 4. `debit_account_id` must not be zero.
+//! 5. `credit_account_id` must not be zero.
 //!
-//! If all rules pass, `event.result` remains `None` and the event
-//! continues downstream. On failure, `event.result` is set to
-//! [`TransactionResult::Rejected`] and logged at `WARN`.
+//! If all rules pass, no result is written and the event continues downstream.
+//! On failure, result is written to the results map and logged at `WARN`.
+
+use std::sync::Arc;
 
 use blazil_common::error::BlazerError;
+use dashmap::DashMap;
 use tracing::warn;
 
 use crate::event::{TransactionEvent, TransactionResult};
@@ -33,31 +34,37 @@ use crate::handler::EventHandler;
 /// # Examples
 ///
 /// ```rust
+/// use std::sync::Arc;
+/// use dashmap::DashMap;
 /// use blazil_engine::handlers::validation::ValidationHandler;
 /// use blazil_engine::handler::EventHandler;
 /// use blazil_engine::event::TransactionEvent;
 /// use blazil_common::ids::{AccountId, LedgerId, TransactionId};
-/// use blazil_common::amount::Amount;
-/// use blazil_common::currency::parse_currency;
-/// use rust_decimal::Decimal;
 ///
-/// let usd = parse_currency("USD").unwrap();
-/// let amount = Amount::new(Decimal::new(10_000, 2), usd).unwrap();
 /// let mut event = TransactionEvent::new(
 ///     TransactionId::new(), AccountId::new(), AccountId::new(),
-///     amount, LedgerId::USD, 1,
+///     100_00_u64, LedgerId::USD, 1,
 /// );
 ///
-/// let mut handler = ValidationHandler;
+/// let results = Arc::new(DashMap::new());
+/// let mut handler = ValidationHandler::new(Arc::clone(&results));
 /// handler.on_event(&mut event, 0, true);
-/// assert!(event.result.is_none()); // valid event passes through
+/// assert!(!results.contains_key(&0)); // valid event produces no result
 /// ```
-pub struct ValidationHandler;
+pub struct ValidationHandler {
+    results: Arc<DashMap<i64, TransactionResult>>,
+}
 
+impl ValidationHandler {
+    /// Creates a new `ValidationHandler`.
+    pub fn new(results: Arc<DashMap<i64, TransactionResult>>) -> Self {
+        Self { results }
+    }
+}
 impl EventHandler for ValidationHandler {
     fn on_event(&mut self, event: &mut TransactionEvent, sequence: i64, _end_of_batch: bool) {
         // Skip events already rejected upstream (belt-and-suspenders).
-        if event.result.is_some() {
+        if self.results.contains_key(&sequence) {
             return;
         }
 
@@ -68,33 +75,32 @@ impl EventHandler for ValidationHandler {
                 reason = %reason,
                 "ValidationHandler: rejecting event"
             );
-            event.result = Some(TransactionResult::Rejected { reason });
+            self.results
+                .insert(sequence, TransactionResult::Rejected { reason });
         }
     }
 }
 
 /// Runs all validation rules against `event`. Returns `Ok(())` if all pass.
 fn validate(event: &TransactionEvent) -> Result<(), BlazerError> {
-    use rust_decimal::Decimal;
-
-    // Rule 1: transaction_id must not be nil.
-    if event.transaction_id.as_uuid().is_nil() {
+    // Rule 1: transaction_id must not be zero.
+    if event.transaction_id.is_zero() {
         return Err(BlazerError::ValidationError(
-            "transaction_id must not be the nil UUID".into(),
+            "transaction_id must not be zero".into(),
         ));
     }
 
-    // Rule 5: debit_account_id must not be nil.
-    if event.debit_account_id.as_uuid().is_nil() {
+    // Rule 4: debit_account_id must not be zero.
+    if event.debit_account_id.is_zero() {
         return Err(BlazerError::ValidationError(
-            "debit_account_id must not be the nil UUID".into(),
+            "debit_account_id must not be zero".into(),
         ));
     }
 
-    // Rule 6: credit_account_id must not be nil.
-    if event.credit_account_id.as_uuid().is_nil() {
+    // Rule 5: credit_account_id must not be zero.
+    if event.credit_account_id.is_zero() {
         return Err(BlazerError::ValidationError(
-            "credit_account_id must not be the nil UUID".into(),
+            "credit_account_id must not be zero".into(),
         ));
     }
 
@@ -106,16 +112,9 @@ fn validate(event: &TransactionEvent) -> Result<(), BlazerError> {
     }
 
     // Rule 3: amount must be positive.
-    if event.amount.value() <= Decimal::ZERO {
+    if event.amount_units == 0 {
         return Err(BlazerError::ValidationError(
-            "amount must be greater than zero".into(),
-        ));
-    }
-
-    // Rule 4: scale must be <= 8.
-    if event.amount.value().scale() > 8 {
-        return Err(BlazerError::InvalidAmountScale(
-            event.amount.value().scale(),
+            "amount_units must be greater than zero".into(),
         ));
     }
 
@@ -124,96 +123,123 @@ fn validate(event: &TransactionEvent) -> Result<(), BlazerError> {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use blazil_common::amount::Amount;
-    use blazil_common::currency::parse_currency;
+    use std::sync::Arc;
+
     use blazil_common::ids::{AccountId, LedgerId, TransactionId};
-    use rust_decimal::Decimal;
+    use dashmap::DashMap;
+
+    use super::*;
 
     fn make_valid_event() -> TransactionEvent {
-        let usd = parse_currency("USD").unwrap();
-        let amount = Amount::new(Decimal::new(10_000, 2), usd).unwrap();
         TransactionEvent::new(
             TransactionId::new(),
             AccountId::new(),
             AccountId::new(),
-            amount,
+            10_000_u64, // 100.00 USD in cents
             LedgerId::USD,
             1,
         )
     }
 
-    fn run(event: &mut TransactionEvent) {
-        ValidationHandler.on_event(event, 0, true);
+    /// Run validation with a fresh DashMap and return the map so tests can
+    /// inspect what (if anything) was written.
+    fn run(event: &mut TransactionEvent) -> Arc<DashMap<i64, TransactionResult>> {
+        let results = Arc::new(DashMap::new());
+        ValidationHandler::new(Arc::clone(&results)).on_event(event, 0, true);
+        results
     }
 
     #[test]
     fn valid_event_result_remains_none() {
         let mut event = make_valid_event();
-        run(&mut event);
-        assert!(event.result.is_none());
+        let results = run(&mut event);
+        assert!(!results.contains_key(&0), "valid event should not produce a result");
     }
 
     #[test]
-    fn nil_transaction_id_is_rejected() {
+    fn zero_transaction_id_is_rejected() {
         let mut event = make_valid_event();
-        event.transaction_id = TransactionId::from_bytes([0u8; 16]);
-        run(&mut event);
-        assert!(event.is_rejected());
+        event.transaction_id = TransactionId::from_u64(0);
+        let results = run(&mut event);
+        assert!(
+            matches!(results.get(&0).as_deref(), Some(TransactionResult::Rejected { .. })),
+            "zero transaction_id must be rejected"
+        );
     }
 
     #[test]
-    fn nil_debit_account_id_is_rejected() {
+    fn zero_debit_account_id_is_rejected() {
         let mut event = make_valid_event();
-        event.debit_account_id = AccountId::from_bytes([0u8; 16]);
-        run(&mut event);
-        assert!(event.is_rejected());
+        event.debit_account_id = AccountId::from_u64(0);
+        let results = run(&mut event);
+        assert!(
+            matches!(results.get(&0).as_deref(), Some(TransactionResult::Rejected { .. })),
+            "zero debit_account_id must be rejected"
+        );
     }
 
     #[test]
-    fn nil_credit_account_id_is_rejected() {
+    fn zero_credit_account_id_is_rejected() {
         let mut event = make_valid_event();
-        event.credit_account_id = AccountId::from_bytes([0u8; 16]);
-        run(&mut event);
-        assert!(event.is_rejected());
+        event.credit_account_id = AccountId::from_u64(0);
+        let results = run(&mut event);
+        assert!(
+            matches!(results.get(&0).as_deref(), Some(TransactionResult::Rejected { .. })),
+            "zero credit_account_id must be rejected"
+        );
     }
 
     #[test]
     fn self_transfer_is_rejected() {
         let mut event = make_valid_event();
         event.credit_account_id = event.debit_account_id;
-        run(&mut event);
-        assert!(event.is_rejected());
+        let results = run(&mut event);
+        assert!(
+            matches!(results.get(&0).as_deref(), Some(TransactionResult::Rejected { .. })),
+            "self-transfer must be rejected"
+        );
     }
 
     #[test]
     fn zero_amount_is_rejected() {
         let mut event = make_valid_event();
-        let usd = parse_currency("USD").unwrap();
-        event.amount = Amount::zero(usd);
-        run(&mut event);
-        assert!(event.is_rejected());
+        event.amount_units = 0;
+        let results = run(&mut event);
+        assert!(
+            matches!(results.get(&0).as_deref(), Some(TransactionResult::Rejected { .. })),
+            "zero amount_units must be rejected"
+        );
     }
 
     #[test]
     fn already_rejected_event_is_not_double_rejected() {
+        use blazil_common::error::BlazerError;
+
         let mut event = make_valid_event();
-        // Pre-set a rejection
-        event.result = Some(TransactionResult::Rejected {
-            reason: BlazerError::ValidationError("upstream".into()),
-        });
-        let original_msg = match &event.result {
+        // Pre-set a rejection in the results map before running validation.
+        let results: Arc<DashMap<i64, TransactionResult>> = Arc::new(DashMap::new());
+        results.insert(
+            0,
+            TransactionResult::Rejected {
+                reason: BlazerError::ValidationError("upstream".into()),
+            },
+        );
+        let original_msg = match results.get(&0).as_deref() {
             Some(TransactionResult::Rejected { reason }) => reason.to_string(),
-            _ => panic!(),
+            _ => panic!("expected pre-set rejection"),
         };
-        run(&mut event);
-        // Result must be unchanged
-        let current_msg = match &event.result {
+
+        ValidationHandler::new(Arc::clone(&results)).on_event(&mut event, 0, true);
+
+        // Result must be unchanged — ValidationHandler must not overwrite.
+        let current_msg = match results.get(&0).as_deref() {
             Some(TransactionResult::Rejected { reason }) => reason.to_string(),
-            _ => panic!(),
+            _ => panic!("expected rejection after re-run"),
         };
-        assert_eq!(original_msg, current_msg);
+        assert_eq!(original_msg, current_msg, "pre-existing rejection must not be overwritten");
     }
 }

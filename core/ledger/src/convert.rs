@@ -150,7 +150,7 @@ pub fn minor_units_to_amount(minor_units: u128, currency: Currency) -> BlazerRes
 
 // ── ID conversions ────────────────────────────────────────────────────────────
 
-/// Converts an [`AccountId`] to a TigerBeetle `u128` identifier (big-endian).
+/// Converts an [`AccountId`] to a TigerBeetle `u128` identifier.
 ///
 /// # Examples
 ///
@@ -163,10 +163,10 @@ pub fn minor_units_to_amount(minor_units: u128, currency: Currency) -> BlazerRes
 /// assert_eq!(u128_to_account_id(raw), id);
 /// ```
 pub fn account_id_to_u128(id: &AccountId) -> u128 {
-    u128::from_be_bytes(*id.as_uuid().as_bytes())
+    id.as_u64() as u128
 }
 
-/// Reconstructs an [`AccountId`] from a TigerBeetle `u128` (big-endian).
+/// Reconstructs an [`AccountId`] from a TigerBeetle `u128`.
 ///
 /// # Examples
 ///
@@ -178,7 +178,7 @@ pub fn account_id_to_u128(id: &AccountId) -> u128 {
 /// assert_eq!(u128_to_account_id(account_id_to_u128(&id)), id);
 /// ```
 pub fn u128_to_account_id(raw: u128) -> AccountId {
-    AccountId::from_bytes(raw.to_be_bytes())
+    AccountId::from_u64(raw as u64)
 }
 
 /// Converts a [`TransferId`] to a TigerBeetle `u128` identifier (big-endian).
@@ -228,7 +228,44 @@ pub fn ledger_id_to_u32(id: &LedgerId) -> u32 {
     id.value()
 }
 
-/// Converts a [`TransactionId`] to a TigerBeetle `u128` identifier (big-endian).
+/// Maps a [`LedgerId`] to its corresponding [`Currency`].
+///
+/// Used when reconstructing a rich `Amount` from a raw `amount_units: u64` at
+/// the ledger handler boundary.
+///
+/// # Errors
+///
+/// Returns [`BlazerError::ValidationError`] for any unrecognised ledger id.
+///
+/// # Examples
+///
+/// ```rust
+/// use blazil_ledger::convert::ledger_id_to_currency;
+/// use blazil_common::ids::LedgerId;
+///
+/// let c = ledger_id_to_currency(&LedgerId::USD).unwrap();
+/// assert_eq!(c.code(), "USD");
+/// ```
+pub fn ledger_id_to_currency(id: &LedgerId) -> BlazerResult<Currency> {
+    use std::str::FromStr;
+    let code = match id.value() {
+        1 => "USD",
+        2 => "EUR",
+        3 => "GBP",
+        4 => "JPY",
+        5 => "VND",
+        6 => "BTC",
+        7 => "ETH",
+        other => {
+            return Err(BlazerError::ValidationError(
+                format!("unknown ledger_id: {other}"),
+            ))
+        }
+    };
+    Currency::from_str(code).map_err(|_| BlazerError::ValidationError(format!("bad currency code: {code}")))
+}
+
+/// Converts a [`TransactionId`] to a TigerBeetle `u128` identifier.
 ///
 /// # Examples
 ///
@@ -240,7 +277,7 @@ pub fn ledger_id_to_u32(id: &LedgerId) -> u32 {
 /// let _ = transaction_id_to_u128(&id);
 /// ```
 pub fn transaction_id_to_u128(id: &TransactionId) -> u128 {
-    u128::from_be_bytes(*id.as_uuid().as_bytes())
+    id.as_u64() as u128
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -323,9 +360,9 @@ mod tests {
     }
 
     #[test]
-    fn u128_zero_yields_nil_account_id() {
+    fn u128_zero_yields_zero_account_id() {
         let id = u128_to_account_id(0);
-        assert!(id.as_uuid().is_nil());
+        assert!(id.is_zero());
     }
 
     #[test]

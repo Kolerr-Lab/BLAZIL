@@ -51,16 +51,16 @@ fn bench_single_tx_latency(c: &mut Criterion) {
     let amount = Amount::new(Decimal::new(1_00, 2), usd).expect("amount");
     let max_amount = Amount::new(Decimal::new(100_000_000_000, 2), usd).expect("max");
 
-    let (pipeline, runner) = PipelineBuilder::new()
-        .with_capacity(65_536)
-        .add_handler(ValidationHandler)
-        .add_handler(RiskHandler::new(max_amount))
-        .add_handler(LedgerHandler::new(client.clone(), rt.clone()))
-        .add_handler(PublishHandler::new())
+    let builder = PipelineBuilder::new().with_capacity(65_536);
+    let results = builder.results();
+    let (pipeline, runner) = builder
+        .add_handler(ValidationHandler::new(Arc::clone(&results)))
+        .add_handler(RiskHandler::new(max_amount, Arc::clone(&results)))
+        .add_handler(LedgerHandler::new(client.clone(), rt.clone(), Arc::clone(&results)))
+        .add_handler(PublishHandler::new(Arc::clone(&results)))
         .build()
         .expect("pipeline");
 
-    let rb = Arc::clone(pipeline.ring_buffer());
     let _handle = runner.run();
 
     let template = TransactionEvent::new(
@@ -84,8 +84,7 @@ fn bench_single_tx_latency(c: &mut Criterion) {
             };
             // Wait for this specific event to be processed (result written).
             loop {
-                let result = unsafe { &*rb.get(seq) }.result.clone();
-                if result.is_some() {
+                if results.contains_key(&seq) {
                     break;
                 }
                 std::hint::spin_loop();

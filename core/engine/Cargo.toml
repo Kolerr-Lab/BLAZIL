@@ -13,3 +13,4 @@ serde          = { workspace = true }
 thiserror      = { workspace = true }
 tracing        = { workspace = true }
 rust_decimal   = { version = "1", features = ["serde"] }
+dashmap        = "6.1"

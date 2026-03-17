@@ -1,23 +1,16 @@
 //! Publish / egress handler.
 //!
 //! [`PublishHandler`] is the **last** stage in the pipeline. It inspects the
-//! final [`TransactionResult`] and records it for downstream consumption
-//! (metrics, response callbacks, audit log, etc.).
+//! final [`TransactionResult`] from the results map and records it for downstream
+//! consumption (metrics, response callbacks, audit log, etc.).
 //!
 //! # Interaction with the batch LedgerHandler
 //!
 //! [`super::ledger::LedgerHandler`] defers result writes for all events in a
 //! batch except the last. When `PublishHandler` processes those earlier events
-//! their `result` field will be `None`. This handler buffers those events as
-//! raw pointers and flushes them at `end_of_batch` — by then `LedgerHandler`
-//! has written all results back to the ring buffer.
-//!
-//! # Safety invariant
-//!
-//! Deferred pointers are stored for ring buffer slots from **previous**
-//! `on_event` calls. Those slots remain valid until `gating_sequence` advances
-//! after the full batch loop completes. All accesses are on the single
-//! dedicated runner thread.
+//! their results may not yet be in the map. This handler buffers those sequence
+//! numbers and flushes them at `end_of_batch` — by then `LedgerHandler` has
+//! written all results to the map.
 //!
 //! # Responsibilities
 //!
@@ -26,9 +19,12 @@
 //!    trace. (Actual fan-out to subscribers is a later milestone.)
 //! 3. On `Rejected` — increment the rejected counter and emit a `debug!`
 //!    trace.
-//! 4. On `None` — defer (see batching note above). If seen at `end_of_batch`,
+//! 4. On missing result — defer (see batching note above). If seen at `end_of_batch`,
 //!    log an error (pipeline bug; LedgerHandler must always write before us).
 
+use std::sync::Arc;
+
+use dashmap::DashMap;
 use tracing::{debug, error};
 
 use crate::event::{TransactionEvent, TransactionResult};
@@ -40,23 +36,20 @@ use crate::handler::EventHandler;
 pub struct PublishHandler {
     published_count: u64,
     rejected_count: u64,
-    /// Ring buffer slot pointers for events whose `result` was `None` when
+    results: Arc<DashMap<i64, TransactionResult>>,
+    /// Sequence numbers for events whose results weren't in the map yet when
     /// `PublishHandler` first processed them. `LedgerHandler` writes results
-    /// back to these slots; we flush them at `end_of_batch`.
-    deferred: Vec<*mut TransactionEvent>,
+    /// to the map; we flush at `end_of_batch`.
+    deferred: Vec<i64>,
 }
-
-// SAFETY: `PublishHandler` runs exclusively on the dedicated Disruptor runner
-// thread.  Raw pointers in `deferred` are never sent to or accessed from any
-// other thread.
-unsafe impl Send for PublishHandler {}
 
 impl PublishHandler {
     /// Creates a new `PublishHandler`.
-    pub fn new() -> Self {
+    pub fn new(results: Arc<DashMap<i64, TransactionResult>>) -> Self {
         Self {
             published_count: 0,
             rejected_count: 0,
+            results,
             deferred: Vec::new(),
         }
     }
@@ -74,54 +67,56 @@ impl PublishHandler {
 
 impl Default for PublishHandler {
     fn default() -> Self {
-        Self::new()
+        Self::new(Arc::new(DashMap::new()))
     }
 }
 
 impl EventHandler for PublishHandler {
     fn on_event(&mut self, event: &mut TransactionEvent, sequence: i64, end_of_batch: bool) {
-        if event.flags.skip_publish {
+        if event.flags.skip_publish() {
             if end_of_batch {
                 self.flush_deferred();
             }
             return;
         }
 
-        match &event.result {
+        match self.results.get(&sequence) {
             None => {
                 // LedgerHandler deferred this event's result to a future batch
-                // flush.  Store a raw pointer; we'll process it at end_of_batch
-                // once LedgerHandler has written the result back.
-                //
-                // SAFETY: same invariant as LedgerHandler — previous-call slot,
-                // producer cannot reclaim until gating_sequence advances.
-                self.deferred.push(event as *mut _);
+                // flush. Store the sequence number; we'll process it at end_of_batch
+                // once LedgerHandler has written the result to the map.
+                self.deferred.push(sequence);
                 // Do NOT flush deferred here — results aren't ready until
                 // LedgerHandler fires its flush (which happens before us for
                 // the same event at end_of_batch).
                 return;
             }
-            Some(TransactionResult::Committed {
-                transfer_id,
-                timestamp,
-            }) => {
-                self.published_count += 1;
-                debug!(
-                    sequence,
-                    transaction_id = %event.transaction_id,
-                    %transfer_id,
-                    timestamp_ns = timestamp.as_nanos(),
-                    "PublishHandler: committed"
-                );
-            }
-            Some(TransactionResult::Rejected { reason }) => {
-                self.rejected_count += 1;
-                debug!(
-                    sequence,
-                    transaction_id = %event.transaction_id,
-                    error = %reason,
-                    "PublishHandler: rejected"
-                );
+            Some(result_ref) => {
+                let result = result_ref.value();
+                match result {
+                    TransactionResult::Committed {
+                        transfer_id,
+                        timestamp,
+                    } => {
+                        self.published_count += 1;
+                        debug!(
+                            sequence,
+                            transaction_id = %event.transaction_id,
+                            %transfer_id,
+                            timestamp_ns = timestamp.as_nanos(),
+                            "PublishHandler: committed"
+                        );
+                    }
+                    TransactionResult::Rejected { reason } => {
+                        self.rejected_count += 1;
+                        debug!(
+                            sequence,
+                            transaction_id = %event.transaction_id,
+                            error = %reason,
+                            "PublishHandler: rejected"
+                        );
+                    }
+                }
             }
         }
 
@@ -135,38 +130,38 @@ impl PublishHandler {
     /// Processes all deferred events whose results were written by
     /// `LedgerHandler` during this batch's flush.
     fn flush_deferred(&mut self) {
-        for ptr in self.deferred.drain(..) {
-            // SAFETY: ptr is a ring buffer slot from a previous on_event call.
-            // LedgerHandler has written its result before this flush runs
-            // (LedgerHandler precedes PublishHandler in the handler chain for
-            // the same event).
-            let event = unsafe { &*ptr };
-            match &event.result {
-                Some(TransactionResult::Committed {
-                    transfer_id,
-                    timestamp,
-                }) => {
-                    self.published_count += 1;
-                    debug!(
-                        transaction_id = %event.transaction_id,
-                        %transfer_id,
-                        timestamp_ns = timestamp.as_nanos(),
-                        "PublishHandler: committed (deferred batch)"
-                    );
-                }
-                Some(TransactionResult::Rejected { reason }) => {
-                    self.rejected_count += 1;
-                    debug!(
-                        transaction_id = %event.transaction_id,
-                        error = %reason,
-                        "PublishHandler: rejected (deferred batch)"
-                    );
+        for seq in self.deferred.drain(..) {
+            match self.results.get(&seq) {
+                Some(result_ref) => {
+                    let result = result_ref.value();
+                    match result {
+                        TransactionResult::Committed {
+                            transfer_id,
+                            timestamp,
+                        } => {
+                            self.published_count += 1;
+                            debug!(
+                                sequence = seq,
+                                %transfer_id,
+                                timestamp_ns = timestamp.as_nanos(),
+                                "PublishHandler: committed (deferred batch)"
+                            );
+                        }
+                        TransactionResult::Rejected { reason } => {
+                            self.rejected_count += 1;
+                            debug!(
+                                sequence = seq,
+                                error = %reason,
+                                "PublishHandler: rejected (deferred batch)"
+                            );
+                        }
+                    }
                 }
                 None => {
                     // LedgerHandler must always write a result before we flush.
                     // If we see None here it is a pipeline bug.
                     error!(
-                        transaction_id = %event.transaction_id,
+                        sequence = seq,
                         "PublishHandler: pipeline bug — deferred event still has no result at flush"
                     );
                 }
@@ -175,27 +170,23 @@ impl PublishHandler {
     }
 }
 
-// ── tests ──────────────────────────────────────────────────────────────────────
-
 #[cfg(test)]
 mod tests {
-    use blazil_common::amount::Amount;
-    use blazil_common::currency::parse_currency;
-    use blazil_common::ids::{AccountId, LedgerId, TransactionId};
+    use std::sync::Arc;
+
+    use blazil_common::ids::{AccountId, LedgerId, TransactionId, TransferId};
     use blazil_common::timestamp::Timestamp;
-    use rust_decimal::Decimal;
+    use dashmap::DashMap;
 
     use super::*;
     use crate::event::TransactionEvent;
 
     fn make_event() -> TransactionEvent {
-        let usd = parse_currency("USD").unwrap();
-        let amount = Amount::new(Decimal::new(10_000, 2), usd).unwrap();
         TransactionEvent::new(
             TransactionId::new(),
             AccountId::new(),
             AccountId::new(),
-            amount,
+            10_000_u64, // $100.00 in cents
             LedgerId::USD,
             1,
         )
@@ -203,13 +194,17 @@ mod tests {
 
     #[test]
     fn skip_publish_flag_is_respected() {
-        let mut h = PublishHandler::new();
+        let results: Arc<DashMap<i64, TransactionResult>> = Arc::new(DashMap::new());
+        results.insert(
+            0,
+            TransactionResult::Committed {
+                transfer_id: TransferId::new(),
+                timestamp: Timestamp::now(),
+            },
+        );
+        let mut h = PublishHandler::new(Arc::clone(&results));
         let mut event = make_event();
-        event.flags.skip_publish = true;
-        event.result = Some(TransactionResult::Committed {
-            transfer_id: blazil_common::ids::TransferId::new(),
-            timestamp: Timestamp::now(),
-        });
+        event.flags.set_skip_publish(true);
         h.on_event(&mut event, 0, false);
         assert_eq!(h.published_count(), 0);
         assert_eq!(h.rejected_count(), 0);
@@ -217,12 +212,16 @@ mod tests {
 
     #[test]
     fn committed_event_increments_published_count() {
-        let mut h = PublishHandler::new();
+        let results: Arc<DashMap<i64, TransactionResult>> = Arc::new(DashMap::new());
+        results.insert(
+            1,
+            TransactionResult::Committed {
+                transfer_id: TransferId::new(),
+                timestamp: Timestamp::now(),
+            },
+        );
+        let mut h = PublishHandler::new(Arc::clone(&results));
         let mut event = make_event();
-        event.result = Some(TransactionResult::Committed {
-            transfer_id: blazil_common::ids::TransferId::new(),
-            timestamp: Timestamp::now(),
-        });
         h.on_event(&mut event, 1, true);
         assert_eq!(h.published_count(), 1);
         assert_eq!(h.rejected_count(), 0);
@@ -231,11 +230,15 @@ mod tests {
     #[test]
     fn rejected_event_increments_rejected_count() {
         use blazil_common::error::BlazerError;
-        let mut h = PublishHandler::new();
+        let results: Arc<DashMap<i64, TransactionResult>> = Arc::new(DashMap::new());
+        results.insert(
+            2,
+            TransactionResult::Rejected {
+                reason: BlazerError::ValidationError("test".into()),
+            },
+        );
+        let mut h = PublishHandler::new(Arc::clone(&results));
         let mut event = make_event();
-        event.result = Some(TransactionResult::Rejected {
-            reason: BlazerError::ValidationError("test".into()),
-        });
         h.on_event(&mut event, 2, false);
         assert_eq!(h.published_count(), 0);
         assert_eq!(h.rejected_count(), 1);
@@ -244,21 +247,32 @@ mod tests {
     #[test]
     fn multiple_events_accumulate_counts() {
         use blazil_common::error::BlazerError;
-        let mut h = PublishHandler::new();
+        let results: Arc<DashMap<i64, TransactionResult>> = Arc::new(DashMap::new());
+        for i in 0..5_i64 {
+            results.insert(
+                i,
+                TransactionResult::Committed {
+                    transfer_id: TransferId::new(),
+                    timestamp: Timestamp::now(),
+                },
+            );
+        }
+        for i in 5..8_i64 {
+            results.insert(
+                i,
+                TransactionResult::Rejected {
+                    reason: BlazerError::ValidationError("x".into()),
+                },
+            );
+        }
 
+        let mut h = PublishHandler::new(Arc::clone(&results));
         for i in 0..5_i64 {
             let mut e = make_event();
-            e.result = Some(TransactionResult::Committed {
-                transfer_id: blazil_common::ids::TransferId::new(),
-                timestamp: Timestamp::now(),
-            });
             h.on_event(&mut e, i, false);
         }
         for i in 5..8_i64 {
             let mut e = make_event();
-            e.result = Some(TransactionResult::Rejected {
-                reason: BlazerError::ValidationError("x".into()),
-            });
             h.on_event(&mut e, i, false);
         }
 

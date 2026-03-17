@@ -47,7 +47,9 @@ use std::time::{Duration, Instant};
 use blazil_common::ids::TransferId;
 use blazil_common::timestamp::Timestamp;
 use blazil_ledger::client::LedgerClient;
+use blazil_ledger::convert::{ledger_id_to_currency, minor_units_to_amount};
 use blazil_ledger::transfer::Transfer;
+use dashmap::DashMap;
 use tracing::{debug, error, info, warn};
 
 use crate::event::{TransactionEvent, TransactionResult};
@@ -75,20 +77,16 @@ const MAX_BATCH_AGE: Duration = Duration::from_millis(1);
 pub struct LedgerHandler<C: LedgerClient> {
     client: Arc<C>,
     runtime: Arc<tokio::runtime::Runtime>,
+    results: Arc<DashMap<i64, TransactionResult>>,
     /// Timestamp when the first transfer was added to the current batch.
     /// Used for time-based flush trigger.
     batch_started_at: Option<Instant>,
     /// Accumulated transfers waiting to be flushed.
     deferred_transfers: Vec<Transfer>,
-    /// Metadata for deferred events: (raw pointer to event, sequence number).
-    /// Pointers are valid because they reference previous `on_event` call slots
-    /// which remain valid until gating_sequence advances after the batch loop.
-    deferred_meta: Vec<(*mut TransactionEvent, i64)>,
+    /// Metadata for deferred events: sequence numbers only.
+    /// Results are written to the external results map after batch flush.
+    deferred_sequences: Vec<i64>,
 }
-
-// SAFETY: LedgerHandler runs exclusively on the dedicated Disruptor runner thread.
-// Raw pointers in `deferred_meta` are never sent to or accessed from any other thread.
-unsafe impl<C: LedgerClient> Send for LedgerHandler<C> {}
 
 impl<C: LedgerClient> LedgerHandler<C> {
     /// Creates a new `LedgerHandler`.
@@ -96,13 +94,19 @@ impl<C: LedgerClient> LedgerHandler<C> {
     /// - `client` — the [`LedgerClient`] that writes transfers to TigerBeetle.
     /// - `runtime` — a Tokio `Runtime` used to drive async calls synchronously
     ///   from the handler thread.
-    pub fn new(client: Arc<C>, runtime: Arc<tokio::runtime::Runtime>) -> Self {
+    /// - `results` — the shared results map where transaction outcomes are stored.
+    pub fn new(
+        client: Arc<C>,
+        runtime: Arc<tokio::runtime::Runtime>,
+        results: Arc<DashMap<i64, TransactionResult>>,
+    ) -> Self {
         Self {
             client,
             batch_started_at: None,
             runtime,
+            results,
             deferred_transfers: Vec::with_capacity(MAX_BATCH),
-            deferred_meta: Vec::with_capacity(MAX_BATCH),
+            deferred_sequences: Vec::with_capacity(MAX_BATCH),
         }
     }
 }
@@ -110,16 +114,34 @@ impl<C: LedgerClient> LedgerHandler<C> {
 impl<C: LedgerClient + 'static> EventHandler for LedgerHandler<C> {
     fn on_event(&mut self, event: &mut TransactionEvent, sequence: i64, end_of_batch: bool) {
         // Rule 1: skip if already rejected.
-        if event.result.is_some() {
+        if self.results.contains_key(&sequence) {
             return;
         }
+
+        // Reconstruct Amount from minor units + ledger currency at this boundary.
+        let amount = match ledger_id_to_currency(&event.ledger_id)
+            .and_then(|c| minor_units_to_amount(event.amount_units as u128, c))
+        {
+            Ok(a) => a,
+            Err(e) => {
+                error!(
+                    sequence,
+                    transaction_id = %event.transaction_id,
+                    error = %e,
+                    "LedgerHandler: failed to reconstruct Amount from amount_units"
+                );
+                self.results
+                    .insert(sequence, TransactionResult::Rejected { reason: e });
+                return;
+            }
+        };
 
         // Build a Transfer from the event fields.
         let transfer = match Transfer::new(
             TransferId::new(),
             event.debit_account_id,
             event.credit_account_id,
-            event.amount.clone(),
+            amount,
             event.ledger_id,
             event.code,
         ) {
@@ -131,7 +153,8 @@ impl<C: LedgerClient + 'static> EventHandler for LedgerHandler<C> {
                     error = %e,
                     "LedgerHandler: failed to construct Transfer"
                 );
-                event.result = Some(TransactionResult::Rejected { reason: e });
+                self.results
+                    .insert(sequence, TransactionResult::Rejected { reason: e });
                 return;
             }
         };
@@ -147,18 +170,14 @@ impl<C: LedgerClient + 'static> EventHandler for LedgerHandler<C> {
             end_of_batch || self.deferred_transfers.len() >= MAX_BATCH || batch_age_exceeded;
 
         if !should_flush {
-            // Defer: queue the transfer and store pointer to this ring buffer slot.
-            // SAFETY: `event` is a ring buffer slot from this `on_event` call.
-            // It remains valid until `gating_sequence` advances after this batch loop
-            // completes (after all handlers return). We write results back before that.
-
+            // Defer: queue the transfer and sequence number for batch flush.
             // Start batch timer on first deferred transfer
             if self.deferred_transfers.is_empty() {
                 self.batch_started_at = Some(Instant::now());
             }
 
             self.deferred_transfers.push(transfer);
-            self.deferred_meta.push((event as *mut _, sequence));
+            self.deferred_sequences.push(sequence);
             debug!(
                 sequence,
                 transaction_id = %event.transaction_id,
@@ -170,7 +189,7 @@ impl<C: LedgerClient + 'static> EventHandler for LedgerHandler<C> {
 
         // Flush: drain deferred queue, append current transfer, make one TB call.
         let prev_n = self.deferred_transfers.len();
-        let prev_meta = mem::take(&mut self.deferred_meta);
+        let prev_sequences = mem::take(&mut self.deferred_sequences);
         let mut all_transfers = mem::take(&mut self.deferred_transfers);
         all_transfers.push(transfer);
 
@@ -205,8 +224,8 @@ impl<C: LedgerClient + 'static> EventHandler for LedgerHandler<C> {
             info!(batch_size, tb_elapsed_ms, "LedgerHandler: batch committed");
         }
 
-        // Write results back to deferred slots via raw pointers.
-        for (i, (ptr, seq)) in prev_meta.iter().enumerate() {
+        // Write results to external map for deferred events.
+        for (i, seq) in prev_sequences.iter().enumerate() {
             let result = &results[i];
             let tr = match result {
                 Ok(transfer_id) => {
@@ -230,26 +249,22 @@ impl<C: LedgerClient + 'static> EventHandler for LedgerHandler<C> {
                 }
             };
 
-            // SAFETY: `ptr` points to a previous ring buffer slot. The producer cannot
-            // have reclaimed it yet (gating_sequence hasn't advanced). Single-threaded access.
-            unsafe {
-                (*(*ptr)).result = Some(tr);
-            }
+            self.results.insert(*seq, tr);
         }
 
-        // Write current event's result via live &mut reference (no aliasing issue).
+        // Write current event's result to external map.
         let current_result = &results[prev_n];
-        event.result = match current_result {
+        let tr = match current_result {
             Ok(transfer_id) => {
                 debug!(
                     sequence,
                     %transfer_id,
                     "LedgerHandler: current event committed"
                 );
-                Some(TransactionResult::Committed {
+                TransactionResult::Committed {
                     transfer_id: *transfer_id,
                     timestamp: Timestamp::now(),
-                })
+                }
             }
             Err(e) => {
                 debug!(
@@ -257,8 +272,10 @@ impl<C: LedgerClient + 'static> EventHandler for LedgerHandler<C> {
                     error = %e,
                     "LedgerHandler: current event rejected"
                 );
-                Some(TransactionResult::Rejected { reason: e.clone() })
+                TransactionResult::Rejected { reason: e.clone() }
             }
         };
+
+        self.results.insert(sequence, tr);
     }
 }

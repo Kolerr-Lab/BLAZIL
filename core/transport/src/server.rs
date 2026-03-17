@@ -33,11 +33,12 @@ use blazil_common::error::BlazerResult;
 /// use std::sync::Arc;
 /// use blazil_transport::server::TransportServer;
 /// use blazil_transport::tcp::TcpTransportServer;
-/// use blazil_engine::pipeline::Pipeline;
-/// use blazil_engine::ring_buffer::RingBuffer;
+/// use blazil_engine::pipeline::{Pipeline, PipelineBuilder};
+/// use blazil_engine::event::TransactionResult;
+/// use dashmap::DashMap;
 ///
-/// # async fn example(pipeline: Arc<Pipeline>, ring_buffer: Arc<RingBuffer>) {
-/// let server = TcpTransportServer::new("127.0.0.1:0", pipeline, ring_buffer, 1000);
+/// # async fn example(pipeline: Arc<Pipeline>, results: Arc<DashMap<i64, TransactionResult>>) {
+/// let server = TcpTransportServer::new("127.0.0.1:0", pipeline, results, 1000);
 /// let server = Arc::new(server);
 /// let s = Arc::clone(&server);
 /// tokio::spawn(async move { s.serve().await });

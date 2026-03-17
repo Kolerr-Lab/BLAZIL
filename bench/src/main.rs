@@ -7,10 +7,16 @@
 //! cargo run -p blazil-bench --release
 //! ```
 
+use std::mem::size_of;
+
 use blazil_bench::{
     report,
     scenarios::{pipeline_scenario, ring_buffer_scenario, tcp_scenario, tigerbeetle_scenario},
 };
+use blazil_common::timestamp::Timestamp;
+use blazil_engine::event::{EventFlags, TransactionEvent};
+use blazil_common::ids::{AccountId, LedgerId, TransactionId};
+use blazil_common::amount::Amount;
 
 #[tokio::main]
 async fn main() {
@@ -20,6 +26,28 @@ async fn main() {
         .try_init();
 
     println!("Starting Blazil benchmark suite...\n");
+
+    // ── Field size breakdown ─────────────────────────────────────────────────
+    println!("=== Field sizes ===");
+    println!("i64:           {} bytes", size_of::<i64>());
+    println!("TransactionId: {} bytes", size_of::<TransactionId>());
+    println!("AccountId:     {} bytes", size_of::<AccountId>());
+    println!("Amount:        {} bytes", size_of::<Amount>());
+    println!("LedgerId:      {} bytes", size_of::<LedgerId>());
+    println!("u16:           {} bytes", size_of::<u16>());
+    println!("EventFlags:    {} bytes", size_of::<EventFlags>());
+    println!("Timestamp:     {} bytes", size_of::<Timestamp>());
+    println!("TOTAL current: {} bytes", size_of::<TransactionEvent>());
+    println!();
+    
+    // ── Memory footprint analysis ────────────────────────────────────────────
+    let event_size = std::mem::size_of::<TransactionEvent>();
+    let ring_buffer_mb = (event_size * 1_000_000) / 1_024 / 1_024;
+    
+    println!("TransactionEvent size: {} bytes", event_size);
+    println!("RingBuffer total: {} MB", ring_buffer_mb);
+    println!();
+    
     println!("Events: ring_buffer=1M  pipeline=1M  tcp=10K  tb=10K");
     println!("Runs per scenario: 3 (median reported)\n");
 

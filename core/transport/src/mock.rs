@@ -154,7 +154,6 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use blazil_common::amount::Amount;
     use blazil_common::currency::parse_currency;
     use blazil_common::ids::{AccountId, LedgerId, TransactionId};
     use blazil_engine::handlers::ledger::LedgerHandler;
@@ -165,7 +164,6 @@ mod tests {
     use blazil_ledger::account::{Account, AccountFlags};
     use blazil_ledger::client::LedgerClient;
     use blazil_ledger::mock::InMemoryLedgerClient;
-    use rust_decimal::Decimal;
     use tokio::net::TcpStream;
 
     use super::*;
@@ -219,30 +217,26 @@ mod tests {
             client.create_account(acc).await.expect("credit account")
         };
 
-        let max_amount = Amount::new(
-            Decimal::new(100_000_000, 2),
-            parse_currency("USD").expect("USD"),
-        )
-        .expect("max amount");
+        let max_amount_units: u64 = 100_000_000_00_u64; // $1M in cents
 
-        let (pipeline, runner) = PipelineBuilder::new()
-            .with_capacity(1024)
-            .add_handler(ValidationHandler)
-            .add_handler(RiskHandler::new(max_amount))
-            .add_handler(LedgerHandler::new(Arc::clone(&client), Arc::clone(&rt)))
-            .add_handler(PublishHandler::new())
+        let builder = PipelineBuilder::new().with_capacity(1024);
+        let results = builder.results();
+        let (pipeline, runner) = builder
+            .add_handler(ValidationHandler::new(Arc::clone(&results)))
+            .add_handler(RiskHandler::new(max_amount_units, Arc::clone(&results)))
+            .add_handler(LedgerHandler::new(Arc::clone(&client), Arc::clone(&rt), Arc::clone(&results)))
+            .add_handler(PublishHandler::new(Arc::clone(&results)))
             .build()
             .expect("pipeline");
 
         let _runner_handle = runner.run();
 
         let pipeline = Arc::new(pipeline);
-        let ring_buffer = Arc::clone(pipeline.ring_buffer());
 
         let server = Arc::new(TcpTransportServer::new(
             "127.0.0.1:0",
             pipeline,
-            ring_buffer,
+            Arc::clone(&results),
             max_connections,
         ));
 

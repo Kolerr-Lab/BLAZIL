@@ -30,7 +30,6 @@ use std::env;
 use std::sync::Arc;
 use std::time::Instant;
 
-use blazil_common::amount::Amount;
 use blazil_common::currency::parse_currency;
 use blazil_common::ids::{AccountId, LedgerId, TransactionId};
 use blazil_engine::event::TransactionEvent;
@@ -58,9 +57,10 @@ async fn connect_tb(address: &str) -> TigerBeetleClient {
         .expect("failed to connect to TigerBeetle")
 }
 
-fn usd_amount(value: &str) -> Amount {
-    let usd = parse_currency("USD").unwrap();
-    Amount::new(Decimal::from_str_exact(value).unwrap(), usd).unwrap()
+/// Converts a USD decimal string like "250.00" to minor units (cents) as u64.
+fn usd_cents(value: &str) -> u64 {
+    let d = Decimal::from_str_exact(value).unwrap();
+    (d * Decimal::from(100u64)).try_into().expect("fits in u64")
 }
 
 /// Pre-creates two TigerBeetle accounts and returns (debit_id, credit_id).
@@ -134,11 +134,12 @@ fn e2e_successful_transaction() {
     let tb2 = Arc::new(rt.block_on(connect_tb(&address)));
     let tb3 = Arc::clone(&tb2); // kept for post-test verification
 
-    let ledger_handler = LedgerHandler::new(Arc::clone(&tb2), Arc::clone(&rt));
+    let builder = PipelineBuilder::new().with_capacity(1024);
+    let results = builder.results();
+    let ledger_handler = LedgerHandler::new(Arc::clone(&tb2), Arc::clone(&rt), Arc::clone(&results));
 
-    let (pipeline, runner) = PipelineBuilder::new()
-        .with_capacity(1024)
-        .add_handler(ValidationHandler)
+    let (pipeline, runner) = builder
+        .add_handler(ValidationHandler::new(Arc::clone(&results)))
         .add_handler(ledger_handler)
         .build()
         .expect("pipeline build failed");
@@ -151,7 +152,7 @@ fn e2e_successful_transaction() {
         TransactionId::new(),
         debit_id,
         credit_id,
-        usd_amount("250.00"),
+        usd_cents("250.00"),
         LedgerId::USD,
         1,
     );
@@ -219,11 +220,12 @@ fn e2e_rejected_transaction() {
     // Use an in-memory ledger to capture what actually reaches the LedgerHandler
     use blazil_ledger::mock::InMemoryLedgerClient;
     let mock = Arc::new(InMemoryLedgerClient::new());
-    let mock_handler = LedgerHandler::new(Arc::clone(&mock), Arc::clone(&rt));
+    let builder = PipelineBuilder::new().with_capacity(1024);
+    let results = builder.results();
+    let mock_handler = LedgerHandler::new(Arc::clone(&mock), Arc::clone(&rt), Arc::clone(&results));
 
-    let (pipeline, runner) = PipelineBuilder::new()
-        .with_capacity(1024)
-        .add_handler(ValidationHandler)
+    let (pipeline, runner) = builder
+        .add_handler(ValidationHandler::new(Arc::clone(&results)))
         .add_handler(mock_handler)
         .build()
         .expect("pipeline build failed");
@@ -231,13 +233,11 @@ fn e2e_rejected_transaction() {
     let handle = runner.run();
 
     // Publish a zero-amount event — ValidationHandler must reject before LedgerHandler
-    let usd = parse_currency("USD").unwrap();
-    let zero_amount = Amount::zero(usd);
     let event = TransactionEvent::new(
         TransactionId::new(),
         AccountId::new(),
         AccountId::new(),
-        zero_amount,
+        0_u64, // zero amount → rejected by ValidationHandler
         LedgerId::USD,
         1,
     );

@@ -8,11 +8,16 @@
 //!
 //! # Size budget
 //!
-//! The target is to fit within 2 CPU cache lines (128 bytes). Staying within
-//! this budget minimises cache misses as the event travels through the
-//! pipeline handlers.
+//! Target: **1 CPU cache line (64 bytes)**.
+//! Layout after optimisation:
+//!   6 × u64 (sequence, tx_id, debit, credit, amount_units, timestamp) = 48 B
+//!   1 × u32 (ledger_id)                                                =  4 B
+//!   1 × u16 (code)                                                     =  2 B
+//!   1 × u8  (flags bitfield)                                           =  1 B
+//!   padding                                                            =  1 B
+//!   ─────────────────────────────────────────────────────────────────────────
+//!   Total                                                              = 56 B  (< 64 B ✓)
 
-use blazil_common::amount::Amount;
 use blazil_common::error::BlazerError;
 use blazil_common::ids::{AccountId, LedgerId, TransactionId, TransferId};
 use blazil_common::timestamp::Timestamp;
@@ -21,7 +26,8 @@ use blazil_common::timestamp::Timestamp;
 
 /// Control flags for pipeline routing of a [`TransactionEvent`].
 ///
-/// All flags default to `false` (standard, unconstrained processing).
+/// Packed into a single `u8` bitfield so the full event fits in one cache
+/// line.  All flags default to `0` (standard, unconstrained processing).
 ///
 /// # Examples
 ///
@@ -29,18 +35,44 @@ use blazil_common::timestamp::Timestamp;
 /// use blazil_engine::event::EventFlags;
 ///
 /// let flags = EventFlags::default();
-/// assert!(!flags.requires_risk_check);
-/// assert!(!flags.is_pending);
-/// assert!(!flags.skip_publish);
+/// assert!(!flags.requires_risk_check());
+/// assert!(!flags.is_pending());
+/// assert!(!flags.skip_publish());
 /// ```
-#[derive(Debug, Clone, Default)]
-pub struct EventFlags {
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EventFlags(u8);
+
+impl EventFlags {
+    const RISK_CHECK:  u8 = 0b0000_0001;
+    const PENDING:     u8 = 0b0000_0010;
+    const SKIP_PUBLISH: u8 = 0b0000_0100;
+
     /// When `true`, the [`crate::handlers::risk::RiskHandler`] applies limits.
-    pub requires_risk_check: bool,
+    #[inline]
+    pub fn requires_risk_check(&self) -> bool { self.0 & Self::RISK_CHECK != 0 }
+    /// Set the risk-check flag.
+    #[inline]
+    pub fn set_requires_risk_check(&mut self, v: bool) {
+        if v { self.0 |= Self::RISK_CHECK; } else { self.0 &= !Self::RISK_CHECK; }
+    }
+
     /// When `true`, this is a two-phase (pending) transfer.
-    pub is_pending: bool,
+    #[inline]
+    pub fn is_pending(&self) -> bool { self.0 & Self::PENDING != 0 }
+    /// Set the pending flag.
+    #[inline]
+    pub fn set_is_pending(&mut self, v: bool) {
+        if v { self.0 |= Self::PENDING; } else { self.0 &= !Self::PENDING; }
+    }
+
     /// When `true`, the [`crate::handlers::publish::PublishHandler`] skips this event.
-    pub skip_publish: bool,
+    #[inline]
+    pub fn skip_publish(&self) -> bool { self.0 & Self::SKIP_PUBLISH != 0 }
+    /// Set the skip-publish flag.
+    #[inline]
+    pub fn set_skip_publish(&mut self, v: bool) {
+        if v { self.0 |= Self::SKIP_PUBLISH; } else { self.0 &= !Self::SKIP_PUBLISH; }
+    }
 }
 
 // ── TransactionResult ─────────────────────────────────────────────────────────
@@ -89,31 +121,25 @@ pub enum TransactionResult {
 ///
 /// # Size target
 ///
-/// Fit within 2 CPU cache lines (128 bytes) to minimise cache misses as the
-/// event travels through handlers.
+/// Fit within 1 CPU cache line (64 bytes) to minimise cache misses as the
+/// event travels through handlers. Current size: **56 bytes**.
 ///
 /// # Examples
 ///
 /// ```rust
 /// use blazil_engine::event::TransactionEvent;
 /// use blazil_common::ids::{AccountId, LedgerId, TransactionId};
-/// use blazil_common::amount::Amount;
-/// use blazil_common::currency::parse_currency;
-/// use rust_decimal::Decimal;
 ///
-/// let usd = parse_currency("USD").unwrap();
-/// let amount = Amount::new(Decimal::new(10_000, 2), usd).unwrap();
 /// let event = TransactionEvent::new(
 ///     TransactionId::new(),
 ///     AccountId::new(),
 ///     AccountId::new(),
-///     amount,
+///     100_00_u64,   // $100.00 in cents (minor units)
 ///     LedgerId::USD,
 ///     1,
 /// );
-/// assert!(event.result.is_none());
-/// assert!(!event.is_committed());
-/// assert!(!event.is_rejected());
+/// // sequence starts at -1 (unassigned)
+/// assert_eq!(event.sequence, -1);
 /// ```
 #[derive(Debug, Clone)]
 pub struct TransactionEvent {
@@ -129,8 +155,12 @@ pub struct TransactionEvent {
     /// Destination account (money arrives here).
     pub credit_account_id: AccountId,
 
-    /// Amount to transfer.
-    pub amount: Amount,
+    /// Amount in minor units (e.g. cents for USD, satoshis for BTC).
+    /// Validated to be > 0 by the validation handler.
+    pub amount_units: u64,
+
+    /// When this event entered the pipeline.
+    pub ingestion_timestamp: Timestamp,
 
     /// The ledger this transaction belongs to.
     pub ledger_id: LedgerId,
@@ -138,45 +168,36 @@ pub struct TransactionEvent {
     /// Application-level transaction type code.
     pub code: u16,
 
-    /// When this event entered the pipeline.
-    pub ingestion_timestamp: Timestamp,
-
-    /// Processing result — `None` until [`crate::handlers::ledger::LedgerHandler`] completes.
-    pub result: Option<TransactionResult>,
-
-    /// Flags for pipeline control.
+    /// Flags for pipeline control (bitfield).
     pub flags: EventFlags,
 }
 
 impl TransactionEvent {
-    /// Creates a new event with default flags and no result.
+    /// Creates a new event with default flags.
     ///
     /// `sequence` is set to `-1` (unassigned) and will be overwritten by the
     /// ring buffer when the event is published.
+    ///
+    /// `amount_units` must be in the minor unit of the ledger's currency
+    /// (e.g. cents for USD, satoshis for BTC).
     ///
     /// # Examples
     ///
     /// ```rust
     /// use blazil_engine::event::TransactionEvent;
     /// use blazil_common::ids::{AccountId, LedgerId, TransactionId};
-    /// use blazil_common::amount::Amount;
-    /// use blazil_common::currency::parse_currency;
-    /// use rust_decimal::Decimal;
     ///
-    /// let usd = parse_currency("USD").unwrap();
-    /// let amount = Amount::new(Decimal::new(50_00, 2), usd).unwrap();
     /// let event = TransactionEvent::new(
     ///     TransactionId::new(), AccountId::new(), AccountId::new(),
-    ///     amount, LedgerId::USD, 1,
+    ///     50_00_u64, LedgerId::USD, 1,
     /// );
     /// assert_eq!(event.sequence, -1);
-    /// assert!(event.result.is_none());
     /// ```
     pub fn new(
         transaction_id: TransactionId,
         debit_account_id: AccountId,
         credit_account_id: AccountId,
-        amount: Amount,
+        amount_units: u64,
         ledger_id: LedgerId,
         code: u16,
     ) -> Self {
@@ -185,70 +206,12 @@ impl TransactionEvent {
             transaction_id,
             debit_account_id,
             credit_account_id,
-            amount,
+            amount_units,
+            ingestion_timestamp: Timestamp::now(),
             ledger_id,
             code,
-            ingestion_timestamp: Timestamp::now(),
-            result: None,
             flags: EventFlags::default(),
         }
-    }
-
-    /// Returns `true` if this event has a `Committed` result.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use blazil_engine::event::{TransactionEvent, TransactionResult};
-    /// use blazil_common::ids::{AccountId, LedgerId, TransactionId, TransferId};
-    /// use blazil_common::amount::Amount;
-    /// use blazil_common::currency::parse_currency;
-    /// use blazil_common::timestamp::Timestamp;
-    /// use rust_decimal::Decimal;
-    ///
-    /// let usd = parse_currency("USD").unwrap();
-    /// let amount = Amount::new(Decimal::new(10_00, 2), usd).unwrap();
-    /// let mut event = TransactionEvent::new(
-    ///     TransactionId::new(), AccountId::new(), AccountId::new(),
-    ///     amount, LedgerId::USD, 1,
-    /// );
-    /// assert!(!event.is_committed());
-    /// event.result = Some(TransactionResult::Committed {
-    ///     transfer_id: TransferId::new(),
-    ///     timestamp: Timestamp::now(),
-    /// });
-    /// assert!(event.is_committed());
-    /// ```
-    pub fn is_committed(&self) -> bool {
-        matches!(self.result, Some(TransactionResult::Committed { .. }))
-    }
-
-    /// Returns `true` if this event has a `Rejected` result.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use blazil_engine::event::{TransactionEvent, TransactionResult};
-    /// use blazil_common::ids::{AccountId, LedgerId, TransactionId};
-    /// use blazil_common::amount::Amount;
-    /// use blazil_common::currency::parse_currency;
-    /// use blazil_common::error::BlazerError;
-    /// use rust_decimal::Decimal;
-    ///
-    /// let usd = parse_currency("USD").unwrap();
-    /// let amount = Amount::new(Decimal::new(10_00, 2), usd).unwrap();
-    /// let mut event = TransactionEvent::new(
-    ///     TransactionId::new(), AccountId::new(), AccountId::new(),
-    ///     amount, LedgerId::USD, 1,
-    /// );
-    /// assert!(!event.is_rejected());
-    /// event.result = Some(TransactionResult::Rejected {
-    ///     reason: BlazerError::ValidationError("test".into()),
-    /// });
-    /// assert!(event.is_rejected());
-    /// ```
-    pub fn is_rejected(&self) -> bool {
-        matches!(self.result, Some(TransactionResult::Rejected { .. }))
     }
 }
 
@@ -257,27 +220,16 @@ impl TransactionEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use blazil_common::amount::Amount;
-    use blazil_common::currency::parse_currency;
-    use rust_decimal::Decimal;
 
     fn make_event() -> TransactionEvent {
-        let usd = parse_currency("USD").unwrap();
-        let amount = Amount::new(Decimal::new(10_000, 2), usd).unwrap();
         TransactionEvent::new(
             TransactionId::new(),
             AccountId::new(),
             AccountId::new(),
-            amount,
+            10_000_u64, // 100.00 USD in cents
             LedgerId::USD,
             1,
         )
-    }
-
-    #[test]
-    fn new_sets_result_to_none() {
-        let event = make_event();
-        assert!(event.result.is_none());
     }
 
     #[test]
@@ -293,41 +245,33 @@ mod tests {
     }
 
     #[test]
-    fn is_committed_false_on_new_event() {
-        assert!(!make_event().is_committed());
-    }
-
-    #[test]
-    fn is_rejected_false_on_new_event() {
-        assert!(!make_event().is_rejected());
-    }
-
-    #[test]
-    fn is_committed_true_after_setting_committed_result() {
-        let mut event = make_event();
-        event.result = Some(TransactionResult::Committed {
-            transfer_id: TransferId::new(),
-            timestamp: Timestamp::now(),
-        });
-        assert!(event.is_committed());
-        assert!(!event.is_rejected());
-    }
-
-    #[test]
-    fn is_rejected_true_after_setting_rejected_result() {
-        let mut event = make_event();
-        event.result = Some(TransactionResult::Rejected {
-            reason: BlazerError::ValidationError("test".into()),
-        });
-        assert!(event.is_rejected());
-        assert!(!event.is_committed());
-    }
-
-    #[test]
-    fn default_flags_are_all_false() {
+    fn default_flags_are_all_unset() {
         let flags = EventFlags::default();
-        assert!(!flags.requires_risk_check);
-        assert!(!flags.is_pending);
-        assert!(!flags.skip_publish);
+        assert!(!flags.requires_risk_check());
+        assert!(!flags.is_pending());
+        assert!(!flags.skip_publish());
+    }
+
+    #[test]
+    fn flags_setters_roundtrip() {
+        let mut flags = EventFlags::default();
+        flags.set_requires_risk_check(true);
+        assert!(flags.requires_risk_check());
+        assert!(!flags.is_pending());
+        flags.set_is_pending(true);
+        assert!(flags.is_pending());
+        flags.set_requires_risk_check(false);
+        assert!(!flags.requires_risk_check());
+        assert!(flags.is_pending());
+    }
+
+    #[test]
+    fn event_size_fits_one_cache_line() {
+        use std::mem::size_of;
+        assert!(
+            size_of::<TransactionEvent>() <= 64,
+            "TransactionEvent must fit in one cache line (64 bytes), got {}",
+            size_of::<TransactionEvent>()
+        );
     }
 }

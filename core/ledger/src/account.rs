@@ -270,9 +270,9 @@ impl Validate for Account {
     /// assert!(account.validate().is_ok());
     /// ```
     fn validate(&self) -> BlazerResult<()> {
-        if self.id.as_uuid().is_nil() {
+        if self.id.is_zero() {
             return Err(BlazerError::ValidationError(
-                "account id must not be the nil UUID".to_owned(),
+                "account id must not be zero".to_owned(),
             ));
         }
         if self.code == 0 {
@@ -360,10 +360,10 @@ mod tests {
     }
 
     #[test]
-    fn validate_fails_on_nil_id() {
+    fn validate_fails_on_zero_id() {
         let usd = parse_currency("USD").unwrap();
-        // Construct an account with a nil UUID via from_bytes
-        let nil_id = AccountId::from_bytes([0u8; 16]);
+        // Construct an account with the zero (nil) id.
+        let nil_id = AccountId::from_u64(0);
         let account = Account {
             id: nil_id,
             ledger_id: LedgerId::USD,
@@ -419,7 +419,7 @@ mod tests {
 
     #[test]
     fn from_str_yields_valid_id_for_account() {
-        let id = AccountId::from_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
-        assert_eq!(id.to_string(), "550e8400-e29b-41d4-a716-446655440000");
+        let id = AccountId::from_str("12345678901234567").unwrap();
+        assert_eq!(id.to_string(), "12345678901234567");
     }
 }

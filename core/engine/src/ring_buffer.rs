@@ -314,19 +314,13 @@ impl RingBuffer {
     /// slot is consumed. We need a concrete default to fill the Vec at
     /// allocation time.
     fn default_event() -> TransactionEvent {
-        use blazil_common::amount::Amount;
-        use blazil_common::currency::parse_currency;
         use blazil_common::ids::{AccountId, LedgerId, TransactionId};
 
-        // USD is guaranteed to exist in the iso_currency table.
-        // This allocation happens ONCE per slot at startup — not on the hot path.
-        let usd = parse_currency("USD").expect("USD currency must exist");
-        let zero = Amount::zero(usd);
         TransactionEvent::new(
             TransactionId::new(),
             AccountId::new(),
             AccountId::new(),
-            zero,
+            0_u64,
             LedgerId::USD,
             0,
         )
@@ -338,19 +332,14 @@ impl RingBuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use blazil_common::amount::Amount;
-    use blazil_common::currency::parse_currency;
     use blazil_common::ids::{AccountId, LedgerId, TransactionId};
-    use rust_decimal::Decimal;
 
     fn make_event() -> TransactionEvent {
-        let usd = parse_currency("USD").unwrap();
-        let amount = Amount::new(Decimal::new(10_000, 2), usd).unwrap();
         TransactionEvent::new(
             TransactionId::new(),
             AccountId::new(),
             AccountId::new(),
-            amount,
+            10_000_u64, // $100.00 in cents
             LedgerId::USD,
             1,
         )

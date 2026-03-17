@@ -29,8 +29,8 @@ use tracing::{error, info, warn};
 
 use blazil_common::error::{BlazerError, BlazerResult};
 use blazil_common::timestamp::Timestamp;
+use blazil_engine::event::TransactionResult;
 use blazil_engine::pipeline::Pipeline;
-use blazil_engine::ring_buffer::RingBuffer;
 
 use crate::connection::handle_connection;
 use crate::protocol::{serialize_response, Frame, TransactionResponse};
@@ -53,14 +53,15 @@ pub const DEFAULT_MAX_CONNECTIONS: u64 = 10_000;
 /// use std::sync::Arc;
 /// use blazil_transport::tcp::TcpTransportServer;
 /// use blazil_transport::server::TransportServer;
-/// use blazil_engine::pipeline::Pipeline;
-/// use blazil_engine::ring_buffer::RingBuffer;
+/// use blazil_engine::pipeline::{Pipeline, PipelineBuilder};
+/// use blazil_engine::event::TransactionResult;
+/// use dashmap::DashMap;
 ///
-/// # async fn example(pipeline: Arc<Pipeline>, ring_buffer: Arc<RingBuffer>) {
+/// # async fn example(pipeline: Arc<Pipeline>, results: Arc<DashMap<i64, TransactionResult>>) {
 /// let server = Arc::new(TcpTransportServer::new(
 ///     "127.0.0.1:0",
 ///     pipeline,
-///     ring_buffer,
+///     results,
 ///     100,
 /// ));
 /// let s = Arc::clone(&server);
@@ -71,7 +72,7 @@ pub const DEFAULT_MAX_CONNECTIONS: u64 = 10_000;
 pub struct TcpTransportServer {
     addr: String,
     pipeline: Arc<Pipeline>,
-    ring_buffer: Arc<RingBuffer>,
+    results: Arc<dashmap::DashMap<i64, TransactionResult>>,
     shutdown: Arc<AtomicBool>,
     active_connections: Arc<AtomicU64>,
     max_connections: u64,
@@ -88,18 +89,18 @@ impl TcpTransportServer {
     ///
     /// - `addr` — bind address (e.g. `"127.0.0.1:0"` or `"0.0.0.0:7878"`).
     /// - `pipeline` — shared engine pipeline.
-    /// - `ring_buffer` — shared ring buffer for result polling.
+    /// - `results` — shared results map for result polling.
     /// - `max_connections` — reject connections above this threshold.
     pub fn new(
         addr: &str,
         pipeline: Arc<Pipeline>,
-        ring_buffer: Arc<RingBuffer>,
+        results: Arc<dashmap::DashMap<i64, TransactionResult>>,
         max_connections: u64,
     ) -> Self {
         Self {
             addr: addr.to_owned(),
             pipeline,
-            ring_buffer,
+            results,
             shutdown: Arc::new(AtomicBool::new(false)),
             active_connections: Arc::new(AtomicU64::new(0)),
             max_connections,
@@ -177,11 +178,11 @@ impl TransportServer for TcpTransportServer {
             // ── Spawn connection task ─────────────────────────────────────
             self.active_connections.fetch_add(1, Ordering::Release);
             let pipeline = Arc::clone(&self.pipeline);
-            let ring_buffer = Arc::clone(&self.ring_buffer);
+            let results = Arc::clone(&self.results);
             let active = Arc::clone(&self.active_connections);
 
             tokio::spawn(async move {
-                if let Err(e) = handle_connection(stream, pipeline, ring_buffer, active).await {
+                if let Err(e) = handle_connection(stream, pipeline, results, active).await {
                     warn!(peer = %peer_addr, error = %e, "connection handler error");
                 }
             });

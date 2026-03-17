@@ -18,8 +18,10 @@
 //! use blazil_engine::pipeline::PipelineBuilder;
 //! use blazil_engine::handlers::validation::ValidationHandler;
 //!
-//! let (pipeline, runner) = PipelineBuilder::new()
-//!     .add_handler(ValidationHandler)
+//! let builder = PipelineBuilder::new();
+//! let results = builder.results();
+//! let (pipeline, runner) = builder
+//!     .add_handler(ValidationHandler::new(results))
 //!     .build()
 //!     .expect("valid capacity");
 //!

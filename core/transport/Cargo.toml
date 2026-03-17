@@ -28,6 +28,7 @@ tokio          = { workspace = true }
 serde          = { workspace = true }
 tracing        = { workspace = true }
 tracing-subscriber = { workspace = true }
+dashmap        = "6.1"
 thiserror      = { workspace = true }
 async-trait    = "0.1"
 axum           = "0.7"

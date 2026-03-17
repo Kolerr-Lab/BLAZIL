@@ -26,8 +26,10 @@
 //! use blazil_engine::pipeline::PipelineBuilder;
 //! use blazil_engine::handlers::validation::ValidationHandler;
 //!
-//! let (pipeline, runner) = PipelineBuilder::new()
-//!     .add_handler(ValidationHandler)
+//! let builder = PipelineBuilder::new();
+//! let results = builder.results();
+//! let (pipeline, runner) = builder
+//!     .add_handler(ValidationHandler::new(results))
 //!     .build()
 //!     .expect("valid capacity");
 //!
@@ -46,9 +48,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use blazil_common::error::{BlazerError, BlazerResult};
+use dashmap::DashMap;
 use tracing::instrument;
 
-use crate::event::TransactionEvent;
+use crate::event::{TransactionEvent, TransactionResult};
 use crate::handler::EventHandler;
 use crate::ring_buffer::RingBuffer;
 use crate::sequence::Sequence;
@@ -70,15 +73,17 @@ use crate::sequence::Sequence;
 /// use blazil_engine::pipeline::PipelineBuilder;
 /// use blazil_engine::handlers::validation::ValidationHandler;
 ///
-/// let (pipeline, runner) = PipelineBuilder::new()
-///     .with_capacity(1024)
-///     .add_handler(ValidationHandler)
+/// let builder = PipelineBuilder::new().with_capacity(1024);
+/// let results = builder.results();
+/// let (pipeline, runner) = builder
+///     .add_handler(ValidationHandler::new(results))
 ///     .build()
 ///     .unwrap();
 /// ```
 pub struct PipelineBuilder {
     capacity: usize,
     handlers: Vec<Box<dyn EventHandler>>,
+    results: Arc<DashMap<i64, TransactionResult>>,
 }
 
 impl PipelineBuilder {
@@ -87,6 +92,7 @@ impl PipelineBuilder {
         Self {
             capacity: 65_536,
             handlers: Vec::new(),
+            results: Arc::new(DashMap::new()),
         }
     }
 
@@ -94,6 +100,22 @@ impl PipelineBuilder {
     pub fn with_capacity(mut self, capacity: usize) -> Self {
         self.capacity = capacity;
         self
+    }
+
+    /// Supplies an external results map so handlers and the pipeline share
+    /// the same `Arc`.  Call this before adding handlers if you need to pass
+    /// the map to handler constructors.
+    pub fn with_results(mut self, results: Arc<DashMap<i64, TransactionResult>>) -> Self {
+        self.results = results;
+        self
+    }
+
+    /// Returns a clone of the shared results `Arc` stored in the builder.
+    ///
+    /// Use this when you need to pass the same map to handler constructors
+    /// before calling `build`.
+    pub fn results(&self) -> Arc<DashMap<i64, TransactionResult>> {
+        Arc::clone(&self.results)
     }
 
     /// Appends an [`EventHandler`] to the pipeline.
@@ -110,27 +132,21 @@ impl PipelineBuilder {
     ///
     /// Returns [`blazil_common::error::BlazerError::ValidationError`] if
     /// `capacity` is zero or not a power of two.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use blazil_engine::pipeline::PipelineBuilder;
-    /// use blazil_engine::handlers::validation::ValidationHandler;
-    ///
-    /// PipelineBuilder::new().add_handler(ValidationHandler).build().unwrap();
-    /// ```
     pub fn build(self) -> BlazerResult<(Pipeline, PipelineRunner)> {
         let ring_buffer = Arc::new(RingBuffer::new(self.capacity)?);
         let shutdown = Arc::new(AtomicBool::new(false));
+        let results = self.results;
 
         let pipeline = Pipeline {
             ring_buffer: Arc::clone(&ring_buffer),
             shutdown: Arc::clone(&shutdown),
+            results: Arc::clone(&results),
         };
         let runner = PipelineRunner {
             ring_buffer,
             handlers: self.handlers,
             shutdown,
+            results,
         };
 
         Ok((pipeline, runner))
@@ -153,9 +169,11 @@ impl Default for PipelineBuilder {
 ///
 /// `Pipeline` is `Clone` — multiple producers may share the same pipeline
 /// (but must coordinate externally to maintain the single-writer invariant).
+#[derive(Clone)]
 pub struct Pipeline {
     ring_buffer: Arc<RingBuffer>,
     shutdown: Arc<AtomicBool>,
+    results: Arc<DashMap<i64, TransactionResult>>,
 }
 
 impl Pipeline {
@@ -165,6 +183,15 @@ impl Pipeline {
     /// processed events.
     pub fn ring_buffer(&self) -> &Arc<RingBuffer> {
         &self.ring_buffer
+    }
+
+    /// Returns a reference to the results map.
+    ///
+    /// Transaction results are stored here by LedgerHandler, indexed by
+    /// sequence number. Handlers and consumers can look up results after
+    /// processing completes.
+    pub fn results(&self) -> &Arc<DashMap<i64, TransactionResult>> {
+        &self.results
     }
 
     /// Signals the runner to exit after finishing its current batch.
@@ -230,6 +257,8 @@ pub struct PipelineRunner {
     ring_buffer: Arc<RingBuffer>,
     handlers: Vec<Box<dyn EventHandler>>,
     shutdown: Arc<AtomicBool>,
+    #[allow(dead_code)]
+    results: Arc<DashMap<i64, TransactionResult>>,
 }
 
 impl PipelineRunner {
@@ -294,13 +323,10 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use blazil_common::amount::Amount;
-    use blazil_common::currency::parse_currency;
     use blazil_common::ids::{AccountId, LedgerId, TransactionId};
     use blazil_ledger::account::{Account, AccountFlags};
     use blazil_ledger::client::LedgerClient;
     use blazil_ledger::mock::InMemoryLedgerClient;
-    use rust_decimal::Decimal;
 
     use super::*;
     use crate::event::{EventFlags, TransactionResult};
@@ -321,6 +347,9 @@ mod tests {
     ) {
         let rt = Arc::new(tokio::runtime::Runtime::new().expect("tokio runtime"));
         let client = Arc::new(InMemoryLedgerClient::new());
+
+        use blazil_common::currency::parse_currency;
+
         let usd = parse_currency("USD").expect("USD");
 
         let debit_id = rt.block_on(async {
@@ -355,13 +384,11 @@ mod tests {
     }
 
     fn make_event(debit_id: AccountId, credit_id: AccountId) -> TransactionEvent {
-        let usd = parse_currency("USD").expect("USD");
-        let amount = Amount::new(Decimal::new(10_000, 2), usd).expect("amount");
         TransactionEvent::new(
             TransactionId::new(),
             debit_id,
             credit_id,
-            amount,
+            10_000_u64, // $100.00 in cents
             LedgerId::USD,
             1,
         )
@@ -371,18 +398,16 @@ mod tests {
         client: Arc<InMemoryLedgerClient>,
         runtime: Arc<tokio::runtime::Runtime>,
     ) -> (Pipeline, std::thread::JoinHandle<()>) {
-        let max_amount = Amount::new(
-            Decimal::new(100_000_000, 2),
-            parse_currency("USD").expect("USD"),
-        )
-        .expect("max amount");
+        // $1,000,000.00 in cents.
+        let max_amount_units: u64 = 100_000_000;
 
-        let (pipeline, runner) = PipelineBuilder::new()
-            .with_capacity(1024)
-            .add_handler(ValidationHandler)
-            .add_handler(RiskHandler::new(max_amount))
-            .add_handler(LedgerHandler::new(client, runtime))
-            .add_handler(PublishHandler::new())
+        let builder = PipelineBuilder::new().with_capacity(1024);
+        let results = builder.results();
+        let (pipeline, runner) = builder
+            .add_handler(ValidationHandler::new(Arc::clone(&results)))
+            .add_handler(RiskHandler::new(max_amount_units, Arc::clone(&results)))
+            .add_handler(LedgerHandler::new(client, runtime, Arc::clone(&results)))
+            .add_handler(PublishHandler::new(Arc::clone(&results)))
             .build()
             .expect("valid pipeline");
 
@@ -394,16 +419,14 @@ mod tests {
 
     /// Wait for the event slot to have a result, polling up to a deadline.
     fn wait_for_result(
-        ring_buffer: &Arc<RingBuffer>,
+        results: &Arc<DashMap<i64, TransactionResult>>,
         seq: i64,
         deadline: Duration,
     ) -> Option<TransactionResult> {
         let start = std::time::Instant::now();
         loop {
-            // SAFETY: we only read, and the runner is done writing when result is Some.
-            let result = unsafe { &*ring_buffer.get(seq) }.result.clone();
-            if result.is_some() {
-                return result;
+            if let Some(r) = results.get(&seq) {
+                return Some(r.value().clone());
             }
             if start.elapsed() >= deadline {
                 return None;
@@ -420,7 +443,7 @@ mod tests {
         let event = make_event(debit_id, credit_id);
         let seq = pipeline.publish_event(event).expect("publish");
 
-        let result = wait_for_result(pipeline.ring_buffer(), seq, Duration::from_secs(5));
+        let result = wait_for_result(pipeline.results(), seq, Duration::from_secs(5));
 
         pipeline.stop();
         handle.join().expect("runner panicked");
@@ -435,29 +458,28 @@ mod tests {
     #[test]
     fn transaction_with_nil_ids_is_rejected_by_validation() {
         // Use a pipeline with NO LedgerHandler so we don't need real accounts.
-        let (pipeline, runner) = PipelineBuilder::new()
-            .with_capacity(1024)
-            .add_handler(ValidationHandler)
-            .add_handler(PublishHandler::new())
+        let builder = PipelineBuilder::new().with_capacity(1024);
+        let results = builder.results();
+        let (pipeline, runner) = builder
+            .add_handler(ValidationHandler::new(Arc::clone(&results)))
+            .add_handler(PublishHandler::new(Arc::clone(&results)))
             .build()
             .expect("pipeline");
         let handle = runner.run();
 
-        // nil TransactionId — ValidationHandler rejects
-        let usd = parse_currency("USD").expect("USD");
-        let amount = Amount::new(Decimal::new(50_00, 2), usd).expect("amount");
+        // zero TransactionId — ValidationHandler rejects
         let mut event = TransactionEvent::new(
-            TransactionId::from_bytes([0u8; 16]), // nil UUID
+            TransactionId::from_u64(0), // zero = nil sentinel
             AccountId::new(),
             AccountId::new(),
-            amount,
+            50_00_u64, // $50.00
             LedgerId::USD,
             1,
         );
         event.sequence = -1;
 
         let seq = pipeline.publish_event(event).expect("publish");
-        let result = wait_for_result(pipeline.ring_buffer(), seq, Duration::from_secs(5));
+        let result = wait_for_result(pipeline.results(), seq, Duration::from_secs(5));
 
         pipeline.stop();
         handle.join().expect("runner panicked");
@@ -471,37 +493,30 @@ mod tests {
 
     #[test]
     fn transaction_over_risk_limit_is_rejected() {
-        let tiny_max =
-            Amount::new(Decimal::new(1_00, 2), parse_currency("USD").expect("USD")).expect("max");
-
-        let (pipeline, runner) = PipelineBuilder::new()
-            .with_capacity(1024)
-            .add_handler(ValidationHandler)
-            .add_handler(RiskHandler::new(tiny_max))
-            .add_handler(PublishHandler::new())
+        let builder = PipelineBuilder::new().with_capacity(1024);
+        let results = builder.results();
+        let (pipeline, runner) = builder
+            .add_handler(ValidationHandler::new(Arc::clone(&results)))
+            .add_handler(RiskHandler::new(1_00_u64, Arc::clone(&results))) // max = $1.00
+            .add_handler(PublishHandler::new(Arc::clone(&results)))
             .build()
             .expect("pipeline");
         let handle = runner.run();
 
-        let usd = parse_currency("USD").expect("USD");
         // Amount ($500) >> risk limit ($1)
-        let amount = Amount::new(Decimal::new(50_000, 2), usd).expect("amount");
         let mut event = TransactionEvent::new(
             TransactionId::new(),
             AccountId::new(),
             AccountId::new(),
-            amount,
+            50_000_u64, // $500.00
             LedgerId::USD,
             1,
         );
         // Flag as requiring risk check
-        event.flags = EventFlags {
-            requires_risk_check: true,
-            ..EventFlags::default()
-        };
+        event.flags.set_requires_risk_check(true);
 
         let seq = pipeline.publish_event(event).expect("publish");
-        let result = wait_for_result(pipeline.ring_buffer(), seq, Duration::from_secs(5));
+        let result = wait_for_result(pipeline.results(), seq, Duration::from_secs(5));
 
         pipeline.stop();
         handle.join().expect("runner panicked");
@@ -526,10 +541,10 @@ mod tests {
             seqs.push(seq);
         }
 
-        let rb = Arc::clone(pipeline.ring_buffer());
+        let results_map = Arc::clone(pipeline.results());
         let results: Vec<_> = seqs
             .iter()
-            .map(|&s| wait_for_result(&rb, s, Duration::from_secs(10)))
+            .map(|&s| wait_for_result(&results_map, s, Duration::from_secs(10)))
             .collect();
 
         pipeline.stop();
@@ -560,9 +575,10 @@ mod tests {
 
     #[test]
     fn builder_non_power_of_two_capacity_fails() {
-        let result = PipelineBuilder::new()
-            .with_capacity(1000)
-            .add_handler(ValidationHandler)
+        let builder = PipelineBuilder::new().with_capacity(1000);
+        let results = builder.results();
+        let result = builder
+            .add_handler(ValidationHandler::new(results))
             .build();
         assert!(result.is_err());
     }

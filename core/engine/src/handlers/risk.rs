@@ -6,13 +6,15 @@
 //!
 //! # Rules (applied in order)
 //!
-//! 1. Skip if `event.result` is already `Some` (already rejected upstream).
-//! 2. Skip if `event.flags.requires_risk_check == false`.
-//! 3. If `amount > max_transaction_amount` → reject with
+//! 1. Skip if result already exists in results map (already rejected upstream).
+//! 2. Skip if `event.flags.requires_risk_check()` returns `false`.
+//! 3. If `amount_units > max_amount_units` → reject with
 //!    `BlazerError::ValidationError("transaction exceeds maximum amount limit")`.
 
-use blazil_common::amount::Amount;
+use std::sync::Arc;
+
 use blazil_common::error::BlazerError;
+use dashmap::DashMap;
 use tracing::warn;
 
 use crate::event::{TransactionEvent, TransactionResult};
@@ -23,44 +25,48 @@ use crate::handler::EventHandler;
 /// Basic risk checks.
 ///
 /// Placeholder for ML-based scoring (Prompt #7+).
-/// Currently enforces a single configurable maximum transaction amount.
+/// Currently enforces a single configurable maximum transaction amount in
+/// minor units (e.g. cents for USD).
 ///
 /// # Examples
 ///
 /// ```rust
+/// use std::sync::Arc;
+/// use dashmap::DashMap;
 /// use blazil_engine::handlers::risk::RiskHandler;
 /// use blazil_engine::handler::EventHandler;
 /// use blazil_engine::event::TransactionEvent;
 /// use blazil_common::ids::{AccountId, LedgerId, TransactionId};
-/// use blazil_common::amount::Amount;
-/// use blazil_common::currency::parse_currency;
-/// use rust_decimal::Decimal;
 ///
-/// let usd = parse_currency("USD").unwrap();
-/// let max = Amount::new(Decimal::new(100_000_000, 2), usd.clone()).unwrap();
-/// let mut handler = RiskHandler::new(max);
+/// let results = Arc::new(DashMap::new());
+/// let max_cents = 100_000_000_u64; // $1,000,000.00
+/// let mut handler = RiskHandler::new(max_cents, Arc::clone(&results));
 ///
-/// let small = Amount::new(Decimal::new(10_00, 2), usd).unwrap();
 /// let mut event = TransactionEvent::new(
 ///     TransactionId::new(), AccountId::new(), AccountId::new(),
-///     small, LedgerId::USD, 1,
+///     10_00_u64, LedgerId::USD, 1,  // $10.00
 /// );
-/// event.flags.requires_risk_check = true;
+/// event.flags.set_requires_risk_check(true);
 /// handler.on_event(&mut event, 0, true);
-/// assert!(event.result.is_none()); // within limit
+/// assert!(!results.contains_key(&0)); // within limit
 /// ```
 pub struct RiskHandler {
-    max_transaction_amount: Amount,
+    max_amount_units: u64,
+    results: Arc<DashMap<i64, TransactionResult>>,
 }
 
 impl RiskHandler {
-    /// Creates a new `RiskHandler` with the given maximum transaction amount.
+    /// Creates a new `RiskHandler` with the given maximum amount in minor units.
     ///
-    /// Transactions whose `amount` exceeds `max_transaction_amount` are
-    /// rejected when `flags.requires_risk_check` is `true`.
-    pub fn new(max_transaction_amount: Amount) -> Self {
+    /// Transactions whose `amount_units` exceeds `max_amount_units` are
+    /// rejected when `flags.requires_risk_check()` is `true`.
+    pub fn new(
+        max_amount_units: u64,
+        results: Arc<DashMap<i64, TransactionResult>>,
+    ) -> Self {
         Self {
-            max_transaction_amount,
+            max_amount_units,
+            results,
         }
     }
 }
@@ -68,31 +74,32 @@ impl RiskHandler {
 impl EventHandler for RiskHandler {
     fn on_event(&mut self, event: &mut TransactionEvent, sequence: i64, _end_of_batch: bool) {
         // Rule 1: skip if already rejected.
-        if event.result.is_some() {
+        if self.results.contains_key(&sequence) {
             return;
         }
 
         // Rule 2: skip if risk check is not required for this event.
-        if !event.flags.requires_risk_check {
+        if !event.flags.requires_risk_check() {
             return;
         }
 
-        // Rule 3: reject if amount exceeds the configured limit.
-        // We compare values (ignoring currency — both should be in the same
-        // currency denomination as the limit; enforcement is at the caller).
-        if event.amount.value() > self.max_transaction_amount.value() {
+        // Rule 3: reject if amount_units exceeds the configured limit.
+        if event.amount_units > self.max_amount_units {
             warn!(
                 sequence,
                 transaction_id = %event.transaction_id,
-                amount = %event.amount.value(),
-                max = %self.max_transaction_amount.value(),
+                amount_units = event.amount_units,
+                max_units = self.max_amount_units,
                 "RiskHandler: transaction exceeds maximum amount limit"
             );
-            event.result = Some(TransactionResult::Rejected {
-                reason: BlazerError::ValidationError(
-                    "transaction exceeds maximum amount limit".into(),
-                ),
-            });
+            self.results.insert(
+                sequence,
+                TransactionResult::Rejected {
+                    reason: BlazerError::ValidationError(
+                        "transaction exceeds maximum amount limit".into(),
+                    ),
+                },
+            );
         }
     }
 }
@@ -101,84 +108,96 @@ impl EventHandler for RiskHandler {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use blazil_common::amount::Amount;
-    use blazil_common::currency::parse_currency;
-    use blazil_common::ids::{AccountId, LedgerId, TransactionId};
-    use rust_decimal::Decimal;
+    use std::sync::Arc;
 
-    fn make_handler() -> RiskHandler {
-        let usd = parse_currency("USD").unwrap();
-        let max = Amount::new(Decimal::new(100_000_000, 2), usd).unwrap();
-        RiskHandler::new(max)
+    use blazil_common::ids::{AccountId, LedgerId, TransactionId};
+    use dashmap::DashMap;
+
+    use super::*;
+
+    /// Max = $1,000,000.00 = 100_000_000 cents.
+    const MAX_CENTS: u64 = 100_000_000;
+
+    fn make_handler(results: Arc<DashMap<i64, TransactionResult>>) -> RiskHandler {
+        RiskHandler::new(MAX_CENTS, results)
     }
 
-    fn make_event_with_amount(cents: i64) -> TransactionEvent {
-        let usd = parse_currency("USD").unwrap();
-        let amount = Amount::new(Decimal::new(cents, 2), usd).unwrap();
+    fn make_event_with_units(amount_units: u64) -> TransactionEvent {
         let mut event = TransactionEvent::new(
             TransactionId::new(),
             AccountId::new(),
             AccountId::new(),
-            amount,
+            amount_units,
             LedgerId::USD,
             1,
         );
-        event.flags.requires_risk_check = true;
+        event.flags.set_requires_risk_check(true);
         event
     }
 
     #[test]
     fn amount_below_limit_result_remains_none() {
-        let mut handler = make_handler();
-        let mut event = make_event_with_amount(10_000); // $100
+        let results: Arc<DashMap<i64, TransactionResult>> = Arc::new(DashMap::new());
+        let mut handler = make_handler(Arc::clone(&results));
+        let mut event = make_event_with_units(10_000); // $100.00
         handler.on_event(&mut event, 0, true);
-        assert!(event.result.is_none());
+        assert!(!results.contains_key(&0), "below-limit amount must not produce a result");
     }
 
     #[test]
     fn amount_above_limit_is_rejected() {
-        let mut handler = make_handler();
-        // Max is $1,000,000 → $1,000,001 should be rejected
-        let mut event = make_event_with_amount(100_000_100);
+        let results: Arc<DashMap<i64, TransactionResult>> = Arc::new(DashMap::new());
+        let mut handler = make_handler(Arc::clone(&results));
+        // $1,000,000.01 → should be rejected
+        let mut event = make_event_with_units(MAX_CENTS + 1);
         handler.on_event(&mut event, 0, true);
-        assert!(event.is_rejected());
+        assert!(
+            matches!(results.get(&0).as_deref(), Some(TransactionResult::Rejected { .. })),
+            "over-limit amount must be rejected"
+        );
     }
 
     #[test]
     fn already_rejected_event_is_unchanged() {
-        let mut handler = make_handler();
-        let mut event = make_event_with_amount(100_000_100);
-        event.result = Some(TransactionResult::Rejected {
-            reason: BlazerError::ValidationError("upstream".into()),
-        });
-        let original = match &event.result {
+        use blazil_common::error::BlazerError;
+
+        let results: Arc<DashMap<i64, TransactionResult>> = Arc::new(DashMap::new());
+        results.insert(
+            0,
+            TransactionResult::Rejected {
+                reason: BlazerError::ValidationError("upstream".into()),
+            },
+        );
+        let original = match results.get(&0).as_deref() {
             Some(TransactionResult::Rejected { reason }) => reason.to_string(),
-            _ => panic!(),
+            _ => panic!("expected pre-set rejection"),
         };
+
+        let mut handler = make_handler(Arc::clone(&results));
+        let mut event = make_event_with_units(MAX_CENTS + 1);
         handler.on_event(&mut event, 0, true);
-        let current = match &event.result {
+
+        let current = match results.get(&0).as_deref() {
             Some(TransactionResult::Rejected { reason }) => reason.to_string(),
-            _ => panic!(),
+            _ => panic!("expected rejection after handler"),
         };
-        assert_eq!(original, current);
+        assert_eq!(original, current, "pre-existing rejection must not be overwritten");
     }
 
     #[test]
     fn risk_check_skipped_when_flag_is_false() {
-        let mut handler = make_handler();
-        let usd = parse_currency("USD").unwrap();
-        let amount = Amount::new(Decimal::new(99_999_999_900, 2), usd).unwrap();
+        let results: Arc<DashMap<i64, TransactionResult>> = Arc::new(DashMap::new());
+        let mut handler = make_handler(Arc::clone(&results));
         let mut event = TransactionEvent::new(
             TransactionId::new(),
             AccountId::new(),
             AccountId::new(),
-            amount,
+            MAX_CENTS + 1_000_000, // way over the limit
             LedgerId::USD,
             1,
         );
-        // requires_risk_check defaults to false
+        // requires_risk_check defaults to false → skip
         handler.on_event(&mut event, 0, true);
-        assert!(event.result.is_none()); // skipped
+        assert!(!results.contains_key(&0), "risk check skipped when flag is false");
     }
 }

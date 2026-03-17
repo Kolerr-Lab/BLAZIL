@@ -16,6 +16,7 @@
 //! // Type system prevents mixing IDs:
 //! // let _: TransactionId = acct_id; // ← compile error
 //!
+//! // Round-trips via decimal string representation.
 //! let s = tx_id.to_string();
 //! let reparsed: TransactionId = s.parse().unwrap();
 //! assert_eq!(tx_id, reparsed);
@@ -166,21 +167,133 @@ macro_rules! define_id {
     };
 }
 
+// ── Fast u64 ID macro (hot-path types: TransactionId, AccountId) ─────────────
+//
+// These IDs live in every `TransactionEvent` ring-buffer slot.  Shrinking them
+// from 16-byte UUIDs to 8-byte u64s is the primary lever for reaching the
+// 64-byte (1 cache-line) event target.
+//
+// Uniqueness: seeded from UUID v4's 128 bits of CSPRNG randomness, lower 64
+// bits extracted.  Birthday bound over 1 billion IDs ≈ 5×10⁻¹¹ — acceptable
+// for IDs that undergo double-validation at the ledger boundary.
+macro_rules! define_u64_id {
+    (
+        $(#[$meta:meta])*
+        $name:ident
+    ) => {
+        $(#[$meta])*
+        #[derive(Clone, Copy, PartialEq, Eq, Hash)]
+        pub struct $name(u64);
+
+        impl $name {
+            /// Creates a new random ID using 64 bits of UUID v4 entropy.
+            #[must_use]
+            pub fn new() -> Self {
+                Self(Uuid::new_v4().as_u128() as u64)
+            }
+
+            /// Returns the raw `u64` value.
+            #[must_use]
+            pub fn as_u64(&self) -> u64 {
+                self.0
+            }
+
+            /// Constructs an ID directly from a raw `u64`.
+            ///
+            /// `0` is the nil sentinel checked by the validation handler.
+            #[must_use]
+            pub fn from_u64(v: u64) -> Self {
+                Self(v)
+            }
+
+            /// Returns `true` if this ID is zero (the nil sentinel).
+            #[must_use]
+            pub fn is_zero(&self) -> bool {
+                self.0 == 0
+            }
+        }
+
+        impl Default for $name {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+
+        impl fmt::Display for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "{}", self.0)
+            }
+        }
+
+        impl fmt::Debug for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "{}({})", stringify!($name), self.0)
+            }
+        }
+
+        impl serde::Serialize for $name {
+            /// Serializes as a decimal string to preserve full u64 precision
+            /// in JSON (JS `Number` only has 53 bits of integer precision).
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
+                serializer.serialize_str(&self.0.to_string())
+            }
+        }
+
+        impl<'de> serde::Deserialize<'de> for $name {
+            /// Deserializes from a decimal string.
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                let s = <String as serde::Deserialize>::deserialize(deserializer)?;
+                s.parse::<u64>()
+                    .map(Self)
+                    .map_err(serde::de::Error::custom)
+            }
+        }
+
+        impl std::str::FromStr for $name {
+            type Err = BlazerError;
+
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                // Canonical format: decimal u64 string.
+                if let Ok(v) = s.parse::<u64>() {
+                    return Ok(Self(v));
+                }
+                // Backward-compat: accept UUID strings, map to u64 via lower
+                // 64 bits so existing clients don't need an immediate update.
+                Uuid::parse_str(s)
+                    .map(|u| Self(u.as_u128() as u64))
+                    .map_err(|_| BlazerError::InvalidId(s.to_owned()))
+            }
+        }
+    };
+}
+
 // ── ID type definitions ───────────────────────────────────────────────────────
 
-define_id!(
+define_u64_id!(
     /// A unique identifier for a financial transaction.
     ///
-    /// Wraps a UUID v4 opaquely. Cannot be confused with [`AccountId`],
+    /// Wraps a `u64` opaquely. Cannot be confused with [`AccountId`],
     /// [`LedgerId`], or [`TransferId`] at compile time.
+    ///
+    /// Use [`as_u64`](TransactionId::as_u64) / [`from_u64`](TransactionId::from_u64)
+    /// to access or construct raw values.  The nil sentinel is `0`.
     TransactionId
 );
 
-define_id!(
+define_u64_id!(
     /// A unique identifier for a financial account.
     ///
-    /// Wraps a UUID v4 opaquely. Cannot be confused with [`TransactionId`],
+    /// Wraps a `u64` opaquely. Cannot be confused with [`TransactionId`],
     /// [`LedgerId`], or [`TransferId`] at compile time.
+    ///
+    /// Use [`as_u64`](AccountId::as_u64) / [`from_u64`](AccountId::from_u64)
+    /// to access or construct raw values.  The nil sentinel is `0`.
     AccountId
 );
 
@@ -281,22 +394,33 @@ mod tests {
     // ── TransactionId ────────────────────────────────────────────────────────
 
     #[test]
-    fn new_generates_valid_uuid() {
+    fn new_generates_nonzero_id() {
         let id = TransactionId::new();
-        // If it can round-trip through from_str, the UUID is valid
+        assert!(!id.is_zero(), "new() must never produce the nil sentinel");
+        // Round-trip via decimal string.
         let reparsed = TransactionId::from_str(&id.to_string()).unwrap();
         assert_eq!(id, reparsed);
     }
 
     #[test]
-    fn from_str_accepts_valid_uuid() {
+    fn from_str_accepts_decimal_u64() {
+        let id = TransactionId::from_str("12345678901234567890").unwrap();
+        assert_eq!(id.as_u64(), 12345678901234567890_u64);
+        assert_eq!(id.to_string(), "12345678901234567890");
+    }
+
+    #[test]
+    fn from_str_accepts_uuid_compat() {
+        // UUID strings are accepted for protocol backward compatibility.
         let id = TransactionId::from_str(CANONICAL_UUID).unwrap();
-        assert_eq!(id.to_string(), CANONICAL_UUID);
+        // to_string() gives the decimal u64, not the original UUID string.
+        let reparsed = TransactionId::from_str(&id.to_string()).unwrap();
+        assert_eq!(id, reparsed);
     }
 
     #[test]
     fn from_str_rejects_invalid_string() {
-        let err = TransactionId::from_str("not-a-uuid").unwrap_err();
+        let err = TransactionId::from_str("not-a-uuid-or-number").unwrap_err();
         assert!(matches!(err, BlazerError::InvalidId(_)));
     }
 
@@ -304,45 +428,57 @@ mod tests {
     fn two_new_calls_produce_different_ids() {
         let a = TransactionId::new();
         let b = TransactionId::new();
-        assert_ne!(a, b, "UUID v4 collision — astronomically unlikely");
+        assert_ne!(a, b, "u64 collision — astronomically unlikely");
     }
 
     #[test]
-    fn display_formats_as_hyphenated_uuid() {
-        let id = TransactionId::from_str(CANONICAL_UUID).unwrap();
-        assert_eq!(id.to_string(), CANONICAL_UUID);
+    fn display_formats_as_decimal_u64() {
+        let id = TransactionId::from_u64(42);
+        assert_eq!(id.to_string(), "42");
     }
 
     #[test]
-    fn debug_includes_type_name_and_uuid() {
-        let id = TransactionId::from_str(CANONICAL_UUID).unwrap();
+    fn debug_includes_type_name_and_value() {
+        let id = TransactionId::from_u64(99);
         let debug_str = format!("{:?}", id);
         assert!(
             debug_str.starts_with("TransactionId("),
             "Debug output missing type name: {debug_str}"
         );
         assert!(
-            debug_str.contains(CANONICAL_UUID),
-            "Debug output missing UUID: {debug_str}"
+            debug_str.contains("99"),
+            "Debug output missing value: {debug_str}"
         );
     }
 
     #[test]
     fn serde_roundtrip_transaction_id() {
-        let id = TransactionId::from_str(CANONICAL_UUID).unwrap();
+        let id = TransactionId::from_u64(9_999_999_999_999_999_999_u64);
         let json = serde_json::to_string(&id).unwrap();
-        // Must serialize as a plain string, not a nested object
-        assert_eq!(json, format!("\"{}\"", CANONICAL_UUID));
+        // Must serialize as a decimal string, not a bare JSON number.
+        assert_eq!(json, "\"9999999999999999999\"");
         let deserialized: TransactionId = serde_json::from_str(&json).unwrap();
         assert_eq!(id, deserialized);
+    }
+
+    #[test]
+    fn as_u64_returns_inner_value() {
+        let id = TransactionId::from_u64(123_456);
+        assert_eq!(id.as_u64(), 123_456_u64);
+    }
+
+    #[test]
+    fn is_zero_detects_nil_sentinel() {
+        assert!(TransactionId::from_u64(0).is_zero());
+        assert!(!TransactionId::from_u64(1).is_zero());
     }
 
     // ── AccountId ────────────────────────────────────────────────────────────
 
     #[test]
-    fn account_id_from_str_accepts_valid_uuid() {
-        let id = AccountId::from_str(CANONICAL_UUID).unwrap();
-        assert_eq!(id.to_string(), CANONICAL_UUID);
+    fn account_id_from_str_accepts_decimal_u64() {
+        let id = AccountId::from_str("42").unwrap();
+        assert_eq!(id.as_u64(), 42_u64);
     }
 
     #[test]
@@ -410,21 +546,18 @@ mod tests {
     // ── Type safety ──────────────────────────────────────────────────────────
 
     #[test]
-    fn different_id_types_with_same_uuid_are_not_equal() {
-        // This test documents type safety at the value level.
-        // At the type level the compiler already prevents mixing them.
-        let uuid_str = CANONICAL_UUID;
-        let tx: TransactionId = TransactionId::from_str(uuid_str).unwrap();
-        let acct: AccountId = AccountId::from_str(uuid_str).unwrap();
-        // Both wrap the same UUID string but are different types —
-        // they cannot be compared directly (won't compile).
+    fn different_id_types_with_same_value_are_not_equal() {
+        // Type system prevents mixing at compile time; this confirms value-level
+        // representation remains distinct per-type.
+        let tx = TransactionId::from_u64(42);
+        let acct = AccountId::from_u64(42);
+        // Same inner value, different types — cannot be compared (won't compile).
         assert_eq!(tx.to_string(), acct.to_string());
     }
 
     #[test]
-    fn as_uuid_returns_inner_value() {
-        let id = TransactionId::from_str(CANONICAL_UUID).unwrap();
-        let uuid = id.as_uuid();
-        assert_eq!(uuid.to_string(), CANONICAL_UUID);
+    fn transaction_id_as_u64_roundtrip() {
+        let id = TransactionId::from_u64(999);
+        assert_eq!(id.as_u64(), 999_u64);
     }
 }

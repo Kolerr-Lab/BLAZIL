@@ -155,14 +155,22 @@ impl BackpressureGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use blazil_common::amount::Amount;
-    use blazil_common::currency::parse_currency;
     use blazil_common::ids::{AccountId, LedgerId, TransactionId};
     use blazil_engine::event::TransactionEvent;
-    use rust_decimal::Decimal;
 
     fn make_ring_buffer(capacity: usize) -> Arc<RingBuffer> {
         Arc::new(RingBuffer::new(capacity).unwrap())
+    }
+
+    fn make_event() -> TransactionEvent {
+        TransactionEvent::new(
+            TransactionId::new(),
+            AccountId::new(),
+            AccountId::new(),
+            1_00_u64, // $1.00 in cents
+            LedgerId::USD,
+            1,
+        )
     }
 
     #[test]
@@ -186,17 +194,8 @@ mod tests {
         let guard = BackpressureGuard::new(Arc::clone(&rb), 0.75);
 
         // Publish 12 events (75% of 16) — should be exactly at watermark.
-        let usd = parse_currency("USD").unwrap();
         for _ in 0..12 {
-            let amount = Amount::new(Decimal::new(1_00, 2), usd).unwrap();
-            let event = TransactionEvent::new(
-                TransactionId::new(),
-                AccountId::new(),
-                AccountId::new(),
-                amount,
-                LedgerId::USD,
-                1,
-            );
+            let event = make_event();
             let seq = rb.next_sequence();
             // SAFETY: single-threaded test; we own the sequence.
             unsafe {
@@ -211,15 +210,7 @@ mod tests {
         assert!(!guard.is_pressured());
 
         // Publish one more — pending = 13, ratio = 13/16 = 0.8125 > 0.75.
-        let amount2 = Amount::new(Decimal::new(1_00, 2), usd).unwrap();
-        let event2 = TransactionEvent::new(
-            TransactionId::new(),
-            AccountId::new(),
-            AccountId::new(),
-            amount2,
-            LedgerId::USD,
-            1,
-        );
+        let event2 = make_event();
         let seq = rb.next_sequence();
         unsafe {
             *rb.get_mut(seq) = event2;
@@ -236,17 +227,8 @@ mod tests {
         let consumer = guard.consumer_cursor();
 
         // Fill to pressure.
-        let usd = parse_currency("USD").unwrap();
         for _ in 0..13 {
-            let amount = Amount::new(Decimal::new(1_00, 2), usd).unwrap();
-            let event = TransactionEvent::new(
-                TransactionId::new(),
-                AccountId::new(),
-                AccountId::new(),
-                amount,
-                LedgerId::USD,
-                1,
-            );
+            let event = make_event();
             let seq = rb.next_sequence();
             unsafe {
                 *rb.get_mut(seq) = event;

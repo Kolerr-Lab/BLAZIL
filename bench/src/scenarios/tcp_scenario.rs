@@ -13,7 +13,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use blazil_common::amount::Amount;
 use blazil_common::currency::parse_currency;
 use blazil_common::ids::{AccountId, LedgerId};
 use blazil_engine::handlers::ledger::LedgerHandler;
@@ -30,7 +29,6 @@ use blazil_transport::protocol::{
 };
 use blazil_transport::server::TransportServer;
 use blazil_transport::tcp::TcpTransportServer;
-use rust_decimal::Decimal;
 use tokio::net::TcpStream;
 
 use crate::metrics::BenchmarkResult;
@@ -83,23 +81,19 @@ async fn run_once(events: u64) -> BenchmarkResult {
         .await
         .expect("credit account");
 
-    let max_amount = Amount::new(
-        Decimal::new(100_000_000_000, 2),
-        parse_currency("USD").expect("USD"),
-    )
-    .expect("max amount");
+    let max_amount_units: u64 = 100_000_000_000_u64; // $1 billion in cents
 
     // ── pipeline ─────────────────────────────────────────────────────────────
-    let (pipeline, runner) = PipelineBuilder::new()
-        .with_capacity(CAPACITY)
-        .add_handler(ValidationHandler)
-        .add_handler(RiskHandler::new(max_amount))
-        .add_handler(LedgerHandler::new(client.clone(), ledger_rt.clone()))
-        .add_handler(PublishHandler::new())
+    let builder = PipelineBuilder::new().with_capacity(CAPACITY);
+    let results = builder.results();
+    let (pipeline, runner) = builder
+        .add_handler(ValidationHandler::new(Arc::clone(&results)))
+        .add_handler(RiskHandler::new(max_amount_units, Arc::clone(&results)))
+        .add_handler(LedgerHandler::new(client.clone(), ledger_rt.clone(), Arc::clone(&results)))
+        .add_handler(PublishHandler::new(Arc::clone(&results)))
         .build()
         .expect("pipeline build");
 
-    let ring_buffer = Arc::clone(pipeline.ring_buffer());
     let pipeline = Arc::new(pipeline);
     let run_handle = runner.run();
 
@@ -107,7 +101,7 @@ async fn run_once(events: u64) -> BenchmarkResult {
     let server = Arc::new(TcpTransportServer::new(
         "127.0.0.1:0",
         Arc::clone(&pipeline),
-        ring_buffer,
+        Arc::clone(&results),
         1_000,
     ));
     let s = Arc::clone(&server);

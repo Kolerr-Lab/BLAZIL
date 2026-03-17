@@ -7,14 +7,11 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use blazil_common::amount::Amount;
-use blazil_common::currency::parse_currency;
 use blazil_common::error::BlazerError;
 use blazil_common::ids::{AccountId, LedgerId, TransactionId};
 use blazil_engine::event::TransactionEvent;
 use blazil_engine::pipeline::PipelineBuilder;
 use blazil_engine::ring_buffer::RingBuffer;
-use rust_decimal::Decimal;
 
 use crate::metrics::BenchmarkResult;
 
@@ -29,13 +26,11 @@ pub fn run(events: u64) -> BenchmarkResult {
 }
 
 fn run_once(events: u64) -> BenchmarkResult {
-    let usd = parse_currency("USD").expect("USD");
-    let amount = Amount::new(Decimal::new(1_00, 2), usd).expect("amount");
     let debit_id = AccountId::new();
     let credit_id = AccountId::new();
     let tx_id = TransactionId::new();
 
-    let template = TransactionEvent::new(tx_id, debit_id, credit_id, amount, LedgerId::USD, 1);
+    let template = TransactionEvent::new(tx_id, debit_id, credit_id, 1_00_u64, LedgerId::USD, 1);
 
     // Pipeline with zero handlers — pure ring-buffer overhead.
     let (pipeline, runner) = PipelineBuilder::new()
@@ -94,13 +89,11 @@ pub fn publish_with_backpressure(
 }
 
 fn make_noop_event() -> TransactionEvent {
-    let usd = parse_currency("USD").expect("USD");
-    let amount = Amount::new(Decimal::new(1_00, 2), usd).expect("amount");
     TransactionEvent::new(
         TransactionId::new(),
         AccountId::new(),
         AccountId::new(),
-        amount,
+        1_00_u64,
         LedgerId::USD,
         1,
     )

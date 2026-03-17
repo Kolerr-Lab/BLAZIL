@@ -23,6 +23,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use dashmap::DashMap;
 use rust_decimal::Decimal;
 use tokio::net::TcpStream;
 use tokio::time::timeout;
@@ -35,7 +36,7 @@ use blazil_common::ids::{AccountId, LedgerId, TransactionId};
 use blazil_common::timestamp::Timestamp;
 use blazil_engine::event::{TransactionEvent, TransactionResult};
 use blazil_engine::pipeline::Pipeline;
-use blazil_engine::ring_buffer::RingBuffer;
+use blazil_ledger::convert::{amount_to_minor_units, ledger_id_to_currency};
 
 use crate::protocol::{
     deserialize_request, serialize_response, Frame, TransactionRequest, TransactionResponse,
@@ -57,7 +58,7 @@ const RESULT_TIMEOUT: Duration = Duration::from_millis(100);
 ///
 /// - `stream` — the accepted [`TcpStream`].
 /// - `pipeline` — shared engine pipeline for publishing events.
-/// - `ring_buffer` — shared ring buffer for reading results.
+/// - `results` — shared results map for reading transaction outcomes.
 /// - `active_connections` — shared counter; decremented on exit.
 ///
 /// # Errors
@@ -66,13 +67,13 @@ const RESULT_TIMEOUT: Duration = Duration::from_millis(100);
 /// per-request errors are handled internally (rejection response sent,
 /// loop continues).
 #[instrument(
-    skip(stream, pipeline, ring_buffer, active_connections),
+    skip(stream, pipeline, results, active_connections),
     fields(remote_addr)
 )]
 pub async fn handle_connection(
     mut stream: TcpStream,
     pipeline: Arc<Pipeline>,
-    ring_buffer: Arc<RingBuffer>,
+    results: Arc<DashMap<i64, TransactionResult>>,
     active_connections: Arc<std::sync::atomic::AtomicU64>,
 ) -> BlazerResult<()> {
     // Record remote address in tracing span (best-effort).
@@ -131,7 +132,7 @@ pub async fn handle_connection(
         };
 
         // ── Step 5: Wait for result (up to 100 ms) ────────────────────────
-        let result = match wait_for_result(&ring_buffer, seq).await {
+        let result = match wait_for_result(&results, seq).await {
             Some(r) => r,
             None => {
                 warn!(%request_id, "processing timeout — sending timeout response");
@@ -177,23 +178,21 @@ fn build_event(req: TransactionRequest) -> BlazerResult<TransactionEvent> {
         ))
     })?;
 
-    // Parse amount decimal.
-    let decimal = Decimal::from_str(&req.amount)
-        .map_err(|_| BlazerError::ValidationError(format!("invalid amount: {}", req.amount)))?;
-
-    // Parse currency.
-    let currency = parse_currency(&req.currency)?;
-
-    // Build Amount.
-    let amount = Amount::new(decimal, currency)?;
-
     // Build LedgerId.
     let ledger_id = LedgerId::new(req.ledger_id)?;
+
+    // Parse amount decimal and convert to minor units.
+    let decimal = Decimal::from_str(&req.amount)
+        .map_err(|_| BlazerError::ValidationError(format!("invalid amount: {}", req.amount)))?;
+    let currency = ledger_id_to_currency(&ledger_id)
+        .or_else(|_| parse_currency(&req.currency))?;
+    let amount = Amount::new(decimal, currency)?;
+    let amount_units = amount_to_minor_units(&amount)? as u64;
 
     // Parse request_id as TransactionId; fall back to a new random ID.
     let transaction_id = TransactionId::from_str(&req.request_id)
         .unwrap_or_else(|_| {
-            warn!(request_id = %req.request_id, "client sent non-UUID request_id — generating new TransactionId");
+            warn!(request_id = %req.request_id, "client sent non-parseable request_id — generating new TransactionId");
             TransactionId::new()
         });
 
@@ -201,32 +200,26 @@ fn build_event(req: TransactionRequest) -> BlazerResult<TransactionEvent> {
         transaction_id,
         debit_account_id,
         credit_account_id,
-        amount,
+        amount_units,
         ledger_id,
         req.code,
     ))
 }
 
-/// Polls the ring buffer slot at `seq` until a result appears or the
+/// Polls the results map at `seq` until a result appears or the
 /// 100 ms deadline expires.
 ///
 /// Uses [`tokio::task::yield_now`] to cooperatively yield between polls,
 /// keeping the async executor responsive.
-async fn wait_for_result(ring_buffer: &Arc<RingBuffer>, seq: i64) -> Option<TransactionResult> {
-    let rb = Arc::clone(ring_buffer);
+async fn wait_for_result(
+    results: &Arc<DashMap<i64, TransactionResult>>,
+    seq: i64,
+) -> Option<TransactionResult> {
+    let results: Arc<DashMap<i64, TransactionResult>> = Arc::clone(results);
     let fut = async move {
         loop {
-            // SAFETY: The producer wrote this slot before advancing the cursor
-            // (Release store in `publish`). We only read after the cursor has
-            // passed `seq` (via the `publish_event` return). The pipeline
-            // runner writes `result` once and never mutates it again. Reading
-            // here is safe because:
-            //   1. We observe the slot's address via a shared Arc.
-            //   2. The runner's write to `result` happens-before our read due
-            //      to tokio's cooperative scheduling and the atomic cursor.
-            let result = unsafe { &*rb.get(seq) }.result.clone();
-            if let Some(r) = result {
-                return r;
+            if let Some(r) = results.get(&seq) {
+                return r.value().clone();
             }
             // Yield back to the tokio runtime so other tasks can progress.
             tokio::task::yield_now().await;

@@ -18,7 +18,6 @@
 
 use std::sync::Arc;
 
-use blazil_common::amount::Amount;
 use blazil_common::currency::parse_currency;
 use blazil_common::ids::{AccountId, LedgerId};
 use blazil_engine::handlers::ledger::LedgerHandler;
@@ -37,7 +36,6 @@ use blazil_transport::io_uring_transport::IoUringTransportServer;
 use blazil_transport::metrics_server::MetricsServer;
 use blazil_transport::server::TransportServer;
 use blazil_transport::tcp::TcpTransportServer;
-use rust_decimal::Decimal;
 use tracing::{info, warn};
 
 #[cfg(feature = "tigerbeetle-client")]
@@ -126,22 +124,21 @@ async fn run_pipeline<C: LedgerClient + 'static>(
             .expect("ledger runtime"),
     );
 
-    let max_amount = Amount::new(
-        Decimal::new(100_000_000_000_000, 2),
-        parse_currency("USD").expect("USD"),
-    )
-    .expect("max amount");
+    // $1 billion maximum per transaction in cents.
+    let max_amount_units: u64 = 100_000_000_000_000_u64;
 
     // ── Pipeline ──────────────────────────────────────────────────────────────
-    let (pipeline, runner) = PipelineBuilder::new()
-        .with_capacity(capacity)
-        .add_handler(ValidationHandler)
-        .add_handler(RiskHandler::new(max_amount))
-        .add_handler(LedgerHandler::new(client, ledger_rt))
-        .add_handler(PublishHandler::new())
+    let builder = PipelineBuilder::new().with_capacity(capacity);
+    let results = builder.results();
+    let (pipeline, runner) = builder
+        .add_handler(ValidationHandler::new(Arc::clone(&results)))
+        .add_handler(RiskHandler::new(max_amount_units, Arc::clone(&results)))
+        .add_handler(LedgerHandler::new(client, ledger_rt, Arc::clone(&results)))
+        .add_handler(PublishHandler::new(Arc::clone(&results)))
         .build()
         .expect("pipeline build");
 
+    #[allow(unused_variables)]
     let ring_buffer = Arc::clone(pipeline.ring_buffer());
     let pipeline = Arc::new(pipeline);
 
@@ -226,7 +223,7 @@ async fn run_pipeline<C: LedgerClient + 'static>(
     let server = Arc::new(TcpTransportServer::new(
         &bind_addr,
         Arc::clone(&pipeline),
-        ring_buffer,
+        Arc::clone(&results),
         DEFAULT_MAX_CONNECTIONS,
     ));
 
