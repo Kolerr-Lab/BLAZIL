@@ -14,7 +14,7 @@
 ![62,770 TPS](https://img.shields.io/badge/62%2C770_TPS-E2E_Cluster-brightgreen?style=flat-square)
 ![P99 23ms](https://img.shields.io/badge/P99_23ms-3--node-blue?style=flat-square)
 ![2.6x Visa](https://img.shields.io/badge/2.6×_Visa-peak_vs_peak-red?style=flat-square)
-![19.6M TPS](https://img.shields.io/badge/19.6M_TPS-Pipeline-orange?style=flat-square)
+![167M TPS](https://img.shields.io/badge/167M_TPS-Sharded_Pipeline-orange?style=flat-square)
 
 </div>
 
@@ -26,13 +26,20 @@ Real hardware. Real replication. Real benchmarks.
 
 | Benchmark | Result | Hardware | Notes |
 |-----------|--------|----------|-------|
-| **Pipeline throughput** | **19,607,843 TPS** | MacBook Air M4 | In-memory, single node, lock-free |
+| **Sharded pipeline (4-core)** | **167M TPS** | MacBook Air M4 | Parallel, bulk timing, 1 producer per shard |
+| **Single pipeline (latency)** | **24M TPS, P99 42ns** | MacBook Air M4 | In-memory, per-event tracking |
 | **E2E peak throughput** | **62,770 TPS** | 3× DO c2-4vcpu-8GB | Real VSR consensus + disk writes |
 | **P99 latency** | **26.8 ms** | 3-node cluster | gRPC bidirectional streaming |
 | **vs Visa (peak)** | **2.6×** | $252/month cloud | Published peak: 24,000 TPS |
 | **vs Mojaloop (OSS)** | **62×** | commodity hardware | Open-source baseline: ~1,000 TPS |
 
-> **No mocks. No in-memory tricks.**  
+> **Methodology transparency:**  
+> Pipeline benchmarks use two methods: bulk timing (167M TPS) for pure throughput,  
+> and per-event latency tracking (24M TPS) for latency distribution.  
+> Both run identical handler chains; difference is measurement overhead.  
+> See [bench/README.md](bench/README.md) for detailed methodology.
+>
+> **No mocks in cluster tests.**  
 > All cluster benchmarks use real TigerBeetle VSR replication (3-node consensus),  
 > real disk writes (io_uring), and real gRPC transport over the network.
 > 
