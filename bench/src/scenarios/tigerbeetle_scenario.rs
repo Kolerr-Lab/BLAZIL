@@ -93,7 +93,7 @@ pub async fn run(events: u64) -> Option<BenchmarkResult> {
         .expect("pipeline build");
 
     let rb = Arc::clone(pipeline.ring_buffer());
-    let handles: Vec<_> = runners.into_iter().map(|r| r.run()).collect();
+    let handles: Vec<_> = runner.into_iter().map(|r| r.run()).collect();
 
     let template = TransactionEvent::new(
         TransactionId::new(),

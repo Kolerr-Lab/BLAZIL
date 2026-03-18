@@ -71,7 +71,6 @@ use blazil_common::ids::{AccountId, LedgerId, TransactionId};
 use blazil_common::timestamp::Timestamp;
 use blazil_engine::event::{TransactionEvent, TransactionResult};
 use blazil_engine::pipeline::Pipeline;
-use blazil_engine::ring_buffer::RingBuffer;
 use blazil_ledger::convert::amount_to_minor_units;
 
 use crate::protocol::{
@@ -112,7 +111,6 @@ pub struct AeronTransportServer {
     /// Path to the Aeron IPC directory, e.g. `"/dev/shm/aeron"`.
     aeron_dir: String,
     pipeline: Arc<Pipeline>,
-    ring_buffer: Arc<RingBuffer>,
     shutdown: Arc<AtomicBool>,
 }
 
@@ -122,18 +120,11 @@ impl AeronTransportServer {
     /// - `channel`   — Aeron channel URI.
     /// - `aeron_dir` — IPC directory shared with the Aeron C Media Driver.
     /// - `pipeline`  — shared engine pipeline.
-    /// - `ring_buffer` — shared ring buffer.
-    pub fn new(
-        channel: &str,
-        aeron_dir: &str,
-        pipeline: Arc<Pipeline>,
-        ring_buffer: Arc<RingBuffer>,
-    ) -> Self {
+    pub fn new(channel: &str, aeron_dir: &str, pipeline: Arc<Pipeline>) -> Self {
         Self {
             channel: channel.to_owned(),
             aeron_dir: aeron_dir.to_owned(),
             pipeline,
-            ring_buffer,
             shutdown: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -149,11 +140,10 @@ impl TransportServer for AeronTransportServer {
         let channel = self.channel.clone();
         let aeron_dir = self.aeron_dir.clone();
         let pipeline = Arc::clone(&self.pipeline);
-        let ring_buffer = Arc::clone(&self.ring_buffer);
         let shutdown = Arc::clone(&self.shutdown);
 
         tokio::task::spawn_blocking(move || {
-            aeron_serve_blocking(channel, aeron_dir, pipeline, ring_buffer, shutdown)
+            aeron_serve_blocking(channel, aeron_dir, pipeline, shutdown)
         })
         .await
         .map_err(|e| BlazerError::Transport(format!("Aeron blocking task panicked: {e}")))?
@@ -180,7 +170,6 @@ fn aeron_serve_blocking(
     channel: String,
     aeron_dir: String,
     pipeline: Arc<Pipeline>,
-    ring_buffer: Arc<RingBuffer>,
     shutdown: Arc<AtomicBool>,
 ) -> BlazerResult<()> {
     use std::ffi::CString;
@@ -276,7 +265,7 @@ fn aeron_serve_blocking(
                         )
                     };
 
-                    let response = handle_fragment(payload, &pipeline, &ring_buffer);
+                    let response = handle_fragment(payload, &pipeline);
 
                     match serialize_response(&response) {
                         Ok(bytes) if bytes.len() <= RSP_BUF_CAPACITY as usize => {
@@ -324,11 +313,7 @@ fn aeron_serve_blocking(
 
 /// Deserializes one Aeron fragment, drives it through the engine pipeline,
 /// and returns a [`TransactionResponse`] ready to publish.
-fn handle_fragment(
-    payload: &[u8],
-    pipeline: &Arc<Pipeline>,
-    ring_buffer: &Arc<RingBuffer>,
-) -> TransactionResponse {
+fn handle_fragment(payload: &[u8], pipeline: &Arc<Pipeline>) -> TransactionResponse {
     // ── Deserialize ───────────────────────────────────────────────────────────
     let request = match deserialize_request(payload) {
         Ok(r) => r,
@@ -360,7 +345,7 @@ fn handle_fragment(
 
     // ── Wait for result ───────────────────────────────────────────────────────
     let results = pipeline.results();
-    match wait_for_result_sync(&results, seq) {
+    match wait_for_result_sync(results, seq) {
         Some(result) => build_response(&request_id, result),
         None => TransactionResponse {
             request_id,

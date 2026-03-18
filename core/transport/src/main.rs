@@ -203,7 +203,6 @@ async fn run_pipeline<C: LedgerClient + 'static>(
             &channel,
             &aeron_dir,
             Arc::clone(&pipeline),
-            ring_buffer,
         ));
         info!("🚀 Aeron UDP active");
         info!("blazil-engine ready");
