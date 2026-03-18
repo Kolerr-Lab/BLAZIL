@@ -212,7 +212,7 @@ async fn uring_accept_loop(
 async fn handle_uring_connection(
     stream: tokio_uring::net::TcpStream,
     pipeline: Arc<Pipeline>,
-    ring_buffer: Arc<RingBuffer>,
+    _ring_buffer: Arc<RingBuffer>,
     rate_limiter: Arc<TokenBucket>,
 ) -> BlazerResult<()> {
     loop {
@@ -314,7 +314,7 @@ async fn handle_uring_connection(
 
         // ── Step 7: Wait for result (up to 100 ms) ────────────────────────
         let results = pipeline.results();
-        let result = match wait_for_result(&results, seq).await {
+        let result = match wait_for_result(results, seq).await {
             Some(r) => r,
             None => {
                 warn!(%request_id, "io_uring: processing timeout");
