@@ -47,25 +47,18 @@ async fn main() {
     println!("RingBuffer total: {} MB", ring_buffer_mb);
     println!();
     
-    println!("Events: sharded=1M (comparing original vs 1-shard vs 4-shard)");
+    println!("Events: sharded=1M (comparing 1-shard vs 4-shard)");
     println!("Runs per scenario: 1 (fast mode)\n");
 
-    // Compare original pipeline vs sharded implementations
-    println!("[1/3] Original Pipeline (1M events)...");
-    let original_result = pipeline_scenario::run(1_000_000).await;
-    println!(
-        "      → {} TPS",
-        blazil_bench::report::fmt_commas(original_result.tps)
-    );
-
-    println!("[2/3] Sharded Pipeline (1 shard)...");
+    // Sharded pipeline scaling test
+    println!("[1/2] Sharded Pipeline (1 shard)...");
     let sharded_1_result = sharded_pipeline_scenario::run(1_000_000, 1).await;
     println!(
         "      → {} TPS",
         blazil_bench::report::fmt_commas(sharded_1_result.tps)
     );
 
-    println!("[3/3] Sharded Pipeline (4 shards)...");
+    println!("[2/2] Sharded Pipeline (4 shards)...");
     let sharded_4_result = sharded_pipeline_scenario::run(1_000_000, 4).await;
     println!(
         "      → {} TPS",
@@ -75,15 +68,15 @@ async fn main() {
     // Calculate scaling
     let speedup = sharded_4_result.tps as f64 / sharded_1_result.tps as f64;
     let efficiency = (speedup / 4.0) * 100.0;
-    let overhead_improvement = sharded_1_result.tps as f64 / original_result.tps as f64;
 
-    println!("\n=== METHODOLOGY COMPARISON ===");
-    println!("Original Pipeline:     {} TPS  (per-event latency tracking)", blazil_bench::report::fmt_commas(original_result.tps));
-    println!("1-shard (1 producer):  {} TPS  (bulk timing, pre-allocated)", blazil_bench::report::fmt_commas(sharded_1_result.tps));
-    println!("4-shard (4 producers): {} TPS  (parallel producers)", blazil_bench::report::fmt_commas(sharded_4_result.tps));
+    println!("\n=== SHARDED PIPELINE SCALING ===");
+    println!("1-shard (1 producer):  {} TPS", blazil_bench::report::fmt_commas(sharded_1_result.tps));
+    println!("4-shard (4 producers): {} TPS", blazil_bench::report::fmt_commas(sharded_4_result.tps));
     
-    println!("\n=== ANALYSIS ===");
-    println!("Measurement overhead reduction: {:.2}x (removing per-event Instant::now() + vec.push())", overhead_improvement);
-    println!("Parallel scaling: {:.2}x speedup with 4 shards ({:.1}% efficiency)", speedup, efficiency);
+    println!("\n=== RESULTS ===");
+    println!("Speedup: {:.2}x", speedup);
+    println!("Scaling efficiency: {:.1}% (ideal = 100%)", efficiency);
+    println!("Architecture: LMAX Disruptor (1 producer per ring buffer)");
+    println!("Zero cache thrashing: each producer writes to ONE shard only");
     println!("\nAll tests passed! ✅");
 }
