@@ -24,3 +24,10 @@ anyhow = "1"
 bytes = "1"
 uuid = { version = "1", features = ["v4"] }
 criterion = "0.5"
+
+[profile.release]
+opt-level = 3
+lto = "fat"           # Full LTO across all crates
+codegen-units = 1     # Single codegen unit for maximum optimization
+strip = false         # Keep symbols for profiling
+debug = false

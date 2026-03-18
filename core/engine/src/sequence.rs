@@ -76,7 +76,7 @@ impl Sequence {
     /// let seq = Sequence::new(42);
     /// assert_eq!(seq.get(), 42);
     /// ```
-    #[inline]
+    #[inline(always)]
     pub fn get(&self) -> i64 {
         self.value.load(Ordering::Acquire)
     }
@@ -95,7 +95,7 @@ impl Sequence {
     /// seq.set(10);
     /// assert_eq!(seq.get(), 10);
     /// ```
-    #[inline]
+    #[inline(always)]
     pub fn set(&self, value: i64) {
         self.value.store(value, Ordering::Release);
     }

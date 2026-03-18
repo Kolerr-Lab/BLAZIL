@@ -14,3 +14,9 @@ thiserror      = { workspace = true }
 tracing        = { workspace = true }
 rust_decimal   = { version = "1", features = ["serde"] }
 dashmap        = "6.1"
+
+[features]
+default = []
+simd = []
+
+[target.'cfg(target_arch = "aarch64")'.dependencies]

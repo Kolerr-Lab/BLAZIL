@@ -168,7 +168,7 @@ impl RingBuffer {
     /// let seq = rb.next_sequence();
     /// assert_eq!(seq, 0); // first claimed sequence is 0
     /// ```
-    #[inline]
+    #[inline(always)]
     pub fn next_sequence(&self) -> i64 {
         // Advance only the claim counter. The cursor (visible to the runner)
         // is NOT moved until `publish()` is called after the slot is written.
@@ -191,7 +191,7 @@ impl RingBuffer {
     /// let seq = rb.next_sequence();
     /// rb.publish(seq);
     /// ```
-    #[inline]
+    #[inline(always)]
     pub fn publish(&self, sequence: i64) {
         self.cursor.set(sequence);
     }
@@ -206,7 +206,7 @@ impl RingBuffer {
     /// - Only one thread writes to a given slot at a time.
     /// - The slot must have been claimed via [`next_sequence`][RingBuffer::next_sequence].
     /// - No consumer may be reading the same slot concurrently.
-    #[inline]
+    #[inline(always)]
     pub fn get_mut(&self, sequence: i64) -> *mut TransactionEvent {
         // SAFETY: sequence & mask is always in bounds: mask = capacity - 1,
         // so the index is in [0, capacity). The UnsafeCell<T> guarantees that
@@ -224,7 +224,7 @@ impl RingBuffer {
     ///
     /// The caller must ensure the slot has been fully written and published
     /// by the producer before reading (i.e., `sequence <= cursor.get()`).
-    #[inline]
+    #[inline(always)]
     pub fn get(&self, sequence: i64) -> *const TransactionEvent {
         let index = (sequence as usize) & self.mask;
         self.slots[index].get()

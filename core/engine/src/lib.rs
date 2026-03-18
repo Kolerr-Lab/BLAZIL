@@ -38,6 +38,7 @@ pub mod metrics;
 pub mod pipeline;
 pub mod ring_buffer;
 pub mod sequence;
+pub mod simd;
 
 // ── re-exports ────────────────────────────────────────────────────────────────
 
