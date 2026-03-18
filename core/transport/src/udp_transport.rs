@@ -47,7 +47,7 @@ use std::time::Duration;
 use dashmap::DashMap;
 use tokio::net::UdpSocket;
 use tokio::time::timeout;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 use blazil_common::error::{BlazerError, BlazerResult};
 use blazil_common::ids::{AccountId, LedgerId, TransactionId};
@@ -119,31 +119,79 @@ impl UdpTransportServer {
         }
     }
 
-    /// Starts the UDP server and processes incoming packets.
+    /// Starts the UDP server with fully concurrent per-request processing.
+    ///
+    /// Architecture: single-socket, split-ownership design.
+    ///
+    /// - The **recv loop** owns `recv_half` exclusively (no contention).
+    /// - Each incoming packet spawns a lightweight tokio task that awaits its
+    ///   pipeline result concurrently.  When ready, the task pushes a
+    ///   `([u8; RESPONSE_SIZE], SocketAddr)` onto an mpsc channel.
+    /// - A dedicated **send task** drains the channel and calls `send_half.send_to`
+    ///   serially (UDP sends are very fast; the channel decouples latency).
+    ///
+    /// This eliminates the serial result-poller bottleneck while keeping socket
+    /// ownership clean — `tokio::net::UdpSocket` does not allow split halves, so
+    /// we use an owned std socket duplicated into two tokio sockets via
+    /// `try_clone` + `UdpSocket::from_std`.
     pub async fn serve(&self) -> BlazerResult<()> {
-        let socket = UdpSocket::bind(&self.addr)
-            .await
+        // Bind once as a std socket so we can try_clone for the send half.
+        let std_listener = std::net::UdpSocket::bind(&self.addr)
             .map_err(|e| BlazerError::Internal(format!("Failed to bind UDP socket: {}", e)))?;
+        std_listener.set_nonblocking(true).map_err(|e| {
+            BlazerError::Internal(format!("set_nonblocking failed: {}", e))
+        })?;
 
-        let local_addr = socket
+        let std_sender = std_listener.try_clone().map_err(|e| {
+            BlazerError::Internal(format!("Failed to clone UDP socket: {}", e))
+        })?;
+        std_sender.set_nonblocking(true).map_err(|e| {
+            BlazerError::Internal(format!("set_nonblocking (sender) failed: {}", e))
+        })?;
+
+        let local_addr = std_listener
             .local_addr()
             .map_err(|e| BlazerError::Internal(format!("Failed to get local address: {}", e)))?;
 
-        // Store bound address
         {
             let mut addr = self.bound_addr.lock().unwrap();
             *addr = Some(local_addr.to_string());
         }
 
-        info!("UDP transport server listening on {}", local_addr);
+        info!(
+            "UDP transport server listening on {} (concurrent-task mode)",
+            local_addr
+        );
 
+        // Wrap into tokio sockets (each half has exclusive OS-fd ownership).
+        let recv_sock = UdpSocket::from_std(std_listener)
+            .map_err(|e| BlazerError::Internal(format!("from_std (recv) failed: {}", e)))?;
+        let send_sock = UdpSocket::from_std(std_sender)
+            .map_err(|e| BlazerError::Internal(format!("from_std (send) failed: {}", e)))?;
+
+        // Channel that collects completed responses from concurrent tasks.
+        // Bounded to 64K to apply light back-pressure; tasks yield if full.
+        let (resp_tx, mut resp_rx) =
+            tokio::sync::mpsc::channel::<([u8; RESPONSE_SIZE], std::net::SocketAddr)>(65_536);
+
+        // ── Send task: drains channel and transmits responses ──────────────
+        let task_sent = Arc::clone(&self.packets_sent);
+        tokio::spawn(async move {
+            while let Some((response, peer)) = resp_rx.recv().await {
+                if let Err(e) = send_sock.send_to(&response, peer).await {
+                    error!("Failed to send response to {}: {}", peer, e);
+                } else {
+                    task_sent.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        });
+
+        // ── Recv loop: receive packets, spawn concurrent result-waiters ────
         let mut buf = [0u8; PACKET_SIZE];
-        let mut response_buf = [0u8; RESPONSE_SIZE];
 
         while !self.shutdown.load(Ordering::Relaxed) {
-            // Receive packet
-            let (len, peer) = match socket.recv_from(&mut buf).await {
-                Ok(result) => result,
+            let (len, peer) = match recv_sock.recv_from(&mut buf).await {
+                Ok(r) => r,
                 Err(e) => {
                     error!("UDP recv_from error: {}", e);
                     continue;
@@ -152,82 +200,63 @@ impl UdpTransportServer {
 
             self.packets_received.fetch_add(1, Ordering::Relaxed);
 
-            // Validate packet size
             if len != PACKET_SIZE {
                 warn!(
                     "Invalid packet size from {}: expected {}, got {}",
                     peer, PACKET_SIZE, len
                 );
-                let seq = u64::from_be_bytes(buf[0..8].try_into().unwrap());
-                self.send_error_response(&socket, peer, seq).await;
                 continue;
             }
 
-            // Extract sequence number (first 8 bytes, network byte order)
             let sequence = u64::from_be_bytes(buf[0..8].try_into().unwrap());
 
-            // Deserialize TransactionEvent (zero-copy from bytes 8-56)
-            let event = match self.deserialize_event(&buf[HEADER_SIZE..PACKET_SIZE]) {
-                Ok(event) => event,
+            let event = match Self::deserialize_event_static(&buf[HEADER_SIZE..PACKET_SIZE]) {
+                Ok(e) => e,
                 Err(e) => {
                     error!("Failed to deserialize event: {}", e);
-                    self.send_error_response(&socket, peer, sequence).await;
                     continue;
                 }
             };
 
-            debug!(
-                "Received event seq={} tx_id={} from {}",
-                sequence,
-                event.transaction_id.as_u64(),
-                peer
-            );
+            let shard_id =
+                (event.debit_account_id.as_u64() as usize) % self.pipeline.shard_count();
 
-            // Determine which shard will process this event (by debit account)
-            let shard_id = (event.debit_account_id.as_u64() as usize) % self.pipeline.shard_count();
-
-            // Publish to sharded pipeline (routes by account_id % shard_count)
-            let seq = match self.pipeline.publish_event(event) {
+            let ring_seq = match self.pipeline.publish_event(event) {
                 Ok(seq) => seq,
                 Err(e) => {
                     warn!("Pipeline backpressure for seq={}: {}", sequence, e);
-                    self.send_error_response(&socket, peer, sequence).await;
                     continue;
                 }
             };
 
-            // Get this shard's results map for polling
-            let shard_results = self.pipeline.shard_results(shard_id);
+            let task_results = self.pipeline.shard_results(shard_id);
+            let task_resp_tx = resp_tx.clone();
 
-            // Wait for processing to complete (honest E2E measurement like TCP)
-            let result_code = match wait_for_result(&shard_results, seq).await {
-                Some(result) => match result {
-                    TransactionResult::Committed { .. } => 0u64, // Success
-                    TransactionResult::Rejected { .. } => 1u64,  // Rejected
-                },
-                None => {
-                    // Timeout waiting for result
-                    warn!("Processing timeout for seq={}", sequence);
-                    1u64 // Treat timeout as rejection
-                }
-            };
+            // Spawn a task per request — N in-flight = N concurrent waiters.
+            tokio::spawn(async move {
+                let result_code = match wait_for_result(task_results, ring_seq).await {
+                    Some(TransactionResult::Committed { .. }) => 0u64,
+                    Some(TransactionResult::Rejected { .. }) => 1u64,
+                    None => {
+                        warn!("Processing timeout for seq={}", sequence);
+                        1u64
+                    }
+                };
 
-            // Send response after processing completes
-            response_buf[0..8].copy_from_slice(&sequence.to_be_bytes());
-            response_buf[8..16].copy_from_slice(&result_code.to_be_bytes());
+                let mut response = [0u8; RESPONSE_SIZE];
+                response[0..8].copy_from_slice(&sequence.to_be_bytes());
+                response[8..16].copy_from_slice(&result_code.to_be_bytes());
 
-            if let Err(e) = socket.send_to(&response_buf, peer).await {
-                error!("Failed to send response to {}: {}", peer, e);
-            } else {
-                self.packets_sent.fetch_add(1, Ordering::Relaxed);
-            }
+                // Drop the send silently if the channel closed (server shutting down).
+                let _ = task_resp_tx.send((response, peer)).await;
+            });
         }
 
         info!("UDP transport server shutting down");
         Ok(())
     }
 
-    /// Deserializes a TransactionEvent from raw bytes.
+    /// Deserializes a TransactionEvent from raw bytes (static version for spawned tasks).
     ///
     /// # Wire Format
     ///
@@ -241,7 +270,7 @@ impl UdpTransportServer {
     /// - `[44-45]`: code (u16, big-endian)
     /// - `[46]`:    flags (u8)
     /// - `[47]`:    padding (u8)
-    fn deserialize_event(&self, bytes: &[u8]) -> BlazerResult<TransactionEvent> {
+    fn deserialize_event_static(bytes: &[u8]) -> BlazerResult<TransactionEvent> {
         if bytes.len() != PAYLOAD_SIZE {
             return Err(BlazerError::Internal(format!(
                 "Invalid UDP packet size: expected {} bytes, got {}",
@@ -287,24 +316,6 @@ impl UdpTransportServer {
         Ok(event)
     }
 
-    /// Sends an error response to the client.
-    async fn send_error_response(
-        &self,
-        socket: &UdpSocket,
-        peer: std::net::SocketAddr,
-        sequence: u64,
-    ) {
-        let mut response = [0u8; RESPONSE_SIZE];
-        response[0..8].copy_from_slice(&sequence.to_be_bytes());
-        response[8..16].copy_from_slice(&1u64.to_be_bytes()); // 1 = error
-
-        if let Err(e) = socket.send_to(&response, peer).await {
-            error!("Failed to send error response to {}: {}", peer, e);
-        } else {
-            self.packets_sent.fetch_add(1, Ordering::Relaxed);
-        }
-    }
-
     /// Initiates graceful shutdown.
     pub async fn shutdown(&self) {
         info!("Initiating UDP server shutdown");
@@ -344,16 +355,14 @@ impl UdpTransportServer {
 ///
 /// `Some(result)` if processing completed within timeout, `None` on timeout.
 async fn wait_for_result(
-    results: &Arc<DashMap<i64, TransactionResult>>,
+    results: Arc<DashMap<i64, TransactionResult>>,
     seq: i64,
 ) -> Option<TransactionResult> {
-    let results = Arc::clone(results);
     let fut = async move {
         loop {
             if let Some(r) = results.get(&seq) {
                 return r.value().clone();
             }
-            // Yield to tokio scheduler to avoid busy-waiting
             tokio::task::yield_now().await;
         }
     };
