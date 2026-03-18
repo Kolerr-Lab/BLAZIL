@@ -42,7 +42,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use dashmap::DashMap;
 use rust_decimal::Decimal;
+use tokio::time::timeout;
 use tracing::{debug, error, info, warn};
 
 use blazil_common::amount::Amount;
@@ -53,6 +55,7 @@ use blazil_common::timestamp::Timestamp;
 use blazil_engine::event::{TransactionEvent, TransactionResult};
 use blazil_engine::pipeline::Pipeline;
 use blazil_engine::ring_buffer::RingBuffer;
+use blazil_ledger::convert::amount_to_minor_units;
 
 use crate::protocol::{
     deserialize_request, serialize_response, TransactionRequest, TransactionResponse,
@@ -310,7 +313,8 @@ async fn handle_uring_connection(
         };
 
         // ── Step 7: Wait for result (up to 100 ms) ────────────────────────
-        let result = match wait_for_result(&ring_buffer, seq).await {
+        let results = pipeline.results();
+        let result = match wait_for_result(&results, seq).await {
             Some(r) => r,
             None => {
                 warn!(%request_id, "io_uring: processing timeout");
@@ -354,21 +358,21 @@ async fn write_frame_uring(
 
 // ── Pipeline helpers ──────────────────────────────────────────────────────────
 
-/// Polls the ring buffer slot at `seq` until a result appears or 100 ms elapses.
-async fn wait_for_result(ring_buffer: &Arc<RingBuffer>, seq: i64) -> Option<TransactionResult> {
-    let rb = Arc::clone(ring_buffer);
+/// Polls the results map at `seq` until a result appears or 100 ms elapses.
+async fn wait_for_result(
+    results: &Arc<DashMap<i64, TransactionResult>>,
+    seq: i64,
+) -> Option<TransactionResult> {
+    let results = Arc::clone(results);
     let fut = async move {
         loop {
-            // SAFETY: same invariants as connection::wait_for_result — the pipeline
-            // runner writes `result` exactly once before advancing past `seq`.
-            let result = unsafe { &*rb.get(seq) }.result.clone();
-            if let Some(r) = result {
-                return r;
+            if let Some(r) = results.get(&seq) {
+                return r.value().clone();
             }
             tokio::task::yield_now().await;
         }
     };
-    tokio::time::timeout(RESULT_TIMEOUT, fut).await.ok()
+    timeout(RESULT_TIMEOUT, fut).await.ok()
 }
 
 /// Parses a [`TransactionRequest`] into a [`TransactionEvent`].
@@ -389,6 +393,7 @@ fn build_event(req: TransactionRequest) -> BlazerResult<TransactionEvent> {
         .map_err(|_| BlazerError::ValidationError(format!("invalid amount: {}", req.amount)))?;
     let currency = parse_currency(&req.currency)?;
     let amount = Amount::new(decimal, currency)?;
+    let amount_units = amount_to_minor_units(&amount)? as u64;
     let ledger_id = LedgerId::new(req.ledger_id)?;
     let transaction_id = TransactionId::from_str(&req.request_id).unwrap_or_else(|_| {
         warn!(
@@ -401,7 +406,7 @@ fn build_event(req: TransactionRequest) -> BlazerResult<TransactionEvent> {
         transaction_id,
         debit_account_id,
         credit_account_id,
-        amount,
+        amount_units,
         ledger_id,
         req.code,
     ))

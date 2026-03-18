@@ -56,6 +56,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use dashmap::DashMap;
 use rust_decimal::Decimal;
 use tracing::{error, info, warn};
 
@@ -71,6 +72,7 @@ use blazil_common::timestamp::Timestamp;
 use blazil_engine::event::{TransactionEvent, TransactionResult};
 use blazil_engine::pipeline::Pipeline;
 use blazil_engine::ring_buffer::RingBuffer;
+use blazil_ledger::convert::amount_to_minor_units;
 
 use crate::protocol::{
     deserialize_request, serialize_response, TransactionRequest, TransactionResponse,
@@ -357,7 +359,8 @@ fn handle_fragment(
     };
 
     // ── Wait for result ───────────────────────────────────────────────────────
-    match wait_for_result_sync(ring_buffer, seq) {
+    let results = pipeline.results();
+    match wait_for_result_sync(&results, seq) {
         Some(result) => build_response(&request_id, result),
         None => TransactionResponse {
             request_id,
@@ -395,6 +398,7 @@ fn build_event(req: TransactionRequest) -> BlazerResult<TransactionEvent> {
 
     let currency = parse_currency(&req.currency)?;
     let amount = Amount::new(decimal, currency)?;
+    let amount_units = amount_to_minor_units(&amount)? as u64;
     let ledger_id = LedgerId::new(req.ledger_id)?;
 
     let transaction_id = TransactionId::from_str(&req.request_id).unwrap_or_else(|_| {
@@ -409,25 +413,24 @@ fn build_event(req: TransactionRequest) -> BlazerResult<TransactionEvent> {
         transaction_id,
         debit_account_id,
         credit_account_id,
-        amount,
+        amount_units,
         ledger_id,
         req.code,
     ))
 }
 
-/// Synchronous ring-buffer spin-wait — safe to call from the blocking Aeron thread.
+/// Synchronous results map spin-wait — safe to call from the blocking Aeron thread.
 ///
 /// Spins with a 100 µs sleep between polls until either a result is written
 /// or [`RESULT_TIMEOUT`] elapses.
-fn wait_for_result_sync(ring_buffer: &Arc<RingBuffer>, seq: i64) -> Option<TransactionResult> {
+fn wait_for_result_sync(
+    results: &Arc<DashMap<i64, TransactionResult>>,
+    seq: i64,
+) -> Option<TransactionResult> {
     let deadline = std::time::Instant::now() + RESULT_TIMEOUT;
     loop {
-        // SAFETY: Same invariants as connection::wait_for_result — the pipeline
-        // runner writes `result` exactly once before advancing its cursor past
-        // `seq`, and we only read after publish_event has returned the slot.
-        let result = unsafe { &*ring_buffer.get(seq) }.result.clone();
-        if let Some(r) = result {
-            return Some(r);
+        if let Some(r) = results.get(&seq) {
+            return Some(r.value().clone());
         }
         if std::time::Instant::now() >= deadline {
             return None;
