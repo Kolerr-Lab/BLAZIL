@@ -28,12 +28,12 @@
 //!
 //! let builder = PipelineBuilder::new();
 //! let results = builder.results();
-//! let (pipeline, runner) = builder
+//! let (pipeline, runners) = builder
 //!     .add_handler(ValidationHandler::new(results))
 //!     .build()
 //!     .expect("valid capacity");
 //!
-//! let _handle = runner.run();
+//! let _handles: Vec<_> = runners.into_iter().map(|r| r.run()).collect();
 //! // …publish events via pipeline.publish_event(event)…
 //! pipeline.stop();
 //! ```
@@ -189,11 +189,9 @@ impl PipelineBuilder {
         // Create multiple runners for parallel processing
         let mut runners = Vec::with_capacity(self.num_workers);
 
-        for shard_id in 0..self.num_workers {
+        for (shard_id, gate) in worker_gates.iter().enumerate().take(self.num_workers) {
             // Clone handlers for this worker (Arc internals are shared)
-            let handlers = self.handlers.iter()
-                .map(|h| h.clone_handler())
-                .collect();
+            let handlers = self.handlers.iter().map(|h| h.clone_handler()).collect();
 
             runners.push(PipelineRunner {
                 ring_buffer: Arc::clone(&ring_buffer),
@@ -202,7 +200,7 @@ impl PipelineBuilder {
                 results: Arc::clone(&results),
                 shard_id,
                 num_shards: self.num_workers,
-                gating_sequence: Arc::clone(&worker_gates[shard_id]),
+                gating_sequence: Arc::clone(gate),
             });
         }
 
@@ -385,7 +383,6 @@ impl PipelineRunner {
                     }
                 }
 
-                
                 for handler in &mut self.handlers {
                     handler.on_shutdown();
                 }
@@ -407,7 +404,7 @@ mod tests {
     use blazil_ledger::mock::InMemoryLedgerClient;
 
     use super::*;
-    use crate::event::{EventFlags, TransactionResult};
+    use crate::event::TransactionResult;
     use crate::handlers::ledger::LedgerHandler;
     use crate::handlers::publish::PublishHandler;
     use crate::handlers::risk::RiskHandler;
@@ -663,9 +660,7 @@ mod tests {
     fn builder_non_power_of_two_capacity_fails() {
         let builder = PipelineBuilder::new().with_capacity(1000);
         let results = builder.results();
-        let result = builder
-            .add_handler(ValidationHandler::new(results))
-            .build();
+        let result = builder.add_handler(ValidationHandler::new(results)).build();
         assert!(result.is_err());
     }
 }

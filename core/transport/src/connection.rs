@@ -184,8 +184,7 @@ fn build_event(req: TransactionRequest) -> BlazerResult<TransactionEvent> {
     // Parse amount decimal and convert to minor units.
     let decimal = Decimal::from_str(&req.amount)
         .map_err(|_| BlazerError::ValidationError(format!("invalid amount: {}", req.amount)))?;
-    let currency = ledger_id_to_currency(&ledger_id)
-        .or_else(|_| parse_currency(&req.currency))?;
+    let currency = ledger_id_to_currency(&ledger_id).or_else(|_| parse_currency(&req.currency))?;
     let amount = Amount::new(decimal, currency)?;
     let amount_units = amount_to_minor_units(&amount)? as u64;
 

@@ -82,7 +82,11 @@ fn run_once_blocking(events: u64) -> BenchmarkResult {
     let (pipeline, runners) = builder
         .add_handler(ValidationHandler::new(Arc::clone(&results)))
         .add_handler(RiskHandler::new(max_amount_units, Arc::clone(&results)))
-        .add_handler(LedgerHandler::new(client.clone(), rt.clone(), Arc::clone(&results)))
+        .add_handler(LedgerHandler::new(
+            client.clone(),
+            rt.clone(),
+            Arc::clone(&results),
+        ))
         .add_handler(PublishHandler::new(Arc::clone(&results)))
         .build()
         .expect("pipeline build");

@@ -136,7 +136,8 @@ fn e2e_successful_transaction() {
 
     let builder = PipelineBuilder::new().with_capacity(1024);
     let results = builder.results();
-    let ledger_handler = LedgerHandler::new(Arc::clone(&tb2), Arc::clone(&rt), Arc::clone(&results));
+    let ledger_handler =
+        LedgerHandler::new(Arc::clone(&tb2), Arc::clone(&rt), Arc::clone(&results));
 
     let (pipeline, runners) = builder
         .add_handler(ValidationHandler::new(Arc::clone(&results)))

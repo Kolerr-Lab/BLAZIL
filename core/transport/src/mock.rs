@@ -217,14 +217,18 @@ mod tests {
             client.create_account(acc).await.expect("credit account")
         };
 
-        let max_amount_units: u64 = 100_000_000_00_u64; // $1M in cents
+        let max_amount_units: u64 = 10_000_000_000_u64; // $1M in cents
 
         let builder = PipelineBuilder::new().with_capacity(1024);
         let results = builder.results();
         let (pipeline, runners) = builder
             .add_handler(ValidationHandler::new(Arc::clone(&results)))
             .add_handler(RiskHandler::new(max_amount_units, Arc::clone(&results)))
-            .add_handler(LedgerHandler::new(Arc::clone(&client), Arc::clone(&rt), Arc::clone(&results)))
+            .add_handler(LedgerHandler::new(
+                Arc::clone(&client),
+                Arc::clone(&rt),
+                Arc::clone(&results),
+            ))
             .add_handler(PublishHandler::new(Arc::clone(&results)))
             .build()
             .expect("pipeline");

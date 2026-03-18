@@ -61,10 +61,7 @@ impl RiskHandler {
     ///
     /// Transactions whose `amount_units` exceeds `max_amount_units` are
     /// rejected when `flags.requires_risk_check()` is `true`.
-    pub fn new(
-        max_amount_units: u64,
-        results: Arc<DashMap<i64, TransactionResult>>,
-    ) -> Self {
+    pub fn new(max_amount_units: u64, results: Arc<DashMap<i64, TransactionResult>>) -> Self {
         Self {
             max_amount_units,
             results,
@@ -146,7 +143,10 @@ mod tests {
         let mut handler = make_handler(Arc::clone(&results));
         let mut event = make_event_with_units(10_000); // $100.00
         handler.on_event(&mut event, 0, true);
-        assert!(!results.contains_key(&0), "below-limit amount must not produce a result");
+        assert!(
+            !results.contains_key(&0),
+            "below-limit amount must not produce a result"
+        );
     }
 
     #[test]
@@ -157,7 +157,10 @@ mod tests {
         let mut event = make_event_with_units(MAX_CENTS + 1);
         handler.on_event(&mut event, 0, true);
         assert!(
-            matches!(results.get(&0).as_deref(), Some(TransactionResult::Rejected { .. })),
+            matches!(
+                results.get(&0).as_deref(),
+                Some(TransactionResult::Rejected { .. })
+            ),
             "over-limit amount must be rejected"
         );
     }
@@ -186,7 +189,10 @@ mod tests {
             Some(TransactionResult::Rejected { reason }) => reason.to_string(),
             _ => panic!("expected rejection after handler"),
         };
-        assert_eq!(original, current, "pre-existing rejection must not be overwritten");
+        assert_eq!(
+            original, current,
+            "pre-existing rejection must not be overwritten"
+        );
     }
 
     #[test]
@@ -203,6 +209,9 @@ mod tests {
         );
         // requires_risk_check defaults to false → skip
         handler.on_event(&mut event, 0, true);
-        assert!(!results.contains_key(&0), "risk check skipped when flag is false");
+        assert!(
+            !results.contains_key(&0),
+            "risk check skipped when flag is false"
+        );
     }
 }

@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use criterion::{criterion_group, criterion_main, Criterion};
 
-use blazil_common::amount::Amount;
 use blazil_common::currency::parse_currency;
 use blazil_common::error::BlazerError;
 use blazil_common::ids::{AccountId, LedgerId, TransactionId};
@@ -15,7 +14,6 @@ use blazil_engine::pipeline::PipelineBuilder;
 use blazil_ledger::account::{Account, AccountFlags};
 use blazil_ledger::client::LedgerClient;
 use blazil_ledger::mock::InMemoryLedgerClient;
-use rust_decimal::Decimal;
 
 fn bench_single_tx_latency(c: &mut Criterion) {
     let usd = parse_currency("USD").expect("USD");
@@ -48,15 +46,19 @@ fn bench_single_tx_latency(c: &mut Criterion) {
         )))
         .expect("credit account");
 
-    let amount = Amount::new(Decimal::new(1_00, 2), usd).expect("amount");
-    let max_amount = Amount::new(Decimal::new(100_000_000_000, 2), usd).expect("max");
+    let amount_units: u64 = 100; // $1.00 in cents
+    let max_amount_units: u64 = 100_000_000_000; // $1B in cents
 
     let builder = PipelineBuilder::new().with_capacity(65_536);
     let results = builder.results();
     let (pipeline, runners) = builder
         .add_handler(ValidationHandler::new(Arc::clone(&results)))
-        .add_handler(RiskHandler::new(max_amount, Arc::clone(&results)))
-        .add_handler(LedgerHandler::new(client.clone(), rt.clone(), Arc::clone(&results)))
+        .add_handler(RiskHandler::new(max_amount_units, Arc::clone(&results)))
+        .add_handler(LedgerHandler::new(
+            client.clone(),
+            rt.clone(),
+            Arc::clone(&results),
+        ))
         .add_handler(PublishHandler::new(Arc::clone(&results)))
         .build()
         .expect("pipeline");
@@ -67,7 +69,7 @@ fn bench_single_tx_latency(c: &mut Criterion) {
         TransactionId::new(),
         debit_id,
         credit_id,
-        amount,
+        amount_units,
         LedgerId::USD,
         1,
     );

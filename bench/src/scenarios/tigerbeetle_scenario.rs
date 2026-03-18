@@ -83,7 +83,11 @@ pub async fn run(events: u64) -> Option<BenchmarkResult> {
     let (pipeline, runner) = builder
         .add_handler(ValidationHandler::new(Arc::clone(&results)))
         .add_handler(RiskHandler::new(max_amount_units, Arc::clone(&results)))
-        .add_handler(LedgerHandler::new(tb.clone(), rt.clone(), Arc::clone(&results)))
+        .add_handler(LedgerHandler::new(
+            tb.clone(),
+            rt.clone(),
+            Arc::clone(&results),
+        ))
         .add_handler(PublishHandler::new(Arc::clone(&results)))
         .build()
         .expect("pipeline build");

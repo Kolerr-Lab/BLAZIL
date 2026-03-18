@@ -279,6 +279,7 @@ dependencies = [
  "blazil-common",
  "blazil-engine",
  "blazil-ledger",
+ "bytemuck",
  "core_affinity",
  "dashmap",
  "rmp-serde",

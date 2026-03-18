@@ -149,7 +149,7 @@ pub fn print_report(
     // ── sharded scaling analysis ─────────────────────────────────────────────
     let scaling_ratio = sharded_4.tps as f64 / sharded_1.tps as f64;
     let scaling_efficiency = (scaling_ratio / 4.0) * 100.0;
-    
+
     println!();
     println!(
         "{h} Sharded Pipeline Scaling:{r}",

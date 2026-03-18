@@ -257,12 +257,13 @@ pub fn ledger_id_to_currency(id: &LedgerId) -> BlazerResult<Currency> {
         6 => "BTC",
         7 => "ETH",
         other => {
-            return Err(BlazerError::ValidationError(
-                format!("unknown ledger_id: {other}"),
-            ))
+            return Err(BlazerError::ValidationError(format!(
+                "unknown ledger_id: {other}"
+            )))
         }
     };
-    Currency::from_str(code).map_err(|_| BlazerError::ValidationError(format!("bad currency code: {code}")))
+    Currency::from_str(code)
+        .map_err(|_| BlazerError::ValidationError(format!("bad currency code: {code}")))
 }
 
 /// Converts a [`TransactionId`] to a TigerBeetle `u128` identifier.

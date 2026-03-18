@@ -307,7 +307,8 @@ impl RingBuffer {
     pub fn has_available_capacity(&self) -> bool {
         let next_claim = self.claim.get() + 1;
         // Compute minimum gating sequence across all consumers (slowest consumer)
-        let min_gate = self.gating_sequences
+        let min_gate = self
+            .gating_sequences
             .iter()
             .map(|seq| seq.get())
             .min()

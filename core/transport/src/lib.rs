@@ -42,6 +42,7 @@ pub mod protocol;
 pub mod rate_limit;
 pub mod server;
 pub mod tcp;
+pub mod udp_transport;
 
 #[cfg(feature = "aeron")]
 pub mod aeron_transport;

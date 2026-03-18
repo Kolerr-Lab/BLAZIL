@@ -20,12 +20,12 @@
 //!
 //! let builder = PipelineBuilder::new();
 //! let results = builder.results();
-//! let (pipeline, runner) = builder
+//! let (pipeline, runners) = builder
 //!     .add_handler(ValidationHandler::new(results))
 //!     .build()
 //!     .expect("valid capacity");
 //!
-//! let _handle = runner.run();
+//! let _handles: Vec<_> = runners.into_iter().map(|r| r.run()).collect();
 //! pipeline.stop();
 //! ```
 //!
@@ -34,10 +34,12 @@
 //! ```rust,no_run
 //! use blazil_engine::sharded_pipeline::ShardedPipeline;
 //!
-//! let sharded = ShardedPipeline::new(4, 1024 * 1024, 1_000_000)?;
-//! let event = /* ... */;
-//! sharded.try_send(event)?;
-//! sharded.stop();
+//! let sharded = ShardedPipeline::new(
+//!     4,          // shard_count
+//!     1024,       // capacity_per_shard
+//!     1_000_000   // max_amount_units
+//! )?;
+//! # Ok::<(), blazil_common::error::BlazerError>(())
 //! ```
 
 // ── modules ───────────────────────────────────────────────────────────────────

@@ -162,7 +162,10 @@ mod tests {
     fn valid_event_result_remains_none() {
         let mut event = make_valid_event();
         let results = run(&mut event);
-        assert!(!results.contains_key(&0), "valid event should not produce a result");
+        assert!(
+            !results.contains_key(&0),
+            "valid event should not produce a result"
+        );
     }
 
     #[test]
@@ -171,7 +174,10 @@ mod tests {
         event.transaction_id = TransactionId::from_u64(0);
         let results = run(&mut event);
         assert!(
-            matches!(results.get(&0).as_deref(), Some(TransactionResult::Rejected { .. })),
+            matches!(
+                results.get(&0).as_deref(),
+                Some(TransactionResult::Rejected { .. })
+            ),
             "zero transaction_id must be rejected"
         );
     }
@@ -182,7 +188,10 @@ mod tests {
         event.debit_account_id = AccountId::from_u64(0);
         let results = run(&mut event);
         assert!(
-            matches!(results.get(&0).as_deref(), Some(TransactionResult::Rejected { .. })),
+            matches!(
+                results.get(&0).as_deref(),
+                Some(TransactionResult::Rejected { .. })
+            ),
             "zero debit_account_id must be rejected"
         );
     }
@@ -193,7 +202,10 @@ mod tests {
         event.credit_account_id = AccountId::from_u64(0);
         let results = run(&mut event);
         assert!(
-            matches!(results.get(&0).as_deref(), Some(TransactionResult::Rejected { .. })),
+            matches!(
+                results.get(&0).as_deref(),
+                Some(TransactionResult::Rejected { .. })
+            ),
             "zero credit_account_id must be rejected"
         );
     }
@@ -204,7 +216,10 @@ mod tests {
         event.credit_account_id = event.debit_account_id;
         let results = run(&mut event);
         assert!(
-            matches!(results.get(&0).as_deref(), Some(TransactionResult::Rejected { .. })),
+            matches!(
+                results.get(&0).as_deref(),
+                Some(TransactionResult::Rejected { .. })
+            ),
             "self-transfer must be rejected"
         );
     }
@@ -215,7 +230,10 @@ mod tests {
         event.amount_units = 0;
         let results = run(&mut event);
         assert!(
-            matches!(results.get(&0).as_deref(), Some(TransactionResult::Rejected { .. })),
+            matches!(
+                results.get(&0).as_deref(),
+                Some(TransactionResult::Rejected { .. })
+            ),
             "zero amount_units must be rejected"
         );
     }
@@ -245,6 +263,9 @@ mod tests {
             Some(TransactionResult::Rejected { reason }) => reason.to_string(),
             _ => panic!("expected rejection after re-run"),
         };
-        assert_eq!(original_msg, current_msg, "pre-existing rejection must not be overwritten");
+        assert_eq!(
+            original_msg, current_msg,
+            "pre-existing rejection must not be overwritten"
+        );
     }
 }

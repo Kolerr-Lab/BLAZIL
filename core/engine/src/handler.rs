@@ -38,6 +38,10 @@ use crate::event::TransactionEvent;
 ///         _sequence: i64,
 ///         _end_of_batch: bool,
 ///     ) {}
+///
+///     fn clone_handler(&self) -> Box<dyn EventHandler> {
+///         Box::new(NoopHandler)
+///     }
 /// }
 /// ```
 pub trait EventHandler: Send + 'static {

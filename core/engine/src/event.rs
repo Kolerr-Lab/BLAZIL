@@ -43,35 +43,65 @@ use blazil_common::timestamp::Timestamp;
 pub struct EventFlags(u8);
 
 impl EventFlags {
-    const RISK_CHECK:  u8 = 0b0000_0001;
-    const PENDING:     u8 = 0b0000_0010;
+    const RISK_CHECK: u8 = 0b0000_0001;
+    const PENDING: u8 = 0b0000_0010;
     const SKIP_PUBLISH: u8 = 0b0000_0100;
+
+    /// Creates EventFlags from raw u8 value (for deserialization).
+    #[inline]
+    pub fn from_raw(byte: u8) -> Self {
+        Self(byte)
+    }
+
+    /// Returns raw u8 value (for serialization).
+    #[inline]
+    pub fn to_raw(&self) -> u8 {
+        self.0
+    }
 
     /// When `true`, the [`crate::handlers::risk::RiskHandler`] applies limits.
     #[inline]
-    pub fn requires_risk_check(&self) -> bool { self.0 & Self::RISK_CHECK != 0 }
+    pub fn requires_risk_check(&self) -> bool {
+        self.0 & Self::RISK_CHECK != 0
+    }
     /// Set the risk-check flag.
     #[inline]
     pub fn set_requires_risk_check(&mut self, v: bool) {
-        if v { self.0 |= Self::RISK_CHECK; } else { self.0 &= !Self::RISK_CHECK; }
+        if v {
+            self.0 |= Self::RISK_CHECK;
+        } else {
+            self.0 &= !Self::RISK_CHECK;
+        }
     }
 
     /// When `true`, this is a two-phase (pending) transfer.
     #[inline]
-    pub fn is_pending(&self) -> bool { self.0 & Self::PENDING != 0 }
+    pub fn is_pending(&self) -> bool {
+        self.0 & Self::PENDING != 0
+    }
     /// Set the pending flag.
     #[inline]
     pub fn set_is_pending(&mut self, v: bool) {
-        if v { self.0 |= Self::PENDING; } else { self.0 &= !Self::PENDING; }
+        if v {
+            self.0 |= Self::PENDING;
+        } else {
+            self.0 &= !Self::PENDING;
+        }
     }
 
     /// When `true`, the [`crate::handlers::publish::PublishHandler`] skips this event.
     #[inline]
-    pub fn skip_publish(&self) -> bool { self.0 & Self::SKIP_PUBLISH != 0 }
+    pub fn skip_publish(&self) -> bool {
+        self.0 & Self::SKIP_PUBLISH != 0
+    }
     /// Set the skip-publish flag.
     #[inline]
     pub fn set_skip_publish(&mut self, v: bool) {
-        if v { self.0 |= Self::SKIP_PUBLISH; } else { self.0 &= !Self::SKIP_PUBLISH; }
+        if v {
+            self.0 |= Self::SKIP_PUBLISH;
+        } else {
+            self.0 &= !Self::SKIP_PUBLISH;
+        }
     }
 }
 

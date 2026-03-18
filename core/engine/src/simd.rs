@@ -61,17 +61,25 @@ unsafe fn check_zeros_u64x4_unsafe(values: &[u64; 4]) -> u8 {
     // Extract to scalar (checking if any bits are set means it was zero)
     // For simplicity, just check the scalar values since NEON doesn't have easy bitmask extraction
     let mut result = 0u8;
-    if values[0] == 0 { result |= 0b0001; }
-    if values[1] == 0 { result |= 0b0010; }
-    if values[2] == 0 { result |= 0b0100; }
-    if values[3] == 0 { result |= 0b1000; }
+    if values[0] == 0 {
+        result |= 0b0001;
+    }
+    if values[1] == 0 {
+        result |= 0b0010;
+    }
+    if values[2] == 0 {
+        result |= 0b0100;
+    }
+    if values[3] == 0 {
+        result |= 0b1000;
+    }
 
     // Verify NEON comparison matches scalar (development check)
     let lane0_zero = vgetq_lane_u64(cmp0, 0) != 0;
     let lane1_zero = vgetq_lane_u64(cmp0, 1) != 0;
     let lane2_zero = vgetq_lane_u64(cmp1, 0) != 0;
     let lane3_zero = vgetq_lane_u64(cmp1, 1) != 0;
-    
+
     debug_assert_eq!(lane0_zero, values[0] == 0);
     debug_assert_eq!(lane1_zero, values[1] == 0);
     debug_assert_eq!(lane2_zero, values[2] == 0);
@@ -85,10 +93,18 @@ unsafe fn check_zeros_u64x4_unsafe(values: &[u64; 4]) -> u8 {
 #[inline]
 pub fn check_zeros_u64x4(values: &[u64; 4]) -> u8 {
     let mut result = 0u8;
-    if values[0] == 0 { result |= 0b0001; }
-    if values[1] == 0 { result |= 0b0010; }
-    if values[2] == 0 { result |= 0b0100; }
-    if values[3] == 0 { result |= 0b1000; }
+    if values[0] == 0 {
+        result |= 0b0001;
+    }
+    if values[1] == 0 {
+        result |= 0b0010;
+    }
+    if values[2] == 0 {
+        result |= 0b0100;
+    }
+    if values[3] == 0 {
+        result |= 0b1000;
+    }
     result
 }
 
@@ -118,17 +134,25 @@ unsafe fn compare_u64x4_gt_unsafe(values: &[u64; 4], threshold: u64) -> u8 {
 
     // Extract bitmask using scalar checks (NEON doesn't have easy horizontal bitmask)
     let mut result = 0u8;
-    if values[0] > threshold { result |= 0b0001; }
-    if values[1] > threshold { result |= 0b0010; }
-    if values[2] > threshold { result |= 0b0100; }
-    if values[3] > threshold { result |= 0b1000; }
+    if values[0] > threshold {
+        result |= 0b0001;
+    }
+    if values[1] > threshold {
+        result |= 0b0010;
+    }
+    if values[2] > threshold {
+        result |= 0b0100;
+    }
+    if values[3] > threshold {
+        result |= 0b1000;
+    }
 
     // Verify NEON comparison matches scalar (development check)
     let lane0_gt = vgetq_lane_u64(cmp0, 0) != 0;
     let lane1_gt = vgetq_lane_u64(cmp0, 1) != 0;
     let lane2_gt = vgetq_lane_u64(cmp1, 0) != 0;
     let lane3_gt = vgetq_lane_u64(cmp1, 1) != 0;
-    
+
     debug_assert_eq!(lane0_gt, values[0] > threshold);
     debug_assert_eq!(lane1_gt, values[1] > threshold);
     debug_assert_eq!(lane2_gt, values[2] > threshold);
@@ -142,10 +166,18 @@ unsafe fn compare_u64x4_gt_unsafe(values: &[u64; 4], threshold: u64) -> u8 {
 #[inline]
 pub fn compare_u64x4_gt(values: &[u64; 4], threshold: u64) -> u8 {
     let mut result = 0u8;
-    if values[0] > threshold { result |= 0b0001; }
-    if values[1] > threshold { result |= 0b0010; }
-    if values[2] > threshold { result |= 0b0100; }
-    if values[3] > threshold { result |= 0b1000; }
+    if values[0] > threshold {
+        result |= 0b0001;
+    }
+    if values[1] > threshold {
+        result |= 0b0010;
+    }
+    if values[2] > threshold {
+        result |= 0b0100;
+    }
+    if values[3] > threshold {
+        result |= 0b1000;
+    }
     result
 }
 

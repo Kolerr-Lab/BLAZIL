@@ -43,10 +43,12 @@ use crate::pipeline::{Pipeline, PipelineBuilder};
 /// ```rust,no_run
 /// use blazil_engine::sharded_pipeline::ShardedPipeline;
 ///
-/// let sharded = ShardedPipeline::new(4)?; // 4 independent shards
-/// let event = /* ... */;
-/// sharded.try_send(event)?;
-/// sharded.stop();
+/// let sharded = ShardedPipeline::new(
+///     4,      // shard_count
+///     1024,   // capacity_per_shard
+///     1_000_000_000 // max_amount_units
+/// )?;
+/// # Ok::<(), blazil_common::error::BlazerError>(())
 /// ```
 pub struct ShardedPipeline {
     shards: Vec<Pipeline>,
@@ -74,22 +76,22 @@ impl ShardedPipeline {
         let mut shards = Vec::with_capacity(shard_count);
         let mut handles = Vec::new();
 
-        // Create independent pipeline for each shard 
+        // Create independent pipeline for each shard
         // Each shard: dedicated thread + dedicated tokio runtime = zero contention
         for _shard_id in 0..shard_count {
             // Each shard gets its OWN results map (no key collision across shards)
             let shard_results = Arc::new(DashMap::new());
-            
+
             let builder = PipelineBuilder::new()
                 .with_capacity(capacity_per_shard)
                 .with_results(Arc::clone(&shard_results));
 
             // Build full handler chain for this shard
-            use blazil_ledger::mock::InMemoryLedgerClient;
             use crate::handlers::ledger::LedgerHandler;
             use crate::handlers::publish::PublishHandler;
             use crate::handlers::risk::RiskHandler;
             use crate::handlers::validation::ValidationHandler;
+            use blazil_ledger::mock::InMemoryLedgerClient;
 
             // Each shard gets its own dedicated tokio runtime (NO SHARING)
             // This eliminates scheduler contention between shards (LMAX pattern)
@@ -118,7 +120,7 @@ impl ShardedPipeline {
                 .add_handler(publish)
                 .build()?;
 
-            // Each shard should have exactly 1 runner (single-threaded per shard)  
+            // Each shard should have exactly 1 runner (single-threaded per shard)
             assert_eq!(
                 runners.len(),
                 1,
@@ -173,10 +175,10 @@ impl ShardedPipeline {
     /// Returns a newly created DashMap containing results from ALL shards.
     pub fn results(&self) -> DashMap<i64, TransactionResult> {
         let combined = DashMap::new();
-        
+
         for (shard_id, pipeline) in self.shards.iter().enumerate() {
             let shard_results = pipeline.results();
-            
+
             // Copy this shard's results to combined map
             // Use unique keys: (shard_id << 48) | sequence
             for entry in shard_results.iter() {
@@ -199,6 +201,23 @@ impl ShardedPipeline {
     /// Get the number of shards in this pipeline.
     pub fn shard_count(&self) -> usize {
         self.shard_count
+    }
+
+    /// Get the results map for a specific shard.
+    ///
+    /// # Arguments
+    ///
+    /// * `shard_id` - Shard identifier (0..shard_count)
+    ///
+    /// # Returns
+    ///
+    /// Arc reference to the shard's results map for efficient polling.
+    ///
+    /// # Panics
+    ///
+    /// Panics if shard_id >= shard_count.
+    pub fn shard_results(&self, shard_id: usize) -> Arc<DashMap<i64, TransactionResult>> {
+        Arc::clone(self.shards[shard_id].results())
     }
 }
 
@@ -232,7 +251,7 @@ mod tests {
 
             let shard_id = id as usize % 4;
             println!("Event {} -> shard {}", id, shard_id);
-            
+
             sharded.publish_event(event).expect("shard not full");
         }
 
@@ -259,8 +278,7 @@ mod tests {
     fn test_sharded_pipeline_scalable_shard_count() {
         // Test that we can create pipelines with different shard counts
         for shard_count in [1, 2, 4, 8, 16] {
-            let sharded =
-                ShardedPipeline::new(shard_count, 512, 1_000_000).expect("valid config");
+            let sharded = ShardedPipeline::new(shard_count, 512, 1_000_000).expect("valid config");
             assert_eq!(sharded.shard_count(), shard_count);
             sharded.stop();
         }
