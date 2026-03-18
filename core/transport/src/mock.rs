@@ -221,7 +221,7 @@ mod tests {
 
         let builder = PipelineBuilder::new().with_capacity(1024);
         let results = builder.results();
-        let (pipeline, runner) = builder
+        let (pipeline, runners) = builder
             .add_handler(ValidationHandler::new(Arc::clone(&results)))
             .add_handler(RiskHandler::new(max_amount_units, Arc::clone(&results)))
             .add_handler(LedgerHandler::new(Arc::clone(&client), Arc::clone(&rt), Arc::clone(&results)))
@@ -229,7 +229,7 @@ mod tests {
             .build()
             .expect("pipeline");
 
-        let _runner_handle = runner.run();
+        let _handles: Vec<_> = runners.into_iter().map(|r| r.run()).collect();
 
         let pipeline = Arc::new(pipeline);
 

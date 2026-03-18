@@ -53,7 +53,7 @@ fn bench_single_tx_latency(c: &mut Criterion) {
 
     let builder = PipelineBuilder::new().with_capacity(65_536);
     let results = builder.results();
-    let (pipeline, runner) = builder
+    let (pipeline, runners) = builder
         .add_handler(ValidationHandler::new(Arc::clone(&results)))
         .add_handler(RiskHandler::new(max_amount, Arc::clone(&results)))
         .add_handler(LedgerHandler::new(client.clone(), rt.clone(), Arc::clone(&results)))
@@ -61,7 +61,7 @@ fn bench_single_tx_latency(c: &mut Criterion) {
         .build()
         .expect("pipeline");
 
-    let _handle = runner.run();
+    let _handles: Vec<_> = runners.into_iter().map(|r| r.run()).collect();
 
     let template = TransactionEvent::new(
         TransactionId::new(),

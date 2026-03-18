@@ -82,15 +82,17 @@ use crate::sequence::Sequence;
 /// ```
 pub struct PipelineBuilder {
     capacity: usize,
+    num_workers: usize,
     handlers: Vec<Box<dyn EventHandler>>,
     results: Arc<DashMap<i64, TransactionResult>>,
 }
 
 impl PipelineBuilder {
-    /// Creates a builder with default capacity (`65_536`).
+    /// Creates a builder with default capacity (`65_536`) and single worker thread.
     pub fn new() -> Self {
         Self {
             capacity: 65_536,
+            num_workers: 1,
             handlers: Vec::new(),
             results: Arc::new(DashMap::new()),
         }
@@ -99,6 +101,20 @@ impl PipelineBuilder {
     /// Sets the ring buffer capacity (must be a power of two).
     pub fn with_capacity(mut self, capacity: usize) -> Self {
         self.capacity = capacity;
+        self
+    }
+
+    /// Sets the number of worker threads for parallel event processing.
+    ///
+    /// Each worker processes every Nth event (round-robin sharding).
+    /// - `num_workers = 1`: single-threaded (default)
+    /// - `num_workers = 8`: 8 workers, each handles every 8th event
+    /// - `num_workers = 16`: 16 workers for 16-core bare metal systems
+    ///
+    /// **Recommendation**: Set to number of physical cores for maximum throughput.
+    pub fn with_workers(mut self, num_workers: usize) -> Self {
+        assert!(num_workers > 0, "num_workers must be at least 1");
+        self.num_workers = num_workers;
         self
     }
 
@@ -126,30 +142,71 @@ impl PipelineBuilder {
         self
     }
 
-    /// Builds the pipeline.
+    /// Builds the pipeline with configured worker threads.
+    ///
+    /// Returns the `Pipeline` handle and a vector of `PipelineRunner` instances
+    /// (one per worker thread). Call `.run()` on each runner to spawn worker threads.
     ///
     /// # Errors
     ///
     /// Returns [`blazil_common::error::BlazerError::ValidationError`] if
     /// `capacity` is zero or not a power of two.
-    pub fn build(self) -> BlazerResult<(Pipeline, PipelineRunner)> {
-        let ring_buffer = Arc::new(RingBuffer::new(self.capacity)?);
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use blazil_engine::pipeline::PipelineBuilder;
+    /// let (pipeline, runners) = PipelineBuilder::new()
+    ///     .with_workers(8)
+    ///     .build()
+    ///     .unwrap();
+    ///
+    /// // Spawn all worker threads
+    /// let handles: Vec<_> = runners.into_iter()
+    ///     .map(|runner| runner.run())
+    ///     .collect();
+    /// ```
+    pub fn build(self) -> BlazerResult<(Pipeline, Vec<PipelineRunner>)> {
+        let mut ring_buffer = RingBuffer::new(self.capacity)?;
         let shutdown = Arc::new(AtomicBool::new(false));
         let results = self.results;
+
+        // Register gating sequences for each worker (one per worker thread)
+        let mut worker_gates = Vec::with_capacity(self.num_workers);
+        for _ in 0..self.num_workers {
+            let gate = ring_buffer.add_gating_sequence();
+            worker_gates.push(gate);
+        }
+
+        let ring_buffer = Arc::new(ring_buffer);
 
         let pipeline = Pipeline {
             ring_buffer: Arc::clone(&ring_buffer),
             shutdown: Arc::clone(&shutdown),
             results: Arc::clone(&results),
         };
-        let runner = PipelineRunner {
-            ring_buffer,
-            handlers: self.handlers,
-            shutdown,
-            results,
-        };
 
-        Ok((pipeline, runner))
+        // Create multiple runners for parallel processing
+        let mut runners = Vec::with_capacity(self.num_workers);
+
+        for shard_id in 0..self.num_workers {
+            // Clone handlers for this worker (Arc internals are shared)
+            let handlers = self.handlers.iter()
+                .map(|h| h.clone_handler())
+                .collect();
+
+            runners.push(PipelineRunner {
+                ring_buffer: Arc::clone(&ring_buffer),
+                handlers,
+                shutdown: Arc::clone(&shutdown),
+                results: Arc::clone(&results),
+                shard_id,
+                num_shards: self.num_workers,
+                gating_sequence: Arc::clone(&worker_gates[shard_id]),
+            });
+        }
+
+        Ok((pipeline, runners))
     }
 }
 
@@ -259,6 +316,12 @@ pub struct PipelineRunner {
     shutdown: Arc<AtomicBool>,
     #[allow(dead_code)]
     results: Arc<DashMap<i64, TransactionResult>>,
+    /// Shard ID for this worker (0..num_shards)
+    shard_id: usize,
+    /// Total number of worker shards
+    num_shards: usize,
+    /// This worker's dedicated gating sequence
+    gating_sequence: Arc<Sequence>,
 }
 
 impl PipelineRunner {
@@ -271,48 +334,63 @@ impl PipelineRunner {
     ///
     /// Panics if the OS fails to spawn the thread (OS resource exhaustion).
     pub fn run(mut self) -> std::thread::JoinHandle<()> {
-        std::thread::spawn(move || {
-            for handler in &mut self.handlers {
-                handler.on_start();
-            }
+        let shard_id = self.shard_id;
+        let num_shards = self.num_shards;
 
-            let mut consumer_seq = Sequence::INITIAL_VALUE; // −1
-
-            loop {
-                // Acquire load: pairs with the Release store in `RingBuffer::publish`.
-                let cursor = self.ring_buffer.cursor().get();
-
-                if cursor > consumer_seq {
-                    // Drain all published-but-unprocessed events.
-                    while consumer_seq < cursor {
-                        consumer_seq += 1;
-                        let end_of_batch = consumer_seq == cursor;
-
-                        // SAFETY: only the runner reads slots ≤ cursor after
-                        // the cursor was published (Release). The producer will
-                        // not reuse this slot until the ring wraps around (which
-                        // requires 2^N more events than the current window).
-                        let event = unsafe { &mut *self.ring_buffer.get_mut(consumer_seq) };
-
-                        for handler in &mut self.handlers {
-                            handler.on_event(event, consumer_seq, end_of_batch);
-                        }
-                    }
-                    // Update the gating sequence to allow the producer to advance.
-                    // This prevents the producer from lapping the consumer.
-                    self.ring_buffer.gating_sequence().set(consumer_seq);
-                } else if self.shutdown.load(Ordering::Acquire) {
-                    // Check shutdown only when idle to avoid splitting a batch.
-                    break;
-                } else {
-                    std::hint::spin_loop();
+        std::thread::Builder::new()
+            .name(format!("pipeline-worker-{}", shard_id))
+            .spawn(move || {
+                for handler in &mut self.handlers {
+                    handler.on_start();
                 }
-            }
 
-            for handler in &mut self.handlers {
-                handler.on_shutdown();
-            }
-        })
+                // Start at first sequence owned by this shard
+                // Shard 0 starts at 0, shard 1 at 1, etc.
+                let mut consumer_seq = (shard_id as i64) - 1;
+
+                loop {
+                    // Acquire load: pairs with the Release store in `RingBuffer::publish`.
+                    let cursor = self.ring_buffer.cursor().get();
+
+                    if cursor > consumer_seq {
+                        // Process events belonging to this shard (every Nth event)
+                        while consumer_seq < cursor {
+                            consumer_seq += num_shards as i64;
+
+                            // Skip if we've advanced beyond current cursor
+                            if consumer_seq > cursor {
+                                consumer_seq -= num_shards as i64;
+                                break;
+                            }
+
+                            let end_of_batch = consumer_seq >= cursor - (num_shards as i64 - 1);
+
+                            // SAFETY: Each worker processes disjoint sequences (shard_id + k*num_shards).
+                            // The producer publishes with Release semantics. No data races.
+                            let event = unsafe { &mut *self.ring_buffer.get_mut(consumer_seq) };
+
+                            for handler in &mut self.handlers {
+                                handler.on_event(event, consumer_seq, end_of_batch);
+                            }
+                        }
+
+                        // Update this worker's gating sequence (lock-free, no contention)
+                        // Producer computes MIN across all workers' gating sequences
+                        self.gating_sequence.set(consumer_seq);
+                    } else if self.shutdown.load(Ordering::Acquire) {
+                        // Check shutdown only when idle to avoid splitting a batch.
+                        break;
+                    } else {
+                        std::hint::spin_loop();
+                    }
+                }
+
+                
+                for handler in &mut self.handlers {
+                    handler.on_shutdown();
+                }
+            })
+            .expect("failed to spawn pipeline worker thread")
     }
 }
 
@@ -397,13 +475,13 @@ mod tests {
     fn build_full_pipeline(
         client: Arc<InMemoryLedgerClient>,
         runtime: Arc<tokio::runtime::Runtime>,
-    ) -> (Pipeline, std::thread::JoinHandle<()>) {
+    ) -> (Pipeline, Vec<std::thread::JoinHandle<()>>) {
         // $1,000,000.00 in cents.
         let max_amount_units: u64 = 100_000_000;
 
         let builder = PipelineBuilder::new().with_capacity(1024);
         let results = builder.results();
-        let (pipeline, runner) = builder
+        let (pipeline, runners) = builder
             .add_handler(ValidationHandler::new(Arc::clone(&results)))
             .add_handler(RiskHandler::new(max_amount_units, Arc::clone(&results)))
             .add_handler(LedgerHandler::new(client, runtime, Arc::clone(&results)))
@@ -411,8 +489,8 @@ mod tests {
             .build()
             .expect("valid pipeline");
 
-        let handle = runner.run();
-        (pipeline, handle)
+        let handles: Vec<_> = runners.into_iter().map(|r| r.run()).collect();
+        (pipeline, handles)
     }
 
     // ── integration tests ──────────────────────────────────────────────────────
@@ -438,7 +516,7 @@ mod tests {
     #[test]
     fn valid_transaction_is_committed() {
         let (client, debit_id, credit_id, runtime) = build_client();
-        let (pipeline, handle) = build_full_pipeline(client, runtime);
+        let (pipeline, handles) = build_full_pipeline(client, runtime);
 
         let event = make_event(debit_id, credit_id);
         let seq = pipeline.publish_event(event).expect("publish");
@@ -446,7 +524,9 @@ mod tests {
         let result = wait_for_result(pipeline.results(), seq, Duration::from_secs(5));
 
         pipeline.stop();
-        handle.join().expect("runner panicked");
+        for h in handles {
+            h.join().expect("runner panicked");
+        }
 
         assert!(
             matches!(result, Some(TransactionResult::Committed { .. })),
@@ -460,12 +540,12 @@ mod tests {
         // Use a pipeline with NO LedgerHandler so we don't need real accounts.
         let builder = PipelineBuilder::new().with_capacity(1024);
         let results = builder.results();
-        let (pipeline, runner) = builder
+        let (pipeline, runners) = builder
             .add_handler(ValidationHandler::new(Arc::clone(&results)))
             .add_handler(PublishHandler::new(Arc::clone(&results)))
             .build()
             .expect("pipeline");
-        let handle = runner.run();
+        let handles: Vec<_> = runners.into_iter().map(|r| r.run()).collect();
 
         // zero TransactionId — ValidationHandler rejects
         let mut event = TransactionEvent::new(
@@ -482,7 +562,9 @@ mod tests {
         let result = wait_for_result(pipeline.results(), seq, Duration::from_secs(5));
 
         pipeline.stop();
-        handle.join().expect("runner panicked");
+        for h in handles {
+            h.join().expect("runner panicked");
+        }
 
         assert!(
             matches!(result, Some(TransactionResult::Rejected { .. })),
@@ -495,13 +577,13 @@ mod tests {
     fn transaction_over_risk_limit_is_rejected() {
         let builder = PipelineBuilder::new().with_capacity(1024);
         let results = builder.results();
-        let (pipeline, runner) = builder
+        let (pipeline, runners) = builder
             .add_handler(ValidationHandler::new(Arc::clone(&results)))
             .add_handler(RiskHandler::new(1_00_u64, Arc::clone(&results))) // max = $1.00
             .add_handler(PublishHandler::new(Arc::clone(&results)))
             .build()
             .expect("pipeline");
-        let handle = runner.run();
+        let handles: Vec<_> = runners.into_iter().map(|r| r.run()).collect();
 
         // Amount ($500) >> risk limit ($1)
         let mut event = TransactionEvent::new(
@@ -519,7 +601,9 @@ mod tests {
         let result = wait_for_result(pipeline.results(), seq, Duration::from_secs(5));
 
         pipeline.stop();
-        handle.join().expect("runner panicked");
+        for h in handles {
+            h.join().expect("runner panicked");
+        }
 
         assert!(
             matches!(result, Some(TransactionResult::Rejected { .. })),
@@ -531,7 +615,7 @@ mod tests {
     #[test]
     fn multiple_valid_transactions_are_all_committed() {
         let (client, debit_id, credit_id, runtime) = build_client();
-        let (pipeline, handle) = build_full_pipeline(client, runtime);
+        let (pipeline, handles) = build_full_pipeline(client, runtime);
 
         const N: usize = 8;
         let mut seqs = Vec::with_capacity(N);
@@ -548,7 +632,9 @@ mod tests {
             .collect();
 
         pipeline.stop();
-        handle.join().expect("runner panicked");
+        for h in handles {
+            h.join().expect("runner panicked");
+        }
 
         for (i, result) in results.into_iter().enumerate() {
             assert!(

@@ -50,6 +50,8 @@ impl Colors {
 pub fn print_report(
     ring: &BenchmarkResult,
     pipeline: &BenchmarkResult,
+    sharded_1: &BenchmarkResult,
+    sharded_4: &BenchmarkResult,
     tcp: &BenchmarkResult,
     tb: Option<&BenchmarkResult>,
 ) {
@@ -83,6 +85,8 @@ pub fn print_report(
 
     print_row(&c, "Ring Buffer (raw)", ring, "ns");
     print_row(&c, "Pipeline (in-memory)", pipeline, "ns");
+    print_row(&c, "Sharded (1 shard)", sharded_1, "ns");
+    print_row(&c, "Sharded (4 shards)", sharded_4, "ns");
     print_tcp_row(&c, "End-to-End TCP", tcp);
 
     if let Some(tb) = tb {
@@ -138,6 +142,36 @@ pub fn print_report(
     println!(
         "   P99.9: {lc}{} ns{r}",
         fmt_commas(pipeline.p99_9_ns),
+        lc = c.latency,
+        r = c.reset
+    );
+
+    // ── sharded scaling analysis ─────────────────────────────────────────────
+    let scaling_ratio = sharded_4.tps as f64 / sharded_1.tps as f64;
+    let scaling_efficiency = (scaling_ratio / 4.0) * 100.0;
+    
+    println!();
+    println!(
+        "{h} Sharded Pipeline Scaling:{r}",
+        h = c.header,
+        r = c.reset
+    );
+    println!(
+        "   1 shard:  {tc}{} TPS{r}",
+        fmt_commas(sharded_1.tps),
+        tc = c.tps,
+        r = c.reset
+    );
+    println!(
+        "   4 shards: {tc}{} TPS{r}",
+        fmt_commas(sharded_4.tps),
+        tc = c.tps,
+        r = c.reset
+    );
+    println!(
+        "   Scaling:  {lc}{:.2}x (efficiency: {:.1}%){r}",
+        scaling_ratio,
+        scaling_efficiency,
         lc = c.latency,
         r = c.reset
     );

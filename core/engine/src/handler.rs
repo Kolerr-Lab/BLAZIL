@@ -62,4 +62,10 @@ pub trait EventHandler: Send + 'static {
     ///
     /// Override to release resources (e.g. flushing buffers, closing sockets).
     fn on_shutdown(&mut self) {}
+
+    /// Clones this handler for use in a parallel worker thread.
+    ///
+    /// Shared state (Arc) is cloned, but worker-local state (counters, buffers)
+    /// should be reset to initial values.
+    fn clone_handler(&self) -> Box<dyn EventHandler>;
 }

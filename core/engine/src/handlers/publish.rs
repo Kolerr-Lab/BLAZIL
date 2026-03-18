@@ -43,6 +43,18 @@ pub struct PublishHandler {
     deferred: Vec<i64>,
 }
 
+impl Clone for PublishHandler {
+    fn clone(&self) -> Self {
+        Self {
+            results: Arc::clone(&self.results),
+            // Reset worker-local counters and state
+            published_count: 0,
+            rejected_count: 0,
+            deferred: Vec::new(),
+        }
+    }
+}
+
 impl PublishHandler {
     /// Creates a new `PublishHandler`.
     pub fn new(results: Arc<DashMap<i64, TransactionResult>>) -> Self {
@@ -123,6 +135,10 @@ impl EventHandler for PublishHandler {
         if end_of_batch {
             self.flush_deferred();
         }
+    }
+
+    fn clone_handler(&self) -> Box<dyn EventHandler> {
+        Box::new(self.clone())
     }
 }
 

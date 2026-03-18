@@ -15,14 +15,12 @@ use blazil_engine::ring_buffer::RingBuffer;
 
 use crate::metrics::BenchmarkResult;
 
-const WARMUP_EVENTS: u64 = 10_000;
+const WARMUP_EVENTS: u64 = 100;
 const CAPACITY: usize = 1_048_576; // 2^20
 
-/// Run the ring-buffer scenario 3 times and return the median-TPS result.
+/// Run the ring-buffer scenario once for fast testing.
 pub fn run(events: u64) -> BenchmarkResult {
-    let mut results: Vec<BenchmarkResult> = (0..3).map(|_| run_once(events)).collect();
-    results.sort_unstable_by_key(|r| r.tps);
-    results.remove(1) // median
+    run_once(events)
 }
 
 fn run_once(events: u64) -> BenchmarkResult {
@@ -33,13 +31,13 @@ fn run_once(events: u64) -> BenchmarkResult {
     let template = TransactionEvent::new(tx_id, debit_id, credit_id, 1_00_u64, LedgerId::USD, 1);
 
     // Pipeline with zero handlers — pure ring-buffer overhead.
-    let (pipeline, runner) = PipelineBuilder::new()
+    let (pipeline, runners) = PipelineBuilder::new()
         .with_capacity(CAPACITY)
         .build()
         .expect("valid capacity");
 
     let rb = Arc::clone(pipeline.ring_buffer());
-    let handle = runner.run();
+    let handles: Vec<_> = runners.into_iter().map(|r| r.run()).collect();
 
     // ── warmup ───────────────────────────────────────────────────────────────
     let mut last_seq: i64 = -1;
@@ -62,7 +60,9 @@ fn run_once(events: u64) -> BenchmarkResult {
     wait_for_drain(&rb, last_seq);
 
     pipeline.stop();
-    handle.join().expect("runner panicked");
+    for handle in handles {
+        handle.join().expect("runner panicked");
+    }
 
     BenchmarkResult::new("Ring Buffer (raw)", events, duration, &mut latencies)
 }

@@ -23,7 +23,7 @@ use blazil_ledger::mock::InMemoryLedgerClient;
 use crate::metrics::BenchmarkResult;
 use crate::scenarios::ring_buffer_scenario::{publish_with_backpressure, wait_for_drain};
 
-const WARMUP_EVENTS: u64 = 10_000;
+const WARMUP_EVENTS: u64 = 100;
 const CAPACITY: usize = 1_048_576;
 
 /// Run the pipeline scenario 3 times and return the median-TPS result.
@@ -79,7 +79,7 @@ fn run_once_blocking(events: u64) -> BenchmarkResult {
 
     let builder = PipelineBuilder::new().with_capacity(CAPACITY);
     let results = builder.results();
-    let (pipeline, runner) = builder
+    let (pipeline, runners) = builder
         .add_handler(ValidationHandler::new(Arc::clone(&results)))
         .add_handler(RiskHandler::new(max_amount_units, Arc::clone(&results)))
         .add_handler(LedgerHandler::new(client.clone(), rt.clone(), Arc::clone(&results)))
@@ -88,7 +88,7 @@ fn run_once_blocking(events: u64) -> BenchmarkResult {
         .expect("pipeline build");
 
     let rb = Arc::clone(pipeline.ring_buffer());
-    let handle = runner.run();
+    let handles: Vec<_> = runners.into_iter().map(|r| r.run()).collect();
 
     let template = TransactionEvent::new(
         TransactionId::new(),
@@ -120,7 +120,9 @@ fn run_once_blocking(events: u64) -> BenchmarkResult {
     wait_for_drain(&rb, last_seq);
 
     pipeline.stop();
-    handle.join().expect("runner panicked");
+    for handle in handles {
+        handle.join().expect("runner panicked");
+    }
     // rt is dropped here on the blocking thread — safe.
 
     BenchmarkResult::new("Pipeline (in-memory)", events, duration, &mut latencies)

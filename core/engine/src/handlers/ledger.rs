@@ -88,6 +88,20 @@ pub struct LedgerHandler<C: LedgerClient> {
     deferred_sequences: Vec<i64>,
 }
 
+impl<C: LedgerClient> Clone for LedgerHandler<C> {
+    fn clone(&self) -> Self {
+        Self {
+            client: Arc::clone(&self.client),
+            runtime: Arc::clone(&self.runtime),
+            results: Arc::clone(&self.results),
+            // Reset worker-local state for new worker thread
+            batch_started_at: None,
+            deferred_transfers: Vec::new(),
+            deferred_sequences: Vec::new(),
+        }
+    }
+}
+
 impl<C: LedgerClient> LedgerHandler<C> {
     /// Creates a new `LedgerHandler`.
     ///
@@ -277,5 +291,9 @@ impl<C: LedgerClient + 'static> EventHandler for LedgerHandler<C> {
         };
 
         self.results.insert(sequence, tr);
+    }
+
+    fn clone_handler(&self) -> Box<dyn EventHandler> {
+        Box::new(self.clone())
     }
 }

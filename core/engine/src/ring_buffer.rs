@@ -85,14 +85,12 @@ pub struct RingBuffer {
     /// the slot has been fully written (Release store), establishing a
     /// happens-before with any subsequent Acquire load by the runner.
     cursor: Arc<Sequence>,
-    /// The slowest consumer's sequence position (gating sequence).
+    /// Gating sequences for all consumers (one per worker thread).
     ///
     /// Used to prevent the producer from lapping consumers. When
-    /// (claim - gating_sequence) >= capacity, the ring buffer is full
-    /// and publish_event must return RingBufferFull.
-    ///
-    /// Wrapped in `Arc` so the consumer (PipelineRunner) can update it.
-    gating_sequence: Arc<Sequence>,
+    /// (claim - MIN(gating_sequences)) >= capacity, the ring buffer is full.
+    /// Each consumer updates only its own gating sequence (lock-free).
+    gating_sequences: Vec<Arc<Sequence>>,
 }
 
 // SAFETY: RingBuffer uses the single-writer principle enforced at the call
@@ -133,7 +131,9 @@ impl RingBuffer {
         let mask = capacity - 1;
         let claim = Sequence::new(Sequence::INITIAL_VALUE);
         let cursor = Arc::new(Sequence::new(Sequence::INITIAL_VALUE));
-        let gating_sequence = Arc::new(Sequence::new(Sequence::INITIAL_VALUE));
+        // Start with one default gating sequence for backward compatibility
+        let default_gating = Arc::new(Sequence::new(Sequence::INITIAL_VALUE));
+        let gating_sequences = vec![default_gating];
 
         // Pre-allocate all slots. Use `with_capacity` + extend to avoid
         // excess reallocation. Each slot contains a default TransactionEvent.
@@ -149,7 +149,7 @@ impl RingBuffer {
             mask,
             claim,
             cursor,
-            gating_sequence,
+            gating_sequences,
         })
     }
 
@@ -248,11 +248,11 @@ impl RingBuffer {
         &self.cursor
     }
 
-    /// Returns a reference to the gating sequence `Arc<Sequence>`.
+    /// Returns a reference to the first gating sequence `Arc<Sequence>`.
     ///
-    /// The gating sequence represents the slowest consumer's position.
-    /// Consumers (PipelineRunner) update this as they process events to
-    /// prevent the producer from lapping them.
+    /// For single-consumer pipelines, this is the only gating sequence.
+    /// For multi-consumer pipelines, each consumer has its own gating sequence
+    /// registered via [`add_gating_sequence`][RingBuffer::add_gating_sequence].
     ///
     /// # Examples
     ///
@@ -265,13 +265,35 @@ impl RingBuffer {
     /// ```
     #[inline]
     pub fn gating_sequence(&self) -> &Arc<Sequence> {
-        &self.gating_sequence
+        &self.gating_sequences[0]
+    }
+
+    /// Adds a new gating sequence for a consumer (worker thread).
+    ///
+    /// Returns a cloned Arc to the newly added gating sequence for the consumer to update.
+    /// The producer will compute MIN across all gating sequences to prevent lapping.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use blazil_engine::ring_buffer::RingBuffer;
+    ///
+    /// let mut rb = RingBuffer::new(64).unwrap();
+    /// let worker1_gate = rb.add_gating_sequence();
+    /// let worker2_gate = rb.add_gating_sequence();
+    /// // Now rb has 3 gating sequences (1 default + 2 added)
+    /// ```
+    pub fn add_gating_sequence(&mut self) -> Arc<Sequence> {
+        let new_gate = Arc::new(Sequence::new(Sequence::INITIAL_VALUE));
+        self.gating_sequences.push(Arc::clone(&new_gate));
+        new_gate
     }
 
     /// Checks if the ring buffer has available capacity for the producer
     /// to claim a new slot without lapping the slowest consumer.
     ///
     /// Returns `true` if there is space, `false` if the buffer is full.
+    /// For multi-consumer pipelines, computes MIN across all gating sequences.
     ///
     /// # Examples
     ///
@@ -284,8 +306,13 @@ impl RingBuffer {
     #[inline]
     pub fn has_available_capacity(&self) -> bool {
         let next_claim = self.claim.get() + 1;
-        let gate = self.gating_sequence.get();
-        (next_claim - gate) < self.capacity as i64
+        // Compute minimum gating sequence across all consumers (slowest consumer)
+        let min_gate = self.gating_sequences
+            .iter()
+            .map(|seq| seq.get())
+            .min()
+            .unwrap_or(Sequence::INITIAL_VALUE);
+        (next_claim - min_gate) < self.capacity as i64
     }
 
     /// Returns the ring buffer capacity.

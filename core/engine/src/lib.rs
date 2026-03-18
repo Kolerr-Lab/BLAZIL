@@ -28,6 +28,17 @@
 //! let _handle = runner.run();
 //! pipeline.stop();
 //! ```
+//!
+//! ## Sharded pipeline for multi-core
+//!
+//! ```rust,no_run
+//! use blazil_engine::sharded_pipeline::ShardedPipeline;
+//!
+//! let sharded = ShardedPipeline::new(4, 1024 * 1024, 1_000_000)?;
+//! let event = /* ... */;
+//! sharded.try_send(event)?;
+//! sharded.stop();
+//! ```
 
 // ── modules ───────────────────────────────────────────────────────────────────
 
@@ -38,6 +49,7 @@ pub mod metrics;
 pub mod pipeline;
 pub mod ring_buffer;
 pub mod sequence;
+pub mod sharded_pipeline;
 pub mod simd;
 
 // ── re-exports ────────────────────────────────────────────────────────────────
@@ -46,3 +58,4 @@ pub use event::{EventFlags, TransactionEvent, TransactionResult};
 pub use handler::EventHandler;
 pub use metrics::EngineMetrics;
 pub use pipeline::{Pipeline, PipelineBuilder, PipelineRunner};
+pub use sharded_pipeline::ShardedPipeline;

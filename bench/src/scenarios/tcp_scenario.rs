@@ -36,14 +36,9 @@ use crate::metrics::BenchmarkResult;
 const WARMUP_EVENTS: u64 = 100;
 const CAPACITY: usize = 65_536;
 
-/// Run the TCP scenario 3 times and return the median-TPS result.
+/// Run the TCP scenario once for fast testing.
 pub async fn run(events: u64) -> BenchmarkResult {
-    let mut results = Vec::with_capacity(3);
-    for _ in 0..3 {
-        results.push(run_once(events).await);
-    }
-    results.sort_unstable_by_key(|r: &BenchmarkResult| r.tps);
-    results.remove(1)
+    run_once(events).await
 }
 
 async fn run_once(events: u64) -> BenchmarkResult {
@@ -86,7 +81,7 @@ async fn run_once(events: u64) -> BenchmarkResult {
     // ── pipeline ─────────────────────────────────────────────────────────────
     let builder = PipelineBuilder::new().with_capacity(CAPACITY);
     let results = builder.results();
-    let (pipeline, runner) = builder
+    let (pipeline, runners) = builder
         .add_handler(ValidationHandler::new(Arc::clone(&results)))
         .add_handler(RiskHandler::new(max_amount_units, Arc::clone(&results)))
         .add_handler(LedgerHandler::new(client.clone(), ledger_rt.clone(), Arc::clone(&results)))
@@ -95,7 +90,7 @@ async fn run_once(events: u64) -> BenchmarkResult {
         .expect("pipeline build");
 
     let pipeline = Arc::new(pipeline);
-    let run_handle = runner.run();
+    let run_handles: Vec<_> = runners.into_iter().map(|r| r.run()).collect();
 
     // ── server ───────────────────────────────────────────────────────────────
     let server = Arc::new(TcpTransportServer::new(
@@ -165,7 +160,9 @@ async fn run_once(events: u64) -> BenchmarkResult {
 
     // Runtime::drop() blocks — must happen outside an async context.
     tokio::task::block_in_place(move || {
-        run_handle.join().expect("runner panicked");
+        for handle in run_handles {
+            handle.join().expect("runner panicked");
+        }
         drop(Arc::try_unwrap(ledger_rt).ok());
     });
 

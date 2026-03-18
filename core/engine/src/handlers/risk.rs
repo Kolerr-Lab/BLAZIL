@@ -50,6 +50,7 @@ use crate::handler::EventHandler;
 /// handler.on_event(&mut event, 0, true);
 /// assert!(!results.contains_key(&0)); // within limit
 /// ```
+#[derive(Clone)]
 pub struct RiskHandler {
     max_amount_units: u64,
     results: Arc<DashMap<i64, TransactionResult>>,
@@ -101,6 +102,10 @@ impl EventHandler for RiskHandler {
                 },
             );
         }
+    }
+
+    fn clone_handler(&self) -> Box<dyn EventHandler> {
+        Box::new(self.clone())
     }
 }
 

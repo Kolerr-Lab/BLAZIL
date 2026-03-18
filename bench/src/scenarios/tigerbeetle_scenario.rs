@@ -89,7 +89,7 @@ pub async fn run(events: u64) -> Option<BenchmarkResult> {
         .expect("pipeline build");
 
     let rb = Arc::clone(pipeline.ring_buffer());
-    let handle = runner.run();
+    let handles: Vec<_> = runners.into_iter().map(|r| r.run()).collect();
 
     let template = TransactionEvent::new(
         TransactionId::new(),
@@ -121,7 +121,9 @@ pub async fn run(events: u64) -> Option<BenchmarkResult> {
     wait_for_drain(&rb, last_seq);
 
     pipeline.stop();
-    handle.join().expect("runner panicked");
+    for handle in handles {
+        handle.join().expect("runner panicked");
+    }
 
     Some(BenchmarkResult::new(
         "TigerBeetle (real)",

@@ -58,26 +58,24 @@ unsafe fn check_zeros_u64x4_unsafe(values: &[u64; 4]) -> u8 {
     let cmp0 = vceqzq_u64(v0); // 0xFFFF_FFFF_FFFF_FFFF if zero, else 0
     let cmp1 = vceqzq_u64(v1);
 
-    // Extract comparison results as a bitmask
-    // We need to convert 128-bit comparison results to a compact bitmask
-    let mask0 = vget_lane_u64(vreinterpret_u64_u8(vqmovn_u16(vreinterpretq_u16_u64(cmp0))), 0);
-    let mask1 = vget_lane_u64(vreinterpret_u64_u8(vqmovn_u16(vreinterpretq_u16_u64(cmp1))), 0);
-
-    // Combine into 4-bit result: bit 0 = values[0] is zero, bit 1 = values[1], etc.
+    // Extract to scalar (checking if any bits are set means it was zero)
+    // For simplicity, just check the scalar values since NEON doesn't have easy bitmask extraction
     let mut result = 0u8;
-    if mask0 != 0 {
-        result |= 0b0011; // lanes 0,1 have at least one zero
-    }
-    if mask1 != 0 {
-        result |= 0b1100; // lanes 2,3 have at least one zero
-    }
-
-    // Refine: check individual lanes
-    result = 0;
     if values[0] == 0 { result |= 0b0001; }
     if values[1] == 0 { result |= 0b0010; }
     if values[2] == 0 { result |= 0b0100; }
     if values[3] == 0 { result |= 0b1000; }
+
+    // Verify NEON comparison matches scalar (development check)
+    let lane0_zero = vgetq_lane_u64(cmp0, 0) != 0;
+    let lane1_zero = vgetq_lane_u64(cmp0, 1) != 0;
+    let lane2_zero = vgetq_lane_u64(cmp1, 0) != 0;
+    let lane3_zero = vgetq_lane_u64(cmp1, 1) != 0;
+    
+    debug_assert_eq!(lane0_zero, values[0] == 0);
+    debug_assert_eq!(lane1_zero, values[1] == 0);
+    debug_assert_eq!(lane2_zero, values[2] == 0);
+    debug_assert_eq!(lane3_zero, values[3] == 0);
 
     result
 }
@@ -118,12 +116,23 @@ unsafe fn compare_u64x4_gt_unsafe(values: &[u64; 4], threshold: u64) -> u8 {
     let cmp0 = vcgtq_u64(v0, thresh_vec0);
     let cmp1 = vcgtq_u64(v1, thresh_vec1);
 
-    // Extract bitmask (same approach as zero check)
+    // Extract bitmask using scalar checks (NEON doesn't have easy horizontal bitmask)
     let mut result = 0u8;
     if values[0] > threshold { result |= 0b0001; }
     if values[1] > threshold { result |= 0b0010; }
     if values[2] > threshold { result |= 0b0100; }
     if values[3] > threshold { result |= 0b1000; }
+
+    // Verify NEON comparison matches scalar (development check)
+    let lane0_gt = vgetq_lane_u64(cmp0, 0) != 0;
+    let lane1_gt = vgetq_lane_u64(cmp0, 1) != 0;
+    let lane2_gt = vgetq_lane_u64(cmp1, 0) != 0;
+    let lane3_gt = vgetq_lane_u64(cmp1, 1) != 0;
+    
+    debug_assert_eq!(lane0_gt, values[0] > threshold);
+    debug_assert_eq!(lane1_gt, values[1] > threshold);
+    debug_assert_eq!(lane2_gt, values[2] > threshold);
+    debug_assert_eq!(lane3_gt, values[3] > threshold);
 
     result
 }

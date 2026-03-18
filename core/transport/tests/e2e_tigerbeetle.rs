@@ -138,13 +138,13 @@ fn e2e_successful_transaction() {
     let results = builder.results();
     let ledger_handler = LedgerHandler::new(Arc::clone(&tb2), Arc::clone(&rt), Arc::clone(&results));
 
-    let (pipeline, runner) = builder
+    let (pipeline, runners) = builder
         .add_handler(ValidationHandler::new(Arc::clone(&results)))
         .add_handler(ledger_handler)
         .build()
         .expect("pipeline build failed");
 
-    let handle = runner.run();
+    let handles: Vec<_> = runners.into_iter().map(|r| r.run()).collect();
 
     // Publish a valid 250.00 USD transfer event
     let t0 = Instant::now();
@@ -166,7 +166,9 @@ fn e2e_successful_transaction() {
     std::thread::sleep(std::time::Duration::from_millis(500));
 
     pipeline.stop();
-    handle.join().expect("runner thread panicked");
+    for handle in handles {
+        handle.join().expect("runner thread panicked");
+    }
 
     // Verify TigerBeetle recorded the balances correctly
     let t1 = Instant::now();
@@ -224,13 +226,13 @@ fn e2e_rejected_transaction() {
     let results = builder.results();
     let mock_handler = LedgerHandler::new(Arc::clone(&mock), Arc::clone(&rt), Arc::clone(&results));
 
-    let (pipeline, runner) = builder
+    let (pipeline, runners) = builder
         .add_handler(ValidationHandler::new(Arc::clone(&results)))
         .add_handler(mock_handler)
         .build()
         .expect("pipeline build failed");
 
-    let handle = runner.run();
+    let handles: Vec<_> = runners.into_iter().map(|r| r.run()).collect();
 
     // Publish a zero-amount event — ValidationHandler must reject before LedgerHandler
     let event = TransactionEvent::new(
@@ -248,7 +250,9 @@ fn e2e_rejected_transaction() {
     std::thread::sleep(std::time::Duration::from_millis(200));
 
     pipeline.stop();
-    handle.join().expect("runner thread panicked");
+    for handle in handles {
+        handle.join().expect("runner thread panicked");
+    }
 
     // Assert: zero transfers were committed (ValidationHandler rejected the event)
     assert_eq!(

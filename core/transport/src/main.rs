@@ -130,7 +130,7 @@ async fn run_pipeline<C: LedgerClient + 'static>(
     // ── Pipeline ──────────────────────────────────────────────────────────────
     let builder = PipelineBuilder::new().with_capacity(capacity);
     let results = builder.results();
-    let (pipeline, runner) = builder
+    let (pipeline, runners) = builder
         .add_handler(ValidationHandler::new(Arc::clone(&results)))
         .add_handler(RiskHandler::new(max_amount_units, Arc::clone(&results)))
         .add_handler(LedgerHandler::new(client, ledger_rt, Arc::clone(&results)))
@@ -154,7 +154,7 @@ async fn run_pipeline<C: LedgerClient + 'static>(
         warn!("⚠️  <2 CPU cores detected, skipping affinity pinning");
     }
 
-    let _run_handle = runner.run();
+    let _run_handles: Vec<_> = runners.into_iter().map(|r| r.run()).collect();
 
     // ── Metrics server ────────────────────────────────────────────────────────
     let metrics = Arc::new(EngineMetrics::new());
