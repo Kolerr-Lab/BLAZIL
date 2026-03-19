@@ -31,7 +31,10 @@ use crate::metrics::BenchmarkResult;
 
 const WARMUP_EVENTS: u64 = 1_000;
 const PACKET_SIZE: usize = 56; // 8 (seq) + 48 (payload)
-const WINDOW_SIZE: usize = 5_000; // Number of in-flight requests (balanced for stability + performance)
+/// Must stay <= MAX_IN_FLIGHT in udp_transport.rs (currently 2048).
+/// If WINDOW_SIZE > MAX_IN_FLIGHT the server semaphore stalls recv_from while the
+/// OS UDP receive buffer (~3.8K pkts at 212KB default) silently drops the excess.
+const WINDOW_SIZE: usize = 2_048; // Number of in-flight requests (balanced for stability + performance)
 
 /// Run the UDP scenario once for fast testing.
 pub async fn run(events: u64) -> BenchmarkResult {

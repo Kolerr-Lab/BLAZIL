@@ -46,7 +46,8 @@ use std::time::Duration;
 
 use dashmap::DashMap;
 use tokio::net::UdpSocket;
-use tokio::time::timeout;
+use tokio::sync::Semaphore;
+use tokio::time::{sleep, timeout};
 use tracing::{error, info, warn};
 
 use blazil_common::error::{BlazerError, BlazerResult};
@@ -66,6 +67,10 @@ const PACKET_SIZE: usize = HEADER_SIZE + PAYLOAD_SIZE;
 const RESPONSE_SIZE: usize = 16;
 /// Result polling timeout (same as TCP for fair comparison)
 const RESULT_TIMEOUT: Duration = Duration::from_millis(100);
+/// Max concurrent in-flight result-waiter tasks.
+/// Prevents tokio executor starvation when thousands of packets arrive in a burst.
+/// Must not exceed the OS UDP receive buffer capacity (~3.8K packets at default 212KB).
+const MAX_IN_FLIGHT: usize = 2_048;
 
 // ── UdpTransportServer ────────────────────────────────────────────────────────
 
@@ -174,6 +179,11 @@ impl UdpTransportServer {
         let (resp_tx, mut resp_rx) =
             tokio::sync::mpsc::channel::<([u8; RESPONSE_SIZE], std::net::SocketAddr)>(65_536);
 
+        // Semaphore: caps concurrent result-waiter tasks at MAX_IN_FLIGHT.
+        // Without this, a burst of 5K+ packets spawns thousands of yield_now()
+        // spinners that starve the send_task, causing the benchmark to hang.
+        let semaphore = Arc::new(Semaphore::new(MAX_IN_FLIGHT));
+
         // ── Send task: drains channel and transmits responses ──────────────
         let task_sent = Arc::clone(&self.packets_sent);
         tokio::spawn(async move {
@@ -232,8 +242,17 @@ impl UdpTransportServer {
             let task_results = self.pipeline.shard_results(shard_id);
             let task_resp_tx = resp_tx.clone();
 
+            // Acquire a permit before spawning — blocks recv loop (and thus recv_from)
+            // when MAX_IN_FLIGHT tasks are already running, providing clean backpressure.
+            // The OS UDP buffer will hold client packets while we're at capacity.
+            let permit = match Arc::clone(&semaphore).acquire_owned().await {
+                Ok(p) => p,
+                Err(_) => continue, // semaphore closed during shutdown
+            };
+
             // Spawn a task per request — N in-flight = N concurrent waiters.
             tokio::spawn(async move {
+                let _permit = permit; // released when task completes
                 let result_code = match wait_for_result(task_results, ring_seq).await {
                     Some(TransactionResult::Committed { .. }) => 0u64,
                     Some(TransactionResult::Rejected { .. }) => 1u64,
@@ -363,7 +382,9 @@ async fn wait_for_result(
             if let Some(r) = results.get(&seq) {
                 return r.value().clone();
             }
-            tokio::task::yield_now().await;
+            // sleep(1µs) instead of yield_now(): releases the OS thread rather than
+            // immediately re-queuing, preventing executor starvation under high concurrency.
+            sleep(Duration::from_micros(1)).await;
         }
     };
 
