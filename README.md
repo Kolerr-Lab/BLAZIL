@@ -14,7 +14,7 @@
 ![62,770 TPS](https://img.shields.io/badge/62%2C770_TPS-E2E_Cluster-brightgreen?style=flat-square)
 ![P99 23ms](https://img.shields.io/badge/P99_23ms-3--node-blue?style=flat-square)
 ![2.6x Visa](https://img.shields.io/badge/2.6×_Visa-peak_vs_peak-red?style=flat-square)
-![167M TPS](https://img.shields.io/badge/167M_TPS-Sharded_Pipeline-orange?style=flat-square)
+![200M TPS](https://img.shields.io/badge/200M_TPS-Sharded_Pipeline-orange?style=flat-square)
 
 </div>
 
@@ -26,7 +26,7 @@ Real hardware. Real replication. Real benchmarks.
 
 | Benchmark | Result | Hardware | Notes |
 |-----------|--------|----------|-------|
-| **Sharded pipeline (4-core)** | **167M TPS** | MacBook Air M4 | Parallel, bulk timing, 1 producer per shard |
+| **Sharded pipeline (4-core)** | **200M TPS** | MacBook Air M4 | Parallel, bulk timing, 1 producer per shard |
 | **Single pipeline (latency)** | **24M TPS, P99 42ns** | MacBook Air M4 | In-memory, per-event tracking |
 | **E2E peak throughput** | **62,770 TPS** | 3× DO c2-4vcpu-8GB | Real VSR consensus + disk writes |
 | **P99 latency** | **26.8 ms** | 3-node cluster | gRPC bidirectional streaming |
@@ -34,9 +34,10 @@ Real hardware. Real replication. Real benchmarks.
 | **vs Mojaloop (OSS)** | **62×** | commodity hardware | Open-source baseline: ~1,000 TPS |
 
 > **Methodology transparency:**  
-> Pipeline benchmarks use two methods: bulk timing (167M TPS) for pure throughput,  
-> and per-event latency tracking (24M TPS) for latency distribution.  
+> Pipeline benchmarks use two methods: bulk timing (200M TPS 4-shard / 111M TPS 1-shard) for pure throughput,
+> and per-event latency tracking (24M TPS, P99 42ns) for latency distribution.  
 > Both run identical handler chains; difference is measurement overhead.  
+> E2E DO cluster uses real TigerBeetle VSR replication, real disk writes, real gRPC transport.  
 > See [bench/README.md](bench/README.md) for detailed methodology.
 >
 > **No mocks in cluster tests.**  
@@ -157,9 +158,11 @@ vs Mojaloop (~1,000 TPS):     62×
 **Local (Apple Silicon M4, single process, in-memory):**
 
 ```
-Ring buffer (raw):    12,500,000 ops/s   P99  84 ns
-Pipeline (no I/O):    19,607,843 ops/s   P99  83 ns
-End-to-end TCP:           39,947 TPS     P99  38 µs
+Pipeline bulk (4-shard):  200,000,000 TPS          (bulk timing)
+Pipeline bulk (1-shard):  111,111,111 TPS          (bulk timing)
+Pipeline latency:          24,390,243 TPS  P99 42ns  P99.9 83ns
+End-to-end UDP:               135,135 TPS  (honest, full pipeline)
+End-to-end TCP:                38,610 TPS  UDP is 3.5× faster
 ```
 
 **Run the benchmarks:**
@@ -183,7 +186,7 @@ ssh root@<node-1> './stresstest-linux -target=<private-ip>:50051 -duration=120s'
 | Version | Status | Target TPS | Features |
 |---------|--------|-----------|----------|
 | **v0.1** | ✅ Done | 62,770 TPS | Core engine, VSR consensus, gRPC streaming |
-| **v0.2** | 🔄 Next | 200M+ TPS | Aeron UDP, full io_uring stack, multi-shard |
+| **v0.2** | 🔄 Next | 500K+ TPS E2E | Aeron UDP, full io_uring stack, multi-shard |
 | **v0.3** | 📅 Planned | 500M+ TPS | XDP ingress, RDMA replication, compliance |
 
 ---

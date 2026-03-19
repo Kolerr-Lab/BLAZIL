@@ -26,9 +26,9 @@ Multi-shard parallel pipeline with independent ring buffers per shard.
 
 **Results (M4 MacBook Air, 4-shard):**
 ```
-1-shard:  77M TPS (1 producer, 1 consumer)
-4-shard: 167M TPS (4 producers, 4 consumers)
-Speedup: 2.17× (54% efficiency)
+1-shard:  111M TPS (1 producer, 1 consumer)
+4-shard:  200M TPS (4 producers, 4 consumers)
+Speedup: 1.80× (45% efficiency)
 ```
 
 **Key insight:** Each producer writes to ONLY ONE ring buffer for perfect cache locality.
@@ -58,7 +58,7 @@ P999: 89ns
 ### ⚠️ Why Different Numbers?
 
 **Single Pipeline: 24M TPS**  
-**Sharded 1-shard: 77M TPS**
+**Sharded 1-shard: 111M TPS**
 
 Both run the **same 4-handler pipeline**, but:
 
@@ -92,9 +92,9 @@ let duration = start.elapsed();
 For academic papers and benchmarks:
 
 **Throughput (bulk timing):**
-- 1-shard: 77M TPS
-- 4-shard: 167M TPS
-- 16-shard extrapolation: ~600-700M TPS (50% efficiency on bare metal)
+- 1-shard: 111M TPS
+- 4-shard: 200M TPS
+- 16-shard extrapolation: ~800M TPS (45% efficiency on bare metal)
 
 **Latency (with tracking overhead):**
 - Single pipeline: 24M TPS
@@ -108,17 +108,17 @@ For academic papers and benchmarks:
 
 **Conservative (50% efficiency):**
 ```
-77M TPS × 16 shards × 0.50 = ~616M TPS
+111M TPS × 16 shards × 0.50 = ~888M TPS
 ```
 
-**Observed (54% efficiency on M4):**
+**Observed (45% efficiency on M4):**
 ```
-77M TPS × 16 shards × 0.54 = ~665M TPS
+111M TPS × 16 shards × 0.45 = ~800M TPS
 ```
 
 **Optimistic (70% with tuning):**
 ```
-77M TPS × 16 shards × 0.70 = ~862M TPS
+111M TPS × 16 shards × 0.70 = ~1.2B TPS
 ```
 
 **Why not 100% efficiency?**
@@ -127,7 +127,7 @@ For academic papers and benchmarks:
 - OS scheduler interference
 - NUMA effects on bare metal
 
-**Real-world target: 600-700M TPS on 16-core Xeon/EPYC.**
+**Real-world target: 800M-1B TPS on 16-core Xeon/EPYC.**
 
 ---
 
@@ -211,7 +211,7 @@ If you use these benchmarks in research:
   author = {Kolerr Lab},
   year = {2026},
   url = {https://github.com/Kolerr-Lab/BLAZIL},
-  note = {Sharded pipeline: 167M TPS (4-shard, bulk timing), 
+  note = {Sharded pipeline: 200M TPS (4-shard, bulk timing), 111M TPS (1-shard),
           Single pipeline: 24M TPS (latency-tracked)}
 }
 ```

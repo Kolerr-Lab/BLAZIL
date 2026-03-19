@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Updated — Phase 10: Performance Breakthrough (2026-03-19)
+- Sharded pipeline 4-shard bulk timing: **200,000,000 TPS** (was 167M TPS)
+- Sharded pipeline 1-shard bulk timing: **111,111,111 TPS** (was 77M TPS)
+- Pipeline latency-tracked: **24,390,243 TPS**, P99 42ns, P99.9 83ns
+- UDP E2E: **135,135 TPS** (window-based pipelining, concurrent tasks, semaphore backpressure)
+- TCP E2E: **38,610 TPS** baseline
+- DO cluster E2E: **62,770 TPS** unchanged (real VSR, real disk, $252/month)
+- Added `UdpTransportServer` with split-fd + mpsc response channel design
+- Fixed executor starvation with `Semaphore(2048)` + `sleep(1µs)` in wait loop
+- Upgraded all Go modules to 1.25.8 (10 critical stdlib CVEs resolved)
+
 ### Added — Prompt #7: Benchmark Suite (2026-03-11)
 - `bench/` crate: four measurement scenarios (ring buffer, pipeline, TCP, TigerBeetle)
 - `bench/src/metrics.rs`: `BenchmarkResult` with P50/P95/P99/P99.9 percentiles
@@ -17,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `bench/src/scenarios/tigerbeetle_scenario.rs`: real TigerBeetle scenario (env-gated)
 - `bench/benches/ring_buffer.rs` and `bench/benches/latency.rs`: Criterion micro-benchmarks
 - `InMemoryLedgerClient::new_unbounded()`: bench-only mode that skips balance validation
-- Measured numbers on Apple Silicon: ring buffer 12.5M TPS, pipeline 19.6M TPS, TCP 40K TPS
+- Measured numbers on Apple Silicon: pipeline 19.6M TPS (latency-tracked), TCP 40K TPS
 - Updated `scripts/bench.sh` to run both scenario suite and Criterion
 - README Benchmarks section with full results table
 

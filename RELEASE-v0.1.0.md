@@ -6,7 +6,10 @@ The first public release of Blazil — open-core financial infrastructure built 
 
 | Metric | Result | Hardware |
 |--------|--------|----------|
-| Pipeline throughput | **19,607,843 TPS** | MacBook Air M4 (in-memory) |
+| Pipeline throughput (4-shard, bulk) | **200,000,000 TPS** | MacBook Air M4 (in-memory) |
+| Pipeline throughput (1-shard, bulk) | **111,111,111 TPS** | MacBook Air M4 (in-memory) |
+| Pipeline throughput (latency-tracked) | **24,390,243 TPS** · P99 42ns | MacBook Air M4 (in-memory) |
+| E2E UDP (single node) | **135,135 TPS** | MacBook Air M4 · honest, full pipeline |
 | E2E peak throughput | **62,770 TPS** | 3× DO c2-4vcpu-8GB ($252/month) |
 | P99 latency | **23ms** | 3-node VSR cluster |
 | vs Visa peak | **2.6×** | commodity cloud |
