@@ -1,6 +1,6 @@
 module github.com/blazil/loadgen
 
-go 1.25.0
+go 1.25.8
 
 require (
 	github.com/blazil/banking v0.0.0

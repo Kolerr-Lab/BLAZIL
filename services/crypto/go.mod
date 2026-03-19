@@ -1,6 +1,6 @@
 module github.com/blazil/crypto
 
-go 1.25.0
+go 1.25.8
 
 require (
 	github.com/blazil/auth v0.0.0

@@ -1,6 +1,6 @@
 module github.com/blazil/stresstest
 
-go 1.25.0
+go 1.25.8
 
 require (
 	google.golang.org/grpc v1.79.3
