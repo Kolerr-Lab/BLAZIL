@@ -124,10 +124,7 @@ async fn run_once(events: u64) -> BenchmarkResult {
     let initial_window = WINDOW_SIZE.min(total_events);
     for packet in packets.iter().take(initial_window) {
         send_times.push(Instant::now());
-        client_sock
-            .send(packet)
-            .await
-            .expect("send initial window");
+        client_sock.send(packet).await.expect("send initial window");
         sent += 1;
     }
 
@@ -148,10 +145,7 @@ async fn run_once(events: u64) -> BenchmarkResult {
         // Send next packet if more to send
         if sent < total_events {
             send_times.push(Instant::now());
-            client_sock
-                .send(&packets[sent])
-                .await
-                .expect("send next");
+            client_sock.send(&packets[sent]).await.expect("send next");
             sent += 1;
         }
     }

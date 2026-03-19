@@ -143,13 +143,13 @@ impl UdpTransportServer {
         // Bind once as a std socket so we can try_clone for the send half.
         let std_listener = std::net::UdpSocket::bind(&self.addr)
             .map_err(|e| BlazerError::Internal(format!("Failed to bind UDP socket: {}", e)))?;
-        std_listener.set_nonblocking(true).map_err(|e| {
-            BlazerError::Internal(format!("set_nonblocking failed: {}", e))
-        })?;
+        std_listener
+            .set_nonblocking(true)
+            .map_err(|e| BlazerError::Internal(format!("set_nonblocking failed: {}", e)))?;
 
-        let std_sender = std_listener.try_clone().map_err(|e| {
-            BlazerError::Internal(format!("Failed to clone UDP socket: {}", e))
-        })?;
+        let std_sender = std_listener
+            .try_clone()
+            .map_err(|e| BlazerError::Internal(format!("Failed to clone UDP socket: {}", e)))?;
         std_sender.set_nonblocking(true).map_err(|e| {
             BlazerError::Internal(format!("set_nonblocking (sender) failed: {}", e))
         })?;
@@ -228,8 +228,7 @@ impl UdpTransportServer {
                 }
             };
 
-            let shard_id =
-                (event.debit_account_id.as_u64() as usize) % self.pipeline.shard_count();
+            let shard_id = (event.debit_account_id.as_u64() as usize) % self.pipeline.shard_count();
 
             let ring_seq = match self.pipeline.publish_event(event) {
                 Ok(seq) => seq,
