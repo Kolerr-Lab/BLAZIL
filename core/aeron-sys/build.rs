@@ -56,7 +56,8 @@ fn build_aeron_static(aeron_src: &PathBuf) {
         .map(|n| n.get())
         .unwrap_or(4);
 
-    // CMake configure — Release build, driver only, no tests/samples.
+    // CMake configure — Release build, driver + C client only.
+    // Archive API is disabled because it requires a JDK on the build machine.
     let status = std::process::Command::new("cmake")
         .current_dir(&build_dir)
         .arg(aeron_src)
@@ -69,32 +70,46 @@ fn build_aeron_static(aeron_src: &PathBuf) {
             "-DAERON_BUILD_TOOLS=OFF",
             "-DBUILD_AERON_DRIVER=ON",
             "-DAERON_DISABLE_BOUNDS_CHECKS=ON",
+            // Disable the archive API — avoids requiring a JDK on every build
+            // machine.  Blazil only uses the C client and media driver.
+            "-DBUILD_AERON_ARCHIVE_API=OFF",
         ])
         .status()
         .expect("cmake not found — install: apt-get install -y cmake g++");
     assert!(status.success(), "cmake configuration failed");
 
-    // CMake build — aeron_static target only.
-    let status = std::process::Command::new("cmake")
-        .current_dir(&build_dir)
-        .args([
-            "--build",
-            ".",
-            "--parallel",
-            &nproc.to_string(),
-            "--target",
-            "aeron_static",
-        ])
-        .status()
-        .expect("cmake --build failed");
-    assert!(status.success(), "Aeron C static library build failed");
+    // CMake build — C client + embedded media driver.
+    // aeron_static        = C client library (aeron_context, publication, subscription …)
+    // aeron_driver_static = embedded media driver (aeron_driver_start/close …)
+    for target in &["aeron_static", "aeron_driver_static"] {
+        let status = std::process::Command::new("cmake")
+            .current_dir(&build_dir)
+            .args([
+                "--build",
+                ".",
+                "--parallel",
+                &nproc.to_string(),
+                "--target",
+                target,
+            ])
+            .status()
+            .expect("cmake --build failed");
+        assert!(
+            status.success(),
+            "Aeron cmake target `{}` build failed",
+            target
+        );
+    }
 
-    // Emit linker search paths and library name.
+    // Emit linker search paths and library names.
+    // Order matters: driver_static depends on aeron_static, so list driver first.
     println!("cargo:rustc-link-search=native={}", build_dir.display());
     println!(
         "cargo:rustc-link-search=native={}",
         build_dir.join("lib").display()
     );
+    // Link order: driver_static depends on aeron_static, so link driver first.
+    println!("cargo:rustc-link-lib=static=aeron_driver_static");
     println!("cargo:rustc-link-lib=static=aeron_static");
 
     // Platform deps for libaeron_static.a.

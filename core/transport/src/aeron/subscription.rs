@@ -91,7 +91,7 @@ impl AeronSubscription {
         let mut sub_ptr: *mut sys::aeron_subscription_t = std::ptr::null_mut();
         loop {
             // SAFETY: async_ptr is non-null; sub_ptr is set on completion.
-            let rc = unsafe { sys::aeron_async_poll_subscription(&mut sub_ptr, async_ptr) };
+            let rc = unsafe { sys::aeron_async_add_subscription_poll(&mut sub_ptr, async_ptr) };
             match rc {
                 1 if !sub_ptr.is_null() => break,
                 0 => {
@@ -99,7 +99,7 @@ impl AeronSubscription {
                 }
                 _ => {
                     return Err(BlazerError::Transport(format!(
-                        "aeron_async_poll_subscription error ({rc}): {}",
+                        "aeron_async_add_subscription_poll error ({rc}): {}",
                         aeron_errmsg_string()
                     )));
                 }

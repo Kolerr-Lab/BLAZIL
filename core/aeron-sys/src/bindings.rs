@@ -229,7 +229,7 @@ extern "C" {
 
 extern "C" {
     /// Begin adding a publication to the client asynchronously.
-    /// Returns immediately; poll with `aeron_async_poll_publication` until done.
+    /// Returns immediately; poll with `aeron_async_add_publication_poll` until done.
     pub fn aeron_async_add_publication(
         async_: *mut *mut aeron_async_add_publication_t,
         client: *mut aeron_t,
@@ -240,7 +240,7 @@ extern "C" {
     /// Poll for completion of an async publication add.
     ///
     /// Returns:  0 while pending  |  1 when `*publication` is ready  |  -1 on error.
-    pub fn aeron_async_poll_publication(
+    pub fn aeron_async_add_publication_poll(
         publication: *mut *mut aeron_publication_t,
         async_: *mut aeron_async_add_publication_t,
     ) -> c_int;
@@ -287,7 +287,7 @@ extern "C" {
     /// Poll for completion of an async subscription add.
     ///
     /// Returns:  0 while pending  |  1 when `*subscription` is ready  |  -1 on error.
-    pub fn aeron_async_poll_subscription(
+    pub fn aeron_async_add_subscription_poll(
         subscription: *mut *mut aeron_subscription_t,
         async_: *mut aeron_async_add_subscription_t,
     ) -> c_int;

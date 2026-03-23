@@ -185,6 +185,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Install C build deps
         run: |
@@ -203,8 +205,11 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      - name: Check (type-check only — C submodule not yet initialised)
-        run: cargo check --features aeron -p blazil-transport
+      - name: Build (Aeron C library + Rust transport)
+        run: cargo build --features aeron -p blazil-transport
+
+      - name: Unit tests
+        run: cargo test --features aeron -p blazil-transport
 
       - name: Clippy
         run: cargo clippy --features aeron -p blazil-transport -- -D warnings

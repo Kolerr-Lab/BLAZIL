@@ -1,0 +1,4 @@
+[submodule "core/aeron-sys/aeron"]
+	path = core/aeron-sys/aeron
+	url = https://github.com/real-logic/aeron.git
+	shallow = true

@@ -68,7 +68,7 @@ impl AeronPublication {
         let mut pub_ptr: *mut sys::aeron_publication_t = std::ptr::null_mut();
         loop {
             // SAFETY: async_ptr is non-null; pub_ptr is written on completion.
-            let rc = unsafe { sys::aeron_async_poll_publication(&mut pub_ptr, async_ptr) };
+            let rc = unsafe { sys::aeron_async_add_publication_poll(&mut pub_ptr, async_ptr) };
             match rc {
                 1 if !pub_ptr.is_null() => break,
                 0 => {
@@ -77,7 +77,7 @@ impl AeronPublication {
                 }
                 _ => {
                     return Err(BlazerError::Transport(format!(
-                        "aeron_async_poll_publication error ({rc}): {}",
+                        "aeron_async_add_publication_poll error ({rc}): {}",
                         aeron_errmsg_string()
                     )));
                 }
