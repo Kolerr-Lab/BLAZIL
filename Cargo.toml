@@ -6,6 +6,7 @@ members = [
     "core/ledger",
     "core/risk",
     "core/common",
+    "core/aeron-sys",
     "bench",
 ]
 

@@ -176,3 +176,49 @@ jobs:
           docker compose \
             -f infra/docker/docker-compose.demo.yml \
             config --quiet
+
+  # ── v0.2: Aeron C FFI transport ──────────────────────────────────────────────
+  # Builds the C media driver from the git submodule, then compiles and tests
+  # the Rust safe-wrapper layer.  Requires cmake, g++, and the submodule.
+  aeron-transport:
+    name: Aeron Transport (C FFI)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.13.0
+
+      - name: Install C build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake g++ \
+            pkg-config libssl-dev \
+            clang lld
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.85.0
+          components: clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build (Aeron C library + Rust transport)
+        run: cargo build --features aeron -p blazil-transport
+
+      - name: Unit tests
+        run: cargo test --features aeron -p blazil-transport
+
+      - name: Integration tests (require C library)
+        run: cargo test --features aeron -p blazil-transport -- --ignored --nocapture
+
+      - name: Clippy
+        run: cargo clippy --features aeron -p blazil-transport -- -D warnings
+

@@ -10,10 +10,11 @@ repository.workspace = true
 # Required by Dockerfile.engine; unit tests use the default in-memory client.
 tigerbeetle-client = ["blazil-ledger/tigerbeetle-client"]
 
-# Enables the Aeron UDP transport backend.
-# Auto-spawns aeronmd as subprocess if found in PATH, or connects to external driver.
-# Activate at runtime via BLAZIL_TRANSPORT=aeron or BLAZIL_TRANSPORT=aeron+io-uring.
-aeron = ["dep:aeron-rs"]
+# Enables the Aeron UDP transport backend (embedded C Media Driver via FFI).
+# Requires: git submodule update --init --recursive  (for the C library build)
+# cargo check --features aeron succeeds without the submodule (pre-generated bindings).
+# Activate at runtime via BLAZIL_TRANSPORT=aeron.
+aeron = ["dep:blazil-aeron-sys"]
 
 # Enables the io_uring TCP transport backend (Linux 5.1+ only).
 # Falls back to TcpTransportServer on macOS/non-Linux automatically.
@@ -34,7 +35,7 @@ async-trait    = "0.1"
 axum           = "0.7"
 rmp-serde      = "1"
 rust_decimal   = { version = "1", features = ["serde"] }
-aeron-rs       = { version = "0.1", optional = true }
+blazil-aeron-sys = { path = "../../core/aeron-sys", optional = true }
 core_affinity  = "0.8"
 bytemuck       = { version = "1.20", features = ["derive"] }
 

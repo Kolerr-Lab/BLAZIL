@@ -4,3 +4,6 @@ pub mod sharded_pipeline_scenario;
 pub mod tcp_scenario;
 pub mod tigerbeetle_scenario;
 pub mod udp_scenario;
+
+#[cfg(feature = "aeron")]
+pub mod aeron_scenario;
