@@ -90,10 +90,7 @@ fn build_aeron_static(aeron_src: &PathBuf) {
     assert!(status.success(), "Aeron C static library build failed");
 
     // Emit linker search paths and library name.
-    println!(
-        "cargo:rustc-link-search=native={}",
-        build_dir.display()
-    );
+    println!("cargo:rustc-link-search=native={}", build_dir.display());
     println!(
         "cargo:rustc-link-search=native={}",
         build_dir.join("lib").display()

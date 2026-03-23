@@ -32,13 +32,11 @@ pub mod inner {
     use blazil_ledger::client::LedgerClient;
     use blazil_ledger::mock::InMemoryLedgerClient;
     use blazil_transport::aeron::{
-        AeronContext, AeronPublication, AeronSubscription, EmbeddedAeronDriver,
-        REQ_STREAM_ID, RSP_STREAM_ID,
+        AeronContext, AeronPublication, AeronSubscription, EmbeddedAeronDriver, REQ_STREAM_ID,
+        RSP_STREAM_ID,
     };
     use blazil_transport::aeron_transport::AeronTransportServer;
-    use blazil_transport::protocol::{
-        deserialize_response, serialize_request, TransactionRequest,
-    };
+    use blazil_transport::protocol::{deserialize_response, serialize_request, TransactionRequest};
     use blazil_transport::server::TransportServer;
 
     use crate::metrics::BenchmarkResult;
@@ -122,13 +120,11 @@ pub mod inner {
         let total = events;
 
         let result = tokio::task::spawn_blocking(move || {
-            let ctx =
-                AeronContext::new(BENCH_AERON_DIR).expect("client AeronContext");
+            let ctx = AeronContext::new(BENCH_AERON_DIR).expect("client AeronContext");
 
             // Client → server (stream 1001).
-            let client_pub =
-                AeronPublication::new(&ctx, BENCH_CHANNEL, REQ_STREAM_ID, REG_TIMEOUT)
-                    .expect("client pub");
+            let client_pub = AeronPublication::new(&ctx, BENCH_CHANNEL, REQ_STREAM_ID, REG_TIMEOUT)
+                .expect("client pub");
 
             // Server → client (stream 1002).
             let client_sub =
@@ -148,15 +144,12 @@ pub mod inner {
             // ── warmup ────────────────────────────────────────────────────────
             let mut warmup_resp: Vec<Vec<u8>> = Vec::new();
             for i in 0..WARMUP_EVENTS {
-                let bytes =
-                    serialize_request(&make_request(i, &debit_id_str, &credit_id_str))
-                        .expect("serialize");
+                let bytes = serialize_request(&make_request(i, &debit_id_str, &credit_id_str))
+                    .expect("serialize");
                 client_pub.offer(&bytes).ok();
             }
             let warmup_deadline = Instant::now() + Duration::from_secs(5);
-            while (warmup_resp.len() as u64) < WARMUP_EVENTS
-                && Instant::now() < warmup_deadline
-            {
+            while (warmup_resp.len() as u64) < WARMUP_EVENTS && Instant::now() < warmup_deadline {
                 client_sub.poll_fragments(&mut warmup_resp, 100);
             }
             warmup_resp.clear();

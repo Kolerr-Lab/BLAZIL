@@ -16,8 +16,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
-use blazil_common::error::{BlazerError, BlazerResult};
 use blazil_aeron_sys as sys;
+use blazil_common::error::{BlazerError, BlazerResult};
 
 /// IPC shared-memory directory for the embedded driver on Linux (tmpfs).
 #[cfg(target_os = "linux")]
@@ -93,9 +93,7 @@ impl EmbeddedAeronDriver {
         }
 
         // SAFETY: driver_ctx_ptr is non-null (verified above).
-        let rc = unsafe {
-            sys::aeron_driver_context_set_dir(driver_ctx_ptr, aeron_dir_c.as_ptr())
-        };
+        let rc = unsafe { sys::aeron_driver_context_set_dir(driver_ctx_ptr, aeron_dir_c.as_ptr()) };
         if rc < 0 {
             // SAFETY: driver_ctx_ptr is non-null; error-path cleanup.
             unsafe { sys::aeron_driver_context_close(driver_ctx_ptr) };
@@ -231,8 +229,6 @@ pub(crate) fn aeron_errmsg_string() -> String {
         if ptr.is_null() {
             return "(null error message)".to_owned();
         }
-        std::ffi::CStr::from_ptr(ptr)
-            .to_string_lossy()
-            .into_owned()
+        std::ffi::CStr::from_ptr(ptr).to_string_lossy().into_owned()
     }
 }

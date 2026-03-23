@@ -55,7 +55,10 @@ mod aeron_ipc_tests {
         while !sub.is_connected() && std::time::Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
         }
-        assert!(sub.is_connected(), "subscription should see a connected publisher");
+        assert!(
+            sub.is_connected(),
+            "subscription should see a connected publisher"
+        );
 
         let payload = b"hello-aeron-ipc";
         pub_.offer(payload).expect("offer should succeed");
@@ -88,8 +91,8 @@ mod aeron_ipc_tests {
         let driver = start_driver();
         let ctx = AeronContext::new(TEST_AERON_DIR).expect("AeronContext::new");
 
-        let pub_ = AeronPublication::new(&ctx, TEST_CHANNEL, 2001, REG_TIMEOUT)
-            .expect("AeronPublication");
+        let pub_ =
+            AeronPublication::new(&ctx, TEST_CHANNEL, 2001, REG_TIMEOUT).expect("AeronPublication");
         let sub = AeronSubscription::new(&ctx, TEST_CHANNEL, 2001, REG_TIMEOUT)
             .expect("AeronSubscription");
 
@@ -139,8 +142,8 @@ mod aeron_ipc_tests {
     async fn test_transport_server_round_trip() {
         use std::sync::Arc;
 
-        use blazil_common::ids::{AccountId, LedgerId};
         use blazil_common::currency::parse_currency;
+        use blazil_common::ids::{AccountId, LedgerId};
         use blazil_engine::handlers::ledger::LedgerHandler;
         use blazil_engine::handlers::publish::PublishHandler;
         use blazil_engine::handlers::risk::RiskHandler;
@@ -149,8 +152,12 @@ mod aeron_ipc_tests {
         use blazil_ledger::account::{Account, AccountFlags};
         use blazil_ledger::client::LedgerClient;
         use blazil_ledger::mock::InMemoryLedgerClient;
-        use blazil_transport::aeron_transport::{AeronTransportServer, REQ_STREAM_ID, RSP_STREAM_ID};
-        use blazil_transport::protocol::{serialize_request, deserialize_response, TransactionRequest};
+        use blazil_transport::aeron_transport::{
+            AeronTransportServer, REQ_STREAM_ID, RSP_STREAM_ID,
+        };
+        use blazil_transport::protocol::{
+            deserialize_response, serialize_request, TransactionRequest,
+        };
         use blazil_transport::server::TransportServer;
 
         const TEST_DIR: &str = "/tmp/aeron-blazil-e2e-test";
@@ -241,7 +248,10 @@ mod aeron_ipc_tests {
             while !client_pub.is_connected() && std::time::Instant::now() < conn_deadline {
                 std::thread::sleep(Duration::from_millis(10));
             }
-            assert!(client_pub.is_connected(), "client pub should see server sub");
+            assert!(
+                client_pub.is_connected(),
+                "client pub should see server sub"
+            );
 
             // Send 10 requests.
             for i in 0u16..10 {
@@ -273,7 +283,9 @@ mod aeron_ipc_tests {
             tx.send(responses).expect("send responses");
         });
 
-        let responses = rx.recv_timeout(Duration::from_secs(10)).expect("recv_timeout");
+        let responses = rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("recv_timeout");
         assert_eq!(responses.len(), 10, "expected 10 responses");
 
         for bytes in &responses {

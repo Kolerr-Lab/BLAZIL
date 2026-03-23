@@ -11,8 +11,8 @@
 use std::ffi::CString;
 use std::time::{Duration, Instant};
 
-use blazil_common::error::{BlazerError, BlazerResult};
 use blazil_aeron_sys as sys;
+use blazil_common::error::{BlazerError, BlazerResult};
 
 use super::context::AeronContext;
 use super::driver::aeron_errmsg_string;
@@ -73,10 +73,10 @@ impl AeronSubscription {
                 ctx.client_ptr(),
                 channel_c.as_ptr(),
                 stream_id,
-                None,                   // on_available_image
-                std::ptr::null_mut(),   // on_available_image clientd
-                None,                   // on_unavailable_image
-                std::ptr::null_mut(),   // on_unavailable_image clientd
+                None,                 // on_available_image
+                std::ptr::null_mut(), // on_available_image clientd
+                None,                 // on_unavailable_image
+                std::ptr::null_mut(), // on_unavailable_image clientd
             )
         };
         if rc < 0 {
@@ -91,9 +91,7 @@ impl AeronSubscription {
         let mut sub_ptr: *mut sys::aeron_subscription_t = std::ptr::null_mut();
         loop {
             // SAFETY: async_ptr is non-null; sub_ptr is set on completion.
-            let rc = unsafe {
-                sys::aeron_async_poll_subscription(&mut sub_ptr, async_ptr)
-            };
+            let rc = unsafe { sys::aeron_async_poll_subscription(&mut sub_ptr, async_ptr) };
             match rc {
                 1 if !sub_ptr.is_null() => break,
                 0 => {

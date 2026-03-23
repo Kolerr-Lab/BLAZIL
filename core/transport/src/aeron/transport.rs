@@ -216,10 +216,10 @@ fn aeron_serve_blocking(
 
     // ── 6. Ordered teardown ───────────────────────────────────────────────────
     // DROP ORDER IS CRITICAL — streams before client, client before driver.
-    drop(pub_);    // aeron_publication_close
-    drop(sub);     // aeron_subscription_close
-    drop(ctx);     // aeron_close  → aeron_context_close
-    drop(driver);  // driver thread exits → aeron_driver_close → context_close
+    drop(pub_); // aeron_publication_close
+    drop(sub); // aeron_subscription_close
+    drop(ctx); // aeron_close  → aeron_context_close
+    drop(driver); // driver thread exits → aeron_driver_close → context_close
 
     Ok(())
 }

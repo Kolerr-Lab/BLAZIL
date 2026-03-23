@@ -11,8 +11,8 @@
 use std::ffi::CString;
 use std::time::{Duration, Instant};
 
-use blazil_common::error::{BlazerError, BlazerResult};
 use blazil_aeron_sys as sys;
+use blazil_common::error::{BlazerError, BlazerResult};
 
 use super::context::AeronContext;
 use super::driver::aeron_errmsg_string;
@@ -68,9 +68,7 @@ impl AeronPublication {
         let mut pub_ptr: *mut sys::aeron_publication_t = std::ptr::null_mut();
         loop {
             // SAFETY: async_ptr is non-null; pub_ptr is written on completion.
-            let rc = unsafe {
-                sys::aeron_async_poll_publication(&mut pub_ptr, async_ptr)
-            };
+            let rc = unsafe { sys::aeron_async_poll_publication(&mut pub_ptr, async_ptr) };
             match rc {
                 1 if !pub_ptr.is_null() => break,
                 0 => {

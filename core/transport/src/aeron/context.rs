@@ -12,8 +12,8 @@
 
 use std::ffi::CString;
 
-use blazil_common::error::{BlazerError, BlazerResult};
 use blazil_aeron_sys as sys;
+use blazil_common::error::{BlazerError, BlazerResult};
 
 use super::driver::aeron_errmsg_string;
 
@@ -55,8 +55,7 @@ impl AeronContext {
         }
 
         // SAFETY: ctx_ptr is non-null (verified above).
-        let rc =
-            unsafe { sys::aeron_context_set_dir(ctx_ptr, aeron_dir_c.as_ptr()) };
+        let rc = unsafe { sys::aeron_context_set_dir(ctx_ptr, aeron_dir_c.as_ptr()) };
         if rc < 0 {
             // SAFETY: error-path cleanup.
             unsafe { sys::aeron_context_close(ctx_ptr) };
