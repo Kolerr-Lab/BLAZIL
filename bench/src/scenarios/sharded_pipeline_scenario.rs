@@ -12,10 +12,58 @@ use blazil_engine::event::TransactionEvent;
 use blazil_engine::sharded_pipeline::ShardedPipeline;
 
 use crate::metrics::BenchmarkResult;
+use crate::report::fmt_commas;
 
-const WARMUP_EVENTS: u64 = 100;
+const WARMUP_EVENTS: u64 = 1_000;
+const MEASURE_EVENTS: u64 = 100_000;
 const CAPACITY_PER_SHARD: usize = 1_048_576;
 const MAX_AMOUNT_UNITS: u64 = 1_000_000;
+
+/// Run the full shard-scaling sweep (1 / 2 / 4 / 8 shards) and print a table.
+///
+/// Called from `bench/src/main.rs` as a drop-in for the previous two separate
+/// `run(1M, 1)` / `run(1M, 4)` calls.
+pub async fn run_scaling_sweep() {
+    tokio::task::spawn_blocking(scaling_sweep_blocking)
+        .await
+        .expect("benchmark thread panicked")
+}
+
+fn scaling_sweep_blocking() {
+    let shard_counts: &[usize] = &[1, 2, 4, 8];
+    let mut results: Vec<(usize, BenchmarkResult)> = Vec::new();
+
+    for &sc in shard_counts {
+        let r = run_once_blocking(MEASURE_EVENTS, sc);
+        results.push((sc, r));
+    }
+
+    let baseline_tps = results[0].1.tps as f64;
+
+    println!();
+    println!("  +---------+-------------+----------+----------+------------+");
+    println!("  | Shards  | TPS         | P99 (ns) | P99.9    | Efficiency |");
+    println!("  +---------+-------------+----------+----------+------------+");
+    for (sc, r) in &results {
+        let efficiency = if *sc == 1 {
+            "baseline  ".to_string()
+        } else {
+            let speedup = r.tps as f64 / baseline_tps;
+            let eff = (speedup / *sc as f64) * 100.0;
+            format!("{:>8.1}% ", eff)
+        };
+        println!(
+            "  | {:<7} | {:>11} | {:>8} | {:>8} | {} |",
+            sc,
+            fmt_commas(r.tps),
+            r.p99_ns,
+            r.p99_9_ns,
+            efficiency,
+        );
+    }
+    println!("  +---------+-------------+----------+----------+------------+");
+    println!();
+}
 
 /// Run the sharded pipeline scenario with the specified shard count once.
 pub async fn run(events: u64, shard_count: usize) -> BenchmarkResult {

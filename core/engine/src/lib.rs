@@ -44,6 +44,7 @@
 
 // ── modules ───────────────────────────────────────────────────────────────────
 
+pub mod cross_shard;
 pub mod event;
 pub mod handler;
 pub mod handlers;
@@ -56,8 +57,9 @@ pub mod simd;
 
 // ── re-exports ────────────────────────────────────────────────────────────────
 
+pub use cross_shard::{route_cross_shard, CrossShardRoute, CrossShardTransfer};
 pub use event::{EventFlags, TransactionEvent, TransactionResult};
 pub use handler::EventHandler;
-pub use metrics::EngineMetrics;
+pub use metrics::{EngineMetrics, ShardMetrics};
 pub use pipeline::{Pipeline, PipelineBuilder, PipelineRunner};
 pub use sharded_pipeline::ShardedPipeline;

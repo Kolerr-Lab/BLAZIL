@@ -45,59 +45,28 @@ async fn main() {
     println!("RingBuffer total: {} MB", ring_buffer_mb);
     println!();
 
-    println!("Events: sharded=1M (comparing 1-shard vs 4-shard)");
+    println!("Events: sharded=100K (scaling sweep 1/2/4/8 shards)");
     println!("Events: tcp=10K, udp=100K (E2E transport comparison)");
     println!("Runs per scenario: 1 (fast mode)\n");
 
-    // Sharded pipeline scaling test
-    println!("[1/4] Sharded Pipeline (1 shard)...");
-    let sharded_1_result = sharded_pipeline_scenario::run(1_000_000, 1).await;
-    println!(
-        "      → {} TPS",
-        blazil_bench::report::fmt_commas(sharded_1_result.tps)
-    );
-
-    println!("[2/4] Sharded Pipeline (4 shards)...");
-    let sharded_4_result = sharded_pipeline_scenario::run(1_000_000, 4).await;
-    println!(
-        "      → {} TPS",
-        blazil_bench::report::fmt_commas(sharded_4_result.tps)
-    );
+    // Sharded pipeline scaling test — full 1/2/4/8 sweep with table output
+    println!("[1/3] Sharded Pipeline scaling sweep (100K events x 4 configs)...");
+    sharded_pipeline_scenario::run_scaling_sweep().await;
 
     // E2E transport comparison
-    println!("[3/4] TCP E2E (10K events)...");
+    println!("[2/3] TCP E2E (10K events)...");
     let tcp_result = tcp_scenario::run(10_000).await;
     println!(
         "      → {} TPS",
         blazil_bench::report::fmt_commas(tcp_result.tps)
     );
 
-    println!("[4/4] UDP E2E (100K events)...");
+    println!("[3/3] UDP E2E (100K events)...");
     let udp_result = udp_scenario::run(100_000).await;
     println!(
         "      → {} TPS",
         blazil_bench::report::fmt_commas(udp_result.tps)
     );
-
-    // Calculate scaling
-    let speedup = sharded_4_result.tps as f64 / sharded_1_result.tps as f64;
-    let efficiency = (speedup / 4.0) * 100.0;
-
-    println!("\n=== SHARDED PIPELINE SCALING ===");
-    println!(
-        "1-shard (1 producer):  {} TPS",
-        blazil_bench::report::fmt_commas(sharded_1_result.tps)
-    );
-    println!(
-        "4-shard (4 producers): {} TPS",
-        blazil_bench::report::fmt_commas(sharded_4_result.tps)
-    );
-
-    println!("\n=== RESULTS ===");
-    println!("Speedup: {:.2}x", speedup);
-    println!("Scaling efficiency: {:.1}% (ideal = 100%)", efficiency);
-    println!("Architecture: LMAX Disruptor (1 producer per ring buffer)");
-    println!("Zero cache thrashing: each producer writes to ONE shard only");
 
     // E2E transport comparison
     let transport_speedup = udp_result.tps as f64 / tcp_result.tps as f64;
@@ -110,9 +79,9 @@ async fn main() {
         "UDP E2E:  {} TPS",
         blazil_bench::report::fmt_commas(udp_result.tps)
     );
-    println!("Speedup:  {:.1}× over TCP", transport_speedup);
+    println!("Speedup:  {:.1}x over TCP", transport_speedup);
     println!(
-        "Gap closed: {:.1}% (target was 20-30×)",
+        "Gap closed: {:.1}% (target was 20-30x)",
         (transport_speedup / 20.0) * 100.0
     );
 
@@ -120,10 +89,10 @@ async fn main() {
     #[cfg(all(feature = "io-uring", target_os = "linux"))]
     {
         use blazil_bench::scenarios::io_uring_udp_scenario;
-        println!("[5/5] io_uring UDP E2E (100K events)...");
+        println!("[4/3] io_uring UDP E2E (100K events)...");
         let io_uring_result = io_uring_udp_scenario::run(100_000).await;
         println!(
-            "      → {} TPS",
+            "      -> {} TPS",
             blazil_bench::report::fmt_commas(io_uring_result.tps)
         );
         let io_uring_speedup = io_uring_result.tps as f64 / udp_result.tps as f64;
@@ -136,8 +105,8 @@ async fn main() {
             "io_uring UDP: {} TPS",
             blazil_bench::report::fmt_commas(io_uring_result.tps)
         );
-        println!("Speedup: {:.2}×", io_uring_speedup);
+        println!("Speedup: {:.2}x", io_uring_speedup);
     }
 
-    println!("\nAll tests passed! ✅");
+    println!("\nAll tests passed! OK");
 }

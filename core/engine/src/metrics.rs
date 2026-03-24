@@ -210,6 +210,109 @@ impl EngineMetrics {
     }
 }
 
+// ── ShardMetrics ─────────────────────────────────────────────────────────────
+
+/// Per-shard lock-free performance counters.
+///
+/// One instance per shard, shared via `Arc<ShardMetrics>`. Designed to be
+/// updated on the hot path without any locking.
+///
+/// # Metric names (Prometheus convention)
+///
+/// | Metric | Kind | Description |
+/// |---|---|---|
+/// | `blazil_shard_transactions_total{shard="N"}` | counter | Events processed |
+/// | `blazil_shard_latency_p99_ns{shard="N"}` | gauge | Peak (proxy p99) latency |
+/// | `blazil_shard_ring_buffer_utilization{shard="N"}` | gauge | 0–10000 (10000=100%) |
+/// | `blazil_shard_backpressure_total{shard="N"}` | counter | Ring-full events |
+pub struct ShardMetrics {
+    /// Shard index for labelling.
+    pub shard_id: usize,
+    /// `blazil_shard_transactions_total`
+    transactions_total: AtomicU64,
+    /// `blazil_shard_latency_p99_ns` — peak latency as p99 proxy.
+    latency_peak_ns: AtomicU64,
+    /// `blazil_shard_ring_buffer_utilization` × 10_000.
+    ring_util_x10000: AtomicU64,
+    /// `blazil_shard_backpressure_total`
+    backpressure_total: AtomicU64,
+}
+
+impl ShardMetrics {
+    /// Create a new `Arc<ShardMetrics>` for `shard_id` with all counters zeroed.
+    pub fn new(shard_id: usize) -> Arc<Self> {
+        Arc::new(Self {
+            shard_id,
+            transactions_total: AtomicU64::new(0),
+            latency_peak_ns: AtomicU64::new(0),
+            ring_util_x10000: AtomicU64::new(0),
+            backpressure_total: AtomicU64::new(0),
+        })
+    }
+
+    /// Increment `blazil_shard_transactions_total` and update peak latency.
+    #[inline]
+    pub fn record_transaction(&self, latency_ns: u64) {
+        self.transactions_total.fetch_add(1, Ordering::Relaxed);
+        let mut current = self.latency_peak_ns.load(Ordering::Relaxed);
+        while latency_ns > current {
+            match self.latency_peak_ns.compare_exchange_weak(
+                current,
+                latency_ns,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(actual) => current = actual,
+            }
+        }
+    }
+
+    /// Update `blazil_shard_ring_buffer_utilization`.
+    ///
+    /// `util_x10000` is utilization × 10_000 (10_000 = 100%).
+    #[inline]
+    pub fn set_ring_utilization(&self, util_x10000: u64) {
+        self.ring_util_x10000.store(util_x10000, Ordering::Relaxed);
+    }
+
+    /// Increment `blazil_shard_backpressure_total`.
+    #[inline]
+    pub fn record_backpressure(&self) {
+        self.backpressure_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Returns total transactions processed by this shard.
+    #[inline]
+    pub fn transactions_total(&self) -> u64 {
+        self.transactions_total.load(Ordering::Relaxed)
+    }
+
+    /// Returns the peak observed latency (proxy for p99) in nanoseconds.
+    #[inline]
+    pub fn latency_p99_ns(&self) -> u64 {
+        self.latency_peak_ns.load(Ordering::Relaxed)
+    }
+
+    /// Returns ring buffer utilization × 10_000 (10_000 = 100%).
+    #[inline]
+    pub fn ring_utilization_x10000(&self) -> u64 {
+        self.ring_util_x10000.load(Ordering::Relaxed)
+    }
+
+    /// Returns total backpressure events (ring-full rejections).
+    #[inline]
+    pub fn backpressure_total(&self) -> u64 {
+        self.backpressure_total.load(Ordering::Relaxed)
+    }
+
+    /// Returns ring buffer utilization as a float in [0.0, 1.0].
+    #[inline]
+    pub fn ring_utilization_f64(&self) -> f64 {
+        self.ring_util_x10000.load(Ordering::Relaxed) as f64 / 10_000.0
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

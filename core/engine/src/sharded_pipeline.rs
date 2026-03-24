@@ -21,6 +21,7 @@
 //! Each shard runs on its own thread, pinned to a dedicated physical core for optimal
 //! cache locality and minimal context switching.
 
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
@@ -123,7 +124,13 @@ use crate::pipeline::{Pipeline, PipelineBuilder};
 /// ```
 pub struct ShardedPipeline {
     shards: Vec<Pipeline>,
-    shard_count: usize,
+    /// Active shard count, stored atomically so future live-read paths can
+    /// observe a resize without holding a lock.
+    shard_count: AtomicUsize,
+    /// Capacity per shard — kept for resize().
+    capacity_per_shard: usize,
+    /// Max amount units — kept for resize().
+    max_amount_units: u64,
     _handles: Vec<JoinHandle<()>>, // Keep thread handles alive
 }
 
@@ -211,9 +218,106 @@ impl ShardedPipeline {
 
         Ok(Self {
             shards,
-            shard_count,
+            shard_count: AtomicUsize::new(shard_count),
+            capacity_per_shard,
+            max_amount_units,
             _handles: handles,
         })
+    }
+
+    /// Resize to a new shard count (static rebalancing — drain + restart).
+    ///
+    /// # Steps
+    ///
+    /// 1. Validate `new_shard_count` (power of 2, ≤ `MAX_SHARD_COUNT`).
+    /// 2. Drain all existing ring buffers (signal stop, drop handles).
+    /// 3. Rebuild with the new count.
+    /// 4. Update `shard_count` atomically.
+    ///
+    /// # Note
+    ///
+    /// This is a **static** rebalance: in-flight events on the old shards are
+    /// drained before the new shards start.  Live migration (zero-downtime) is
+    /// planned for v0.3.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `new_shard_count` is not a power of 2 or exceeds
+    /// [`MAX_SHARD_COUNT`].
+    pub fn resize(&mut self, new_shard_count: usize) {
+        assert!(
+            (1..=MAX_SHARD_COUNT).contains(&new_shard_count) && new_shard_count.is_power_of_two(),
+            "resize: shard_count must be power of 2 in [1, {}], got {}",
+            MAX_SHARD_COUNT,
+            new_shard_count
+        );
+
+        let old = self.shard_count.load(AtomicOrdering::Acquire);
+        tracing::info!("Resharding from {} → {} shards", old, new_shard_count);
+
+        // ── Step 1: drain existing shards ──────────────────────────────────
+        // Signal all existing pipelines to stop (drains their ring buffers).
+        for shard in &self.shards {
+            shard.stop();
+        }
+        // Wait for consumer threads to finish.
+        let old_handles = std::mem::take(&mut self._handles);
+        for h in old_handles {
+            let _ = h.join();
+        }
+        self.shards.clear();
+
+        // ── Step 2: spawn new shards ───────────────────────────────────────
+        let mut new_shards = Vec::with_capacity(new_shard_count);
+        let mut new_handles = Vec::new();
+
+        for _shard_id in 0..new_shard_count {
+            let shard_results = Arc::new(DashMap::new());
+
+            let builder = PipelineBuilder::new()
+                .with_capacity(self.capacity_per_shard)
+                .with_results(Arc::clone(&shard_results));
+
+            use crate::handlers::ledger::LedgerHandler;
+            use crate::handlers::publish::PublishHandler;
+            use crate::handlers::risk::RiskHandler;
+            use crate::handlers::validation::ValidationHandler;
+            use blazil_ledger::mock::InMemoryLedgerClient;
+
+            let shard_runtime = Arc::new(
+                tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(1)
+                    .enable_all()
+                    .build()
+                    .expect("failed to create shard runtime"),
+            );
+
+            let validation = ValidationHandler::new(Arc::clone(&shard_results));
+            let risk = RiskHandler::new(self.max_amount_units, Arc::clone(&shard_results));
+            let ledger_client = Arc::new(InMemoryLedgerClient::new_unbounded());
+            let ledger =
+                LedgerHandler::new(ledger_client, shard_runtime, Arc::clone(&shard_results));
+            let publish = PublishHandler::new(Arc::clone(&shard_results));
+
+            let (pipeline, runners) = builder
+                .add_handler(validation)
+                .add_handler(risk)
+                .add_handler(ledger)
+                .add_handler(publish)
+                .build()
+                .expect("resize: failed to build shard pipeline");
+
+            for runner in runners {
+                new_handles.push(runner.run());
+            }
+            new_shards.push(pipeline);
+        }
+
+        self.shards = new_shards;
+        self._handles = new_handles;
+        // ── Step 3: publish new count atomically ───────────────────────────
+        self.shard_count
+            .store(new_shard_count, AtomicOrdering::Release);
     }
 
     /// Route event to appropriate shard and attempt to send it.
@@ -235,7 +339,7 @@ impl ShardedPipeline {
     pub fn publish_event(&self, event: TransactionEvent) -> BlazerResult<i64> {
         // Route by debit account to ensure deterministic ordering.
         // route_to_shard uses a fast bitmask — valid when shard_count is power of 2.
-        let shard_id = route_to_shard(event.debit_account_id.as_u64(), self.shard_count);
+        let shard_id = route_to_shard(event.debit_account_id.as_u64(), self.shard_count());
         self.shards[shard_id].publish_event(event)
     }
 
@@ -271,8 +375,9 @@ impl ShardedPipeline {
     }
 
     /// Get the number of shards in this pipeline.
+    #[inline]
     pub fn shard_count(&self) -> usize {
-        self.shard_count
+        self.shard_count.load(AtomicOrdering::Relaxed)
     }
 
     /// Get the results map for a specific shard.
