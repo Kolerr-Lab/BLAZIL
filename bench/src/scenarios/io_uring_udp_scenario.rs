@@ -182,9 +182,9 @@ fn make_udp_packet(seq: u64, debit_id: &AccountId, credit_id: &AccountId) -> Vec
     packet[16..24].copy_from_slice(&debit_id.as_u64().to_be_bytes());
     packet[24..32].copy_from_slice(&credit_id.as_u64().to_be_bytes());
     packet[32..40].copy_from_slice(&10_000u64.to_be_bytes()); // $100.00
-    packet[40..48].copy_from_slice(&0u64.to_be_bytes());      // timestamp
-    packet[48..52].copy_from_slice(&0u32.to_be_bytes());      // LedgerId::USD
-    packet[52..54].copy_from_slice(&1u16.to_be_bytes());      // code = 1
+    packet[40..48].copy_from_slice(&0u64.to_be_bytes()); // timestamp
+    packet[48..52].copy_from_slice(&0u32.to_be_bytes()); // LedgerId::USD
+    packet[52..54].copy_from_slice(&1u16.to_be_bytes()); // code = 1
     packet[54] = 0; // flags
     packet[55] = 0; // padding
 

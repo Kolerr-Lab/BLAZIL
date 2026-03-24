@@ -37,7 +37,7 @@
 //! ```
 
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -52,9 +52,10 @@ use blazil_common::currency::parse_currency;
 use blazil_common::error::{BlazerError, BlazerResult};
 use blazil_common::ids::{AccountId, LedgerId, TransactionId};
 use blazil_common::timestamp::Timestamp;
-use blazil_engine::event::{TransactionEvent, TransactionResult};
+use blazil_engine::event::{EventFlags, TransactionEvent, TransactionResult};
 use blazil_engine::pipeline::Pipeline;
 use blazil_engine::ring_buffer::RingBuffer;
+use blazil_engine::sharded_pipeline::ShardedPipeline;
 use blazil_ledger::convert::amount_to_minor_units;
 
 use crate::protocol::{
@@ -482,13 +483,6 @@ fn uring_error_response(request_id: &str, err: &BlazerError) -> TransactionRespo
 // tokio-uring 0.5 uses owned-buffer passing: the caller gives the Vec to
 // the kernel and gets it back upon completion — no additional copy.
 
-use std::sync::atomic::AtomicU64;
-
-use blazil_common::ids::{AccountId, LedgerId, TransactionId};
-use blazil_common::timestamp::Timestamp;
-use blazil_engine::event::{EventFlags, TransactionEvent, TransactionResult};
-use blazil_engine::sharded_pipeline::ShardedPipeline;
-
 // ── Buffer pool constants ─────────────────────────────────────────────────────
 
 /// Size of each recv buffer (larger than max UDP datagram we ever handle).
@@ -795,8 +789,7 @@ async fn uring_udp_recv_loop(
         };
 
         // ── Publish to pipeline ───────────────────────────────────────────
-        let shard_id =
-            (event.debit_account_id.as_u64() as usize) % pipeline.shard_count();
+        let shard_id = (event.debit_account_id.as_u64() as usize) % pipeline.shard_count();
 
         let ring_seq = match pipeline.publish_event(event) {
             Ok(seq) => seq,
