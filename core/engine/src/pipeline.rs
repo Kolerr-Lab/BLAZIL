@@ -336,7 +336,7 @@ impl PipelineRunner {
         let num_shards = self.num_shards;
 
         std::thread::Builder::new()
-            .name(format!("pipeline-worker-{}", shard_id))
+            .name(format!("blazil-shard-{}", shard_id))
             .spawn(move || {
                 for handler in &mut self.handlers {
                     handler.on_start();

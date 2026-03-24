@@ -44,6 +44,58 @@ const _: () = assert!(
     MAX_SHARD_COUNT * MAX_RING_CAPACITY_PER_SHARD * 56 <= 512 * 1024 * 1024,
     "Ring buffer total exceeds 512 MB — reduce MAX_SHARD_COUNT or MAX_RING_CAPACITY_PER_SHARD"
 );
+
+// ── Dynamic shard-count helpers ───────────────────────────────────────────────
+
+/// Compute the default shard count from available CPU parallelism.
+///
+/// Returns the largest power of 2 that is ≤ `(cpu_count / 2).max(1)`,
+/// capped at [`MAX_SHARD_COUNT`].
+pub fn default_shard_count() -> usize {
+    let cpus = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+    let desired = (cpus / 2).max(1);
+    let mut n = 1usize;
+    while n * 2 <= desired.min(MAX_SHARD_COUNT) {
+        n *= 2;
+    }
+    n
+}
+
+/// Read shard count from the `BLAZIL_SHARD_COUNT` environment variable.
+///
+/// Falls back to [`default_shard_count`] when the variable is unset.
+///
+/// # Panics
+///
+/// Panics if the env var is set to a value that is not a power of 2,
+/// less than 1, or greater than [`MAX_SHARD_COUNT`].
+pub fn from_env() -> usize {
+    std::env::var("BLAZIL_SHARD_COUNT")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .inspect(|&n| {
+            assert!(
+                (1..=MAX_SHARD_COUNT).contains(&n) && n.is_power_of_two(),
+                "BLAZIL_SHARD_COUNT must be power of 2, between 1 and {}",
+                MAX_SHARD_COUNT
+            );
+        })
+        .unwrap_or_else(default_shard_count)
+}
+
+/// Route an account event to a shard index using a fast bitmask.
+///
+/// # Precondition
+///
+/// `shard_count` must be a power of 2 (enforced by [`from_env`] and
+/// recommended for all callers).
+#[inline(always)]
+pub fn route_to_shard(account_id: u64, shard_count: usize) -> usize {
+    (account_id as usize) & (shard_count - 1)
+}
+
 use dashmap::DashMap;
 
 use crate::event::{TransactionEvent, TransactionResult};
@@ -181,8 +233,9 @@ impl ShardedPipeline {
     ///
     /// Returns error if the target shard's ring buffer is full.
     pub fn publish_event(&self, event: TransactionEvent) -> BlazerResult<i64> {
-        // Route by debit account to ensure deterministic ordering
-        let shard_id = (event.debit_account_id.as_u64() as usize) % self.shard_count;
+        // Route by debit account to ensure deterministic ordering.
+        // route_to_shard uses a fast bitmask — valid when shard_count is power of 2.
+        let shard_id = route_to_shard(event.debit_account_id.as_u64(), self.shard_count);
         self.shards[shard_id].publish_event(event)
     }
 

@@ -25,7 +25,10 @@ pub async fn run(events: u64, shard_count: usize) -> BenchmarkResult {
 }
 
 /// Synchronous benchmark body for sharded pipeline.
-fn run_once_blocking(events: u64, shard_count: usize) -> BenchmarkResult {
+///
+/// Public so that Criterion bench targets can call it directly.
+pub fn run_once_blocking(events: u64, shard_count: usize) -> BenchmarkResult {
+    println!("Running with {} shards", shard_count);
     // Create sharded pipeline with N independent shards
     let sharded = Arc::new(
         ShardedPipeline::new(shard_count, CAPACITY_PER_SHARD, MAX_AMOUNT_UNITS)

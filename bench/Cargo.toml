@@ -39,3 +39,7 @@ harness = false
 [[bench]]
 name = "latency"
 harness = false
+
+[[bench]]
+name = "sharded_pipeline_scenario"
+harness = false
