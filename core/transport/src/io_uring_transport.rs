@@ -36,6 +36,7 @@
 //! TransactionResponse → write_frame_uring → client
 //! ```
 
+use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -667,8 +668,8 @@ async fn uring_udp_recv_loop(
         .map(|_| vec![0u8; RECV_BUFFER_SIZE])
         .collect();
 
-    // Wrap socket in Arc so spawned tasks can call send_to.
-    let socket = Arc::new(socket);
+    // Wrap socket in Rc — tokio-uring is single-threaded so Rc is sufficient.
+    let socket = Rc::new(socket);
 
     // In-flight bitset: bit i set ↔ buf slot i is owned by a spawned task.
     // Using AtomicU64 array for lock-free slot management.
@@ -689,7 +690,7 @@ async fn uring_udp_recv_loop(
         tokio::sync::mpsc::channel::<([u8; UDP_RESPONSE_SIZE], std::net::SocketAddr)>(65_536);
 
     // ── Dedicated send task ───────────────────────────────────────────────
-    let send_socket = Arc::clone(&socket);
+    let send_socket = Rc::clone(&socket);
     let send_sent = Arc::clone(&packets_sent);
     tokio_uring::spawn(async move {
         while let Some((response, peer)) = resp_rx.recv().await {
@@ -737,8 +738,8 @@ async fn uring_udp_recv_loop(
         };
         slot_cursor = (slot + 1) % RECV_BUFFER_COUNT;
 
-        // Take the buffer out of the pool (temporarily replaced with empty vec).
-        let buf = std::mem::replace(&mut bufs[slot], Vec::new());
+        // Take the buffer out of the pool.
+        let buf = std::mem::take(&mut bufs[slot]);
 
         // ── Submit recv_from to io_uring ──────────────────────────────────
         let (res, buf) = socket.recv_from(buf).await;
