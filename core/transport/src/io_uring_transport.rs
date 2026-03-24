@@ -646,6 +646,7 @@ async fn uring_udp_recv_loop(
         .map_err(|e| BlazerError::Transport(format!("invalid bind address '{addr}': {e}")))?;
 
     let socket = tokio_uring::net::UdpSocket::bind(sock_addr)
+        .await
         .map_err(|e| BlazerError::Transport(format!("io_uring UDP bind failed on {addr}: {e}")))?;
 
     let local = socket
