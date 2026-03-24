@@ -194,6 +194,34 @@ extern "C" {
         context: *mut aeron_driver_context_t,
         value: bool,
     ) -> c_int;
+
+    /// Set the term buffer length for UDP channels (bytes, must be power of two).
+    /// Default is 16 MB; reducing to 1 MB cuts /dev/shm usage 16× per channel.
+    pub fn aeron_driver_context_set_term_buffer_length(
+        context: *mut aeron_driver_context_t,
+        value: usize,
+    ) -> c_int;
+
+    /// Set the term buffer length for IPC channels (bytes, must be power of two).
+    /// Default is 64 MB; reducing to 1 MB cuts in-process shared-memory usage.
+    pub fn aeron_driver_context_set_ipc_term_buffer_length(
+        context: *mut aeron_driver_context_t,
+        value: usize,
+    ) -> c_int;
+
+    /// Set the OS socket receive buffer size (bytes).
+    /// Larger values reduce packet loss under burst traffic.
+    pub fn aeron_driver_context_set_socket_so_rcvbuf(
+        context: *mut aeron_driver_context_t,
+        value: usize,
+    ) -> c_int;
+
+    /// Set the OS socket send buffer size (bytes).
+    /// Larger values allow the kernel to absorb bursts without back-pressure.
+    pub fn aeron_driver_context_set_socket_so_sndbuf(
+        context: *mut aeron_driver_context_t,
+        value: usize,
+    ) -> c_int;
 }
 
 // ── Driver (aeron_driver_t) ────────────────────────────────────────────────────

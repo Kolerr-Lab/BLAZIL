@@ -109,6 +109,34 @@ impl EmbeddedAeronDriver {
             sys::aeron_driver_context_set_dir_delete_on_start(driver_ctx_ptr, true);
         }
 
+        // ── Memory caps (/dev/shm budget: ~128 MB per node) ──────────────────
+        // The default Aeron term buffer is 16 MB per channel.  On a DO 8 GB
+        // node with many pubs/subs this pushes /dev/shm to ~2 GB and triggers
+        // the OOM killer.  1 MB term buffers reduce that to ~128 MB while
+        // retaining throughput (term size only limits sustained burst depth,
+        // not peak throughput).  Socket buffers are raised to 2 MB each so the
+        // kernel can absorb short bursts without Aeron back-pressure.
+        //
+        // SAFETY: driver_ctx_ptr is non-null and fully configured at this point.
+        unsafe {
+            sys::aeron_driver_context_set_term_buffer_length(
+                driver_ctx_ptr,
+                1024 * 1024, // 1 MB (default 16 MB — 16× reduction)
+            );
+            sys::aeron_driver_context_set_ipc_term_buffer_length(
+                driver_ctx_ptr,
+                1024 * 1024, // 1 MB (default 64 MB)
+            );
+            sys::aeron_driver_context_set_socket_so_sndbuf(
+                driver_ctx_ptr,
+                2 * 1024 * 1024, // 2 MB (default 128 KB)
+            );
+            sys::aeron_driver_context_set_socket_so_rcvbuf(
+                driver_ctx_ptr,
+                2 * 1024 * 1024, // 2 MB (default 128 KB)
+            );
+        }
+
         // ── Initialise driver struct ──────────────────────────────────────────
         // SAFETY: driver_ctx_ptr is non-null and fully configured.
         let mut driver_ptr: *mut sys::aeron_driver_t = std::ptr::null_mut();

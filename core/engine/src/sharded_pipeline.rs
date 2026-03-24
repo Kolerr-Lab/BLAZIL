@@ -25,6 +25,25 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use blazil_common::error::BlazerResult;
+
+// ── Memory budget constants ───────────────────────────────────────────────────
+
+/// Upper bound on the number of shards in a production deployment.
+/// Used to compute the compile-time ring buffer memory assertion below.
+pub const MAX_SHARD_COUNT: usize = 8;
+
+/// Upper bound on ring buffer capacity per shard (must be power of 2).
+/// Each slot holds one [`crate::event::TransactionEvent`] = 56 bytes.
+pub const MAX_RING_CAPACITY_PER_SHARD: usize = 1_048_576; // 1 M slots
+
+/// Compile-time guard: total ring buffer memory across all shards must not
+/// exceed 512 MB.  If you increase either constant, verify the budget holds.
+///
+/// Current: 8 shards × 1 048 576 slots × 56 bytes = 450 MB ✓
+const _: () = assert!(
+    MAX_SHARD_COUNT * MAX_RING_CAPACITY_PER_SHARD * 56 <= 512 * 1024 * 1024,
+    "Ring buffer total exceeds 512 MB — reduce MAX_SHARD_COUNT or MAX_RING_CAPACITY_PER_SHARD"
+);
 use dashmap::DashMap;
 
 use crate::event::{TransactionEvent, TransactionResult};

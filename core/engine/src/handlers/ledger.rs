@@ -57,15 +57,16 @@ use crate::handler::EventHandler;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-/// Maximum transfers per batch. TigerBeetle supports up to 8,190; we use a
-/// conservative limit to balance latency and throughput.
-const MAX_BATCH: usize = 100;
+/// Maximum transfers per TigerBeetle batch (TB hard limit is 8,190).
+/// Flushing at this size amortises VSR consensus cost across the maximum
+/// number of transfers per round-trip, yielding peak throughput.
+const MAX_TB_BATCH_SIZE: usize = 8_190;
 
-/// Maximum time to hold a batch before flushing (1 ms).
-/// Under load, `end_of_batch` is rarely true (ring buffer never empty).
-/// Time-based flushing ensures batches don't wait indefinitely.
-/// 1ms timeout = same as TB VSR latency, so zero added latency.
-const MAX_BATCH_AGE: Duration = Duration::from_millis(1);
+/// Flush timeout in microseconds. Batches that haven't reached
+/// `MAX_TB_BATCH_SIZE` are flushed after this interval regardless.
+/// 500 µs ≈ the DO-region RTT between nodes, so the timeout adds
+/// zero extra latency relative to the network round-trip.
+const BATCH_FLUSH_TIMEOUT_US: u64 = 500;
 
 // ── LedgerHandler ─────────────────────────────────────────────────────────────
 
@@ -119,8 +120,8 @@ impl<C: LedgerClient> LedgerHandler<C> {
             batch_started_at: None,
             runtime,
             results,
-            deferred_transfers: Vec::with_capacity(MAX_BATCH),
-            deferred_sequences: Vec::with_capacity(MAX_BATCH),
+            deferred_transfers: Vec::with_capacity(MAX_TB_BATCH_SIZE),
+            deferred_sequences: Vec::with_capacity(MAX_TB_BATCH_SIZE),
         }
     }
 }
@@ -177,11 +178,11 @@ impl<C: LedgerClient + 'static> EventHandler for LedgerHandler<C> {
         // Check if batch age exceeds timeout (handles moderate load where batch never fills)
         let batch_age_exceeded = self
             .batch_started_at
-            .map(|started| started.elapsed() > MAX_BATCH_AGE)
+            .map(|started| started.elapsed() >= Duration::from_micros(BATCH_FLUSH_TIMEOUT_US))
             .unwrap_or(false);
 
         let should_flush =
-            end_of_batch || self.deferred_transfers.len() >= MAX_BATCH || batch_age_exceeded;
+            end_of_batch || self.deferred_transfers.len() >= MAX_TB_BATCH_SIZE || batch_age_exceeded;
 
         if !should_flush {
             // Defer: queue the transfer and sequence number for batch flush.
@@ -205,6 +206,10 @@ impl<C: LedgerClient + 'static> EventHandler for LedgerHandler<C> {
         let prev_n = self.deferred_transfers.len();
         let prev_sequences = mem::take(&mut self.deferred_sequences);
         let mut all_transfers = mem::take(&mut self.deferred_transfers);
+        // Pre-allocate replacement buffers immediately so the next batch never
+        // reallocates on the hot path.  The batch buffer is always fixed-size.
+        self.deferred_transfers = Vec::with_capacity(MAX_TB_BATCH_SIZE);
+        self.deferred_sequences = Vec::with_capacity(MAX_TB_BATCH_SIZE);
         all_transfers.push(transfer);
 
         let batch_size = all_transfers.len();
