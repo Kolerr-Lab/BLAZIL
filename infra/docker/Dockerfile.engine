@@ -1,8 +1,10 @@
 # Blazil engine — Rust multi-stage build
-# aeron-rs is a pure-Rust crate (no C bindings, no cmake, no aeronmd binary
-# needed at build time).  The aeron feature compiles in purely through cargo.
+# The `aeron` feature builds libaeron_static.a + libaeron_driver_static.a from
+# the real-logic/aeron C source (git submodule at core/aeron-sys/aeron).
+# cmake and g++ are required in the builder stage for this compilation.
 # At runtime, set BLAZIL_TRANSPORT=aeron only when an external aeronmd is
-# available.  Default cluster transport is io-uring.
+# available.  Default transport (no env var) is TCP; io-uring is used on
+# Linux 5.1+ when BLAZIL_TRANSPORT=io-uring.
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Stage 1: Rust builder
@@ -10,8 +12,12 @@
 FROM rust:1.85-slim AS builder
 WORKDIR /app
 
-# System deps required by tigerbeetle-unofficial and the SSL crate
+# System deps:
+#   cmake g++    — required to build libaeron_static.a (Aeron C media driver)
+#   clang lld    — used by the Rust compiler for faster linking
+#   pkg-config libssl-dev — required by the TLS / TigerBeetle crates
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    cmake g++ \
     pkg-config libssl-dev clang lld curl xz-utils ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 

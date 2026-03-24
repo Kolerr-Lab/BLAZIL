@@ -6,7 +6,7 @@ networks:
 
 services:
   tigerbeetle:
-    image: ghcr.io/tigerbeetle/tigerbeetle:latest
+    image: ghcr.io/tigerbeetle/tigerbeetle:0.16.72
     container_name: blazil-test-tigerbeetle
     networks:
       - blazil-test

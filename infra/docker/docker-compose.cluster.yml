@@ -28,7 +28,7 @@ services:
   # ── TigerBeetle Cluster (3 replicas, VSR consensus) ─────────────────────────
 
   tigerbeetle-0:
-    image: ghcr.io/tigerbeetle/tigerbeetle:latest
+    image: ghcr.io/tigerbeetle/tigerbeetle:0.16.72
     container_name: blazil-tigerbeetle-0
     entrypoint: ["/entrypoint.sh"]
     environment:
@@ -56,7 +56,7 @@ services:
       start_period: 15s
 
   tigerbeetle-1:
-    image: ghcr.io/tigerbeetle/tigerbeetle:latest
+    image: ghcr.io/tigerbeetle/tigerbeetle:0.16.72
     container_name: blazil-tigerbeetle-1
     entrypoint: ["/entrypoint.sh"]
     environment:
@@ -81,7 +81,7 @@ services:
       start_period: 15s
 
   tigerbeetle-2:
-    image: ghcr.io/tigerbeetle/tigerbeetle:latest
+    image: ghcr.io/tigerbeetle/tigerbeetle:0.16.72
     container_name: blazil-tigerbeetle-2
     entrypoint: ["/entrypoint.sh"]
     environment:
@@ -150,6 +150,60 @@ services:
     ports:
       - "50051:50051"
       - "9091:9091"
+    networks:
+      - blazil-cluster
+    depends_on:
+      - blazil-node-1
+
+  blazil-node-1-banking:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.banking
+    container_name: blazil-node-1-banking
+    environment:
+      BLAZIL_ENGINE_ADDR: "blazil-node-1:7878"
+      BANKING_METRICS_ADDR: "0.0.0.0:9092"
+      BLAZIL_NODE_ID: "node-1"
+      BLAZIL_AUTH_REQUIRED: "false"
+    ports:
+      - "50052:50052"
+      - "9092:9092"
+    networks:
+      - blazil-cluster
+    depends_on:
+      - blazil-node-1
+
+  blazil-node-1-trading:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.trading
+    container_name: blazil-node-1-trading
+    environment:
+      BLAZIL_ENGINE_ADDR: "blazil-node-1:7878"
+      METRICS_ADDR: "0.0.0.0:9093"
+      BLAZIL_NODE_ID: "node-1"
+      BLAZIL_AUTH_REQUIRED: "false"
+    ports:
+      - "50053:50053"
+      - "9093:9093"
+    networks:
+      - blazil-cluster
+    depends_on:
+      - blazil-node-1
+
+  blazil-node-1-crypto:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.crypto
+    container_name: blazil-node-1-crypto
+    environment:
+      BLAZIL_ENGINE_ADDR: "blazil-node-1:7878"
+      METRICS_ADDR: "0.0.0.0:9094"
+      BLAZIL_NODE_ID: "node-1"
+      BLAZIL_AUTH_REQUIRED: "false"
+    ports:
+      - "50054:50054"
+      - "9094:9094"
     networks:
       - blazil-cluster
     depends_on:
