@@ -16,6 +16,7 @@ path = "src/main.rs"
 [features]
 tigerbeetle-client = ["blazil-ledger/tigerbeetle-client"]
 aeron = ["blazil-transport/aeron"]
+io-uring = ["blazil-transport/io-uring"]
 
 [dependencies]
 blazil-common    = { path = "../core/common" }

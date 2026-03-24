@@ -452,3 +452,457 @@ fn uring_error_response(request_id: &str, err: &BlazerError) -> TransactionRespo
         timestamp_ns: Timestamp::now().as_nanos(),
     }
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// IoUringUdpTransport — io_uring UDP transport with pre-registered buffers
+// ════════════════════════════════════════════════════════════════════════════
+//
+// ## Architecture
+//
+// ```text
+// tokio_uring runtime (wraps tokio + io_uring SQ/CQ)
+//    │
+//    ▼  tokio_uring::net::UdpSocket (bound, connectionless)
+// IoUringUdpTransport::serve()
+//    │  pre-registered fixed recv buffers (RECV_BUFFER_COUNT × RECV_BUFFER_SIZE)
+//    │  in-flight bitset: [u64; 4] → 256 slots
+//    │  recv_from loop → deserialize → ShardedPipeline::publish_event
+//    ▼
+// per-request tokio_uring task: wait_result → build 16-byte response → send_to
+// ```
+//
+// ## Zero-copy buffer management
+//
+// Rather than allocating a new heap buffer for every recv, the transport
+// manages a pool of RECV_BUFFER_COUNT fixed-size bufs.  A compact bitset
+// ([u64; 4] = 256 bits) tracks which slots are currently in-flight inside
+// a spawned task.  When a task completes the slot bit is cleared and the
+// buffer is available for the next recv.
+//
+// tokio-uring 0.5 uses owned-buffer passing: the caller gives the Vec to
+// the kernel and gets it back upon completion — no additional copy.
+
+use std::sync::atomic::AtomicU64;
+
+use blazil_common::ids::{AccountId, LedgerId, TransactionId};
+use blazil_common::timestamp::Timestamp;
+use blazil_engine::event::{EventFlags, TransactionEvent, TransactionResult};
+use blazil_engine::sharded_pipeline::ShardedPipeline;
+
+// ── Buffer pool constants ─────────────────────────────────────────────────────
+
+/// Size of each recv buffer (larger than max UDP datagram we ever handle).
+const RECV_BUFFER_SIZE: usize = 2_048;
+/// Number of pre-allocated recv buffers (= max concurrent in-flight recvs).
+const RECV_BUFFER_COUNT: usize = 256;
+/// Number of pre-allocated send buffers (one per in-flight send task).
+const SEND_BUFFER_COUNT: usize = 256;
+
+// ── UDP packet layout ─────────────────────────────────────────────────────────
+
+const UDP_HEADER_SIZE: usize = 8; // sequence (u64)
+const UDP_PAYLOAD_SIZE: usize = 48; // TransactionEvent fields
+const UDP_PACKET_SIZE: usize = UDP_HEADER_SIZE + UDP_PAYLOAD_SIZE; // 56 bytes
+const UDP_RESPONSE_SIZE: usize = 16; // seq(8) + result(8)
+
+// ── Result-wait timeout ───────────────────────────────────────────────────────
+
+const UDP_RESULT_TIMEOUT: Duration = Duration::from_millis(100);
+
+// ── IoUringUdpTransport ───────────────────────────────────────────────────────
+
+/// io_uring-backed UDP transport with pre-registered fixed-size recv buffers.
+///
+/// # Buffer pool
+///
+/// `RECV_BUFFER_COUNT` (256) fixed recv buffers of `RECV_BUFFER_SIZE` (2048)
+/// bytes are allocated at construction.  An in-flight bitset (`[u64; 4]`)
+/// tracks which buffer slots are currently owned by a spawned task, allowing
+/// the recv loop to pick up a free slot on every iteration without heap
+/// allocation.
+///
+/// # Linux requirements
+///
+/// Requires Linux 5.1+ for `io_uring`.  Compiled only on Linux with the
+/// `io-uring` feature enabled.  Activate with `BLAZIL_TRANSPORT=io-uring-udp`.
+pub struct IoUringUdpTransport {
+    addr: String,
+    pipeline: Arc<ShardedPipeline>,
+    shutdown: Arc<AtomicBool>,
+    packets_received: Arc<AtomicU64>,
+    packets_sent: Arc<AtomicU64>,
+    bound_addr: Arc<std::sync::Mutex<Option<String>>>,
+}
+
+impl IoUringUdpTransport {
+    /// Creates a new `IoUringUdpTransport`.
+    ///
+    /// - `addr`     — bind address, e.g. `"0.0.0.0:7879"`.
+    /// - `pipeline` — shared sharded pipeline for event processing.
+    pub fn new(addr: &str, pipeline: Arc<ShardedPipeline>) -> Self {
+        info!(
+            recv_buf_count = RECV_BUFFER_COUNT,
+            recv_buf_size = RECV_BUFFER_SIZE,
+            send_buf_count = SEND_BUFFER_COUNT,
+            "io_uring UDP: buffer pool initialized"
+        );
+        Self {
+            addr: addr.to_owned(),
+            pipeline,
+            shutdown: Arc::new(AtomicBool::new(false)),
+            packets_received: Arc::new(AtomicU64::new(0)),
+            packets_sent: Arc::new(AtomicU64::new(0)),
+            bound_addr: Arc::new(std::sync::Mutex::new(None)),
+        }
+    }
+
+    /// Returns the actual bound address after `serve()` has been called.
+    pub fn local_addr(&self) -> String {
+        self.bound_addr
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| self.addr.clone())
+    }
+
+    /// Async helper: waits until the socket is bound and returns the address.
+    pub async fn local_addr_async(&self) -> String {
+        loop {
+            {
+                let guard = self.bound_addr.lock().unwrap();
+                if let Some(ref a) = *guard {
+                    return a.clone();
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    }
+
+    /// Returns total packets received since start.
+    pub fn packets_received(&self) -> u64 {
+        self.packets_received.load(Ordering::Relaxed)
+    }
+
+    /// Returns total packets sent since start.
+    pub fn packets_sent(&self) -> u64 {
+        self.packets_sent.load(Ordering::Relaxed)
+    }
+
+    /// Signals the server to stop accepting new packets.
+    pub async fn shutdown(&self) {
+        self.shutdown.store(true, Ordering::Release);
+        info!(
+            received = self.packets_received.load(Ordering::Relaxed),
+            sent = self.packets_sent.load(Ordering::Relaxed),
+            "io_uring UDP: shutdown requested"
+        );
+    }
+
+    /// Starts the io_uring UDP transport.
+    ///
+    /// Runs the recv loop inside `tokio::task::spawn_blocking` → `tokio_uring::start`
+    /// so the io_uring runtime does not interfere with the outer Tokio executor.
+    pub async fn serve(&self) -> BlazerResult<()> {
+        let addr = self.addr.clone();
+        let pipeline = Arc::clone(&self.pipeline);
+        let shutdown = Arc::clone(&self.shutdown);
+        let packets_received = Arc::clone(&self.packets_received);
+        let packets_sent = Arc::clone(&self.packets_sent);
+        let bound_addr = Arc::clone(&self.bound_addr);
+
+        tokio::task::spawn_blocking(move || {
+            tokio_uring::start(uring_udp_recv_loop(
+                addr,
+                pipeline,
+                shutdown,
+                packets_received,
+                packets_sent,
+                bound_addr,
+            ))
+        })
+        .await
+        .map_err(|e| BlazerError::Transport(format!("io_uring UDP task panicked: {e}")))?
+    }
+}
+
+// ── io_uring UDP recv loop ────────────────────────────────────────────────────
+
+/// Core io_uring UDP recv loop.
+///
+/// Allocates `RECV_BUFFER_COUNT` owned `Vec<u8>` buffers upfront and cycles
+/// through them.  Each buffer is handed to `recv_from` (which gives it to the
+/// kernel via the io_uring SQ); when the CQ entry fires the buffer is returned
+/// to userspace alongside the peer address and byte count.
+///
+/// An in-flight bitset (`[u64; 4]` = 256 bits) tracks slots currently owned
+/// by spawned response tasks.  The recv loop busy-picks the next free slot;
+/// if all 256 are taken it yields once before retrying to avoid starving other
+/// tasks on the same thread.
+async fn uring_udp_recv_loop(
+    addr: String,
+    pipeline: Arc<ShardedPipeline>,
+    shutdown: Arc<AtomicBool>,
+    packets_received: Arc<AtomicU64>,
+    packets_sent: Arc<AtomicU64>,
+    bound_addr: Arc<std::sync::Mutex<Option<String>>>,
+) -> BlazerResult<()> {
+    // ── Bind socket ───────────────────────────────────────────────────────
+    let sock_addr: std::net::SocketAddr = addr
+        .parse()
+        .map_err(|e| BlazerError::Transport(format!("invalid bind address '{addr}': {e}")))?;
+
+    let socket = tokio_uring::net::UdpSocket::bind(sock_addr)
+        .map_err(|e| BlazerError::Transport(format!("io_uring UDP bind failed on {addr}: {e}")))?;
+
+    let local = socket
+        .local_addr()
+        .map_err(|e| BlazerError::Transport(format!("local_addr() failed: {e}")))?;
+
+    {
+        let mut guard = bound_addr.lock().unwrap();
+        *guard = Some(local.to_string());
+    }
+
+    info!(addr = %local, "🚀 io_uring UDP transport active");
+
+    // ── Pre-allocate buffer pool ──────────────────────────────────────────
+    // Each buffer is a Vec<u8> of RECV_BUFFER_SIZE bytes.
+    // tokio-uring 0.5 owns the Vec during the I/O op and returns it on completion.
+    let mut bufs: Vec<Vec<u8>> = (0..RECV_BUFFER_COUNT)
+        .map(|_| vec![0u8; RECV_BUFFER_SIZE])
+        .collect();
+
+    // Wrap socket in Arc so spawned tasks can call send_to.
+    let socket = Arc::new(socket);
+
+    // In-flight bitset: bit i set ↔ buf slot i is owned by a spawned task.
+    // Using AtomicU64 array for lock-free slot management.
+    let in_flight: Arc<[std::sync::atomic::AtomicU64; 4]> = Arc::new([
+        std::sync::atomic::AtomicU64::new(0),
+        std::sync::atomic::AtomicU64::new(0),
+        std::sync::atomic::AtomicU64::new(0),
+        std::sync::atomic::AtomicU64::new(0),
+    ]);
+
+    let mut slot_cursor: usize = 0;
+
+    // ── Channel for response sends ────────────────────────────────────────
+    // Spawned tasks push (response_bytes, peer) here; a dedicated send task
+    // drains the channel and calls socket.send_to to avoid concurrent mutable
+    // access to the socket from multiple tasks.
+    let (resp_tx, mut resp_rx) =
+        tokio::sync::mpsc::channel::<([u8; UDP_RESPONSE_SIZE], std::net::SocketAddr)>(65_536);
+
+    // ── Dedicated send task ───────────────────────────────────────────────
+    let send_socket = Arc::clone(&socket);
+    let send_sent = Arc::clone(&packets_sent);
+    tokio_uring::spawn(async move {
+        while let Some((response, peer)) = resp_rx.recv().await {
+            // send_to takes ownership of the buffer, returns it on completion.
+            let buf = response.to_vec();
+            let (res, _buf) = send_socket.send_to(buf, peer).await;
+            match res {
+                Ok(_) => {
+                    send_sent.fetch_add(1, Ordering::Relaxed);
+                }
+                Err(e) => {
+                    error!(error = %e, peer = %peer, "io_uring UDP: send_to failed");
+                }
+            }
+        }
+    });
+
+    // ── Recv loop ─────────────────────────────────────────────────────────
+    loop {
+        if shutdown.load(Ordering::Acquire) {
+            break;
+        }
+
+        // Find a free buffer slot (bit = 0 in the in-flight bitset).
+        let slot = loop {
+            let word = slot_cursor / 64;
+            let bit = slot_cursor % 64;
+            let mask = 1u64 << bit;
+            let current = in_flight[word].load(Ordering::Acquire);
+            if current & mask == 0 {
+                // Tentatively mark as in-flight (CAS to prevent races).
+                if in_flight[word]
+                    .compare_exchange(current, current | mask, Ordering::AcqRel, Ordering::Acquire)
+                    .is_ok()
+                {
+                    break slot_cursor;
+                }
+            }
+            // Advance cursor; wrap around.
+            slot_cursor = (slot_cursor + 1) % RECV_BUFFER_COUNT;
+            // If we've cycled through all slots, yield to avoid spinning.
+            if slot_cursor == 0 {
+                tokio::task::yield_now().await;
+            }
+        };
+        slot_cursor = (slot + 1) % RECV_BUFFER_COUNT;
+
+        // Take the buffer out of the pool (temporarily replaced with empty vec).
+        let buf = std::mem::replace(&mut bufs[slot], Vec::new());
+
+        // ── Submit recv_from to io_uring ──────────────────────────────────
+        let (res, buf) = socket.recv_from(buf).await;
+        let (n, peer) = match res {
+            Ok(pair) => pair,
+            Err(e) => {
+                error!(error = %e, "io_uring UDP: recv_from failed");
+                // Return buffer to pool and clear in-flight bit.
+                bufs[slot] = buf;
+                let word = slot / 64;
+                let mask = 1u64 << (slot % 64);
+                in_flight[word].fetch_and(!mask, Ordering::Release);
+                continue;
+            }
+        };
+
+        // Return buffer to pool immediately (task gets a copy of the data).
+        // This keeps bufs[] always populated for the next recv.
+        let packet_bytes = buf[..n].to_vec();
+        bufs[slot] = buf; // give buffer back before clearing bit
+
+        // Clear in-flight bit — buffer is back in pool.
+        let word = slot / 64;
+        let mask = 1u64 << (slot % 64);
+        in_flight[word].fetch_and(!mask, Ordering::Release);
+
+        packets_received.fetch_add(1, Ordering::Relaxed);
+
+        // Validate packet size.
+        if n != UDP_PACKET_SIZE {
+            warn!(
+                peer = %peer,
+                expected = UDP_PACKET_SIZE,
+                got = n,
+                "io_uring UDP: invalid packet size — dropping"
+            );
+            continue;
+        }
+
+        // ── Deserialize ───────────────────────────────────────────────────
+        let sequence = u64::from_be_bytes(packet_bytes[0..8].try_into().unwrap());
+
+        let event = match udp_deserialize_event(&packet_bytes[UDP_HEADER_SIZE..UDP_PACKET_SIZE]) {
+            Ok(e) => e,
+            Err(e) => {
+                error!(error = %e, "io_uring UDP: deserialize failed");
+                continue;
+            }
+        };
+
+        // ── Publish to pipeline ───────────────────────────────────────────
+        let shard_id =
+            (event.debit_account_id.as_u64() as usize) % pipeline.shard_count();
+
+        let ring_seq = match pipeline.publish_event(event) {
+            Ok(seq) => seq,
+            Err(e) => {
+                warn!(seq = sequence, error = %e, "io_uring UDP: pipeline backpressure");
+                continue;
+            }
+        };
+
+        // ── Spawn response task ───────────────────────────────────────────
+        // Each task waits for one pipeline result then pushes response bytes
+        // to the send channel.  Bounded channel provides back-pressure.
+        let task_results = pipeline.shard_results(shard_id);
+        let task_resp_tx = resp_tx.clone();
+
+        tokio_uring::spawn(async move {
+            let result_code = match udp_wait_for_result(task_results, ring_seq).await {
+                Some(TransactionResult::Committed { .. }) => 0u64,
+                Some(TransactionResult::Rejected { .. }) => 1u64,
+                None => {
+                    warn!(seq = sequence, "io_uring UDP: processing timeout");
+                    1u64
+                }
+            };
+
+            let mut response = [0u8; UDP_RESPONSE_SIZE];
+            response[0..8].copy_from_slice(&sequence.to_be_bytes());
+            response[8..16].copy_from_slice(&result_code.to_be_bytes());
+
+            let _ = task_resp_tx.send((response, peer)).await;
+        });
+    }
+
+    info!("io_uring UDP recv loop exited");
+    Ok(())
+}
+
+// ── UDP helpers ───────────────────────────────────────────────────────────────
+
+/// Deserializes a [`TransactionEvent`] from a 48-byte UDP payload.
+///
+/// # Wire format (48 bytes, big-endian)
+///
+/// ```text
+/// [0-7]:   transaction_id (u64)
+/// [8-15]:  debit_account_id (u64)
+/// [16-23]: credit_account_id (u64)
+/// [24-31]: amount_units (u64)
+/// [32-39]: ingestion_timestamp nanos (u64)
+/// [40-43]: ledger_id (u32)
+/// [44-45]: code (u16)
+/// [46]:    flags (u8)
+/// [47]:    padding (u8)
+/// ```
+fn udp_deserialize_event(bytes: &[u8]) -> BlazerResult<TransactionEvent> {
+    if bytes.len() != UDP_PAYLOAD_SIZE {
+        return Err(BlazerError::Internal(format!(
+            "io_uring UDP: invalid payload size: expected {UDP_PAYLOAD_SIZE}, got {}",
+            bytes.len()
+        )));
+    }
+
+    let tx_id = u64::from_be_bytes(bytes[0..8].try_into().unwrap());
+    let debit_id = u64::from_be_bytes(bytes[8..16].try_into().unwrap());
+    let credit_id = u64::from_be_bytes(bytes[16..24].try_into().unwrap());
+    let amount = u64::from_be_bytes(bytes[24..32].try_into().unwrap());
+    let timestamp_nanos = u64::from_be_bytes(bytes[32..40].try_into().unwrap());
+    let ledger_u32 = u32::from_be_bytes(bytes[40..44].try_into().unwrap());
+    let code = u16::from_be_bytes(bytes[44..46].try_into().unwrap());
+    let flags_byte = bytes[46];
+
+    let ledger_id = match ledger_u32 {
+        0 => LedgerId::USD,
+        1 => LedgerId::EUR,
+        2 => LedgerId::GBP,
+        _ => LedgerId::USD,
+    };
+
+    let mut event = TransactionEvent::new(
+        TransactionId::from_u64(tx_id),
+        AccountId::from_u64(debit_id),
+        AccountId::from_u64(credit_id),
+        amount,
+        ledger_id,
+        code,
+    );
+
+    event.ingestion_timestamp = Timestamp::from_nanos(timestamp_nanos);
+    event.flags = EventFlags::from_raw(flags_byte);
+
+    Ok(event)
+}
+
+/// Polls the shard results map until `seq` appears or `UDP_RESULT_TIMEOUT` expires.
+async fn udp_wait_for_result(
+    results: &Arc<dashmap::DashMap<i64, TransactionResult>>,
+    seq: i64,
+) -> Option<TransactionResult> {
+    let results = Arc::clone(results);
+    let fut = async move {
+        loop {
+            if let Some(r) = results.get(&seq) {
+                return r.value().clone();
+            }
+            tokio::task::yield_now().await;
+        }
+    };
+    tokio::time::timeout(UDP_RESULT_TIMEOUT, fut).await.ok()
+}

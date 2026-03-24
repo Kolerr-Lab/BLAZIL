@@ -116,5 +116,28 @@ async fn main() {
         (transport_speedup / 20.0) * 100.0
     );
 
+    // io_uring UDP transport (Linux only, requires --features io-uring)
+    #[cfg(all(feature = "io-uring", target_os = "linux"))]
+    {
+        use blazil_bench::scenarios::io_uring_udp_scenario;
+        println!("[5/5] io_uring UDP E2E (100K events)...");
+        let io_uring_result = io_uring_udp_scenario::run(100_000).await;
+        println!(
+            "      → {} TPS",
+            blazil_bench::report::fmt_commas(io_uring_result.tps)
+        );
+        let io_uring_speedup = io_uring_result.tps as f64 / udp_result.tps as f64;
+        println!("\n=== io_uring vs epoll UDP ===");
+        println!(
+            "epoll UDP:    {} TPS",
+            blazil_bench::report::fmt_commas(udp_result.tps)
+        );
+        println!(
+            "io_uring UDP: {} TPS",
+            blazil_bench::report::fmt_commas(io_uring_result.tps)
+        );
+        println!("Speedup: {:.2}×", io_uring_speedup);
+    }
+
     println!("\nAll tests passed! ✅");
 }

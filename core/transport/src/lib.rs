@@ -62,3 +62,6 @@ pub use aeron_transport::AeronTransportServer;
 
 #[cfg(all(target_os = "linux", feature = "io-uring"))]
 pub use io_uring_transport::IoUringTransportServer;
+
+#[cfg(all(target_os = "linux", feature = "io-uring"))]
+pub use io_uring_transport::IoUringUdpTransport;

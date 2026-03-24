@@ -40,7 +40,7 @@ core_affinity  = "0.8"
 bytemuck       = { version = "1.20", features = ["derive"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-tokio-uring    = { version = "0.4", optional = true }
+tokio-uring    = { version = "0.5", optional = true }
 
 [dev-dependencies]
 blazil-ledger  = { path = "../ledger", features = ["tigerbeetle-client"] }

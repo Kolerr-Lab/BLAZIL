@@ -7,3 +7,6 @@ pub mod udp_scenario;
 
 #[cfg(feature = "aeron")]
 pub mod aeron_scenario;
+
+#[cfg(all(feature = "io-uring", target_os = "linux"))]
+pub mod io_uring_udp_scenario;
