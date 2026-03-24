@@ -1,10 +1,13 @@
 # Blazil engine — Rust multi-stage build
-# The `aeron` feature builds libaeron_static.a + libaeron_driver_static.a from
-# the real-logic/aeron C source (git submodule at core/aeron-sys/aeron).
-# cmake and g++ are required in the builder stage for this compilation.
-# At runtime, set BLAZIL_TRANSPORT=aeron only when an external aeronmd is
-# available.  Default transport (no env var) is TCP; io-uring is used on
-# Linux 5.1+ when BLAZIL_TRANSPORT=io-uring.
+#
+# The `aeron` feature (--features aeron) is intentionally NOT enabled here.
+# Building with Aeron requires the real-logic/aeron git submodule and cmake,
+# which significantly increases build time.  The production Docker image uses
+# TCP (default) or io-uring.  To deploy with Aeron, build outside Docker with
+# `--features aeron` and mount the external aeronmd binary into the container.
+#
+# Default transport (no env var) is TCP; io-uring is used on Linux 5.1+
+# when BLAZIL_TRANSPORT=io-uring.
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Stage 1: Rust builder
@@ -13,11 +16,11 @@ FROM rust:1.85-slim AS builder
 WORKDIR /app
 
 # System deps:
-#   cmake g++    — required to build libaeron_static.a (Aeron C media driver)
-#   clang lld    — used by the Rust compiler for faster linking
-#   pkg-config libssl-dev — required by the TLS / TigerBeetle crates
+#   cmake g++ libbsd-dev — required to build libaeron_static.a (Aeron C driver)
+#   clang lld            — used by the Rust compiler for faster linking
+#   pkg-config libssl-dev — required by TLS / TigerBeetle crates
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    cmake g++ \
+    cmake g++ libbsd-dev \
     pkg-config libssl-dev clang lld curl xz-utils ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
@@ -28,7 +31,7 @@ RUN curl -fsSL https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.x
 
 COPY . .
 RUN cargo build --release -p blazil-transport \
-    --features blazil-transport/tigerbeetle-client,blazil-transport/aeron,blazil-transport/io-uring
+    --features blazil-transport/tigerbeetle-client,blazil-transport/io-uring
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Stage 2: minimal runtime image
