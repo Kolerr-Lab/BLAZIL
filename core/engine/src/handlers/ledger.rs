@@ -181,8 +181,9 @@ impl<C: LedgerClient + 'static> EventHandler for LedgerHandler<C> {
             .map(|started| started.elapsed() >= Duration::from_micros(BATCH_FLUSH_TIMEOUT_US))
             .unwrap_or(false);
 
-        let should_flush =
-            end_of_batch || self.deferred_transfers.len() >= MAX_TB_BATCH_SIZE || batch_age_exceeded;
+        let should_flush = end_of_batch
+            || self.deferred_transfers.len() >= MAX_TB_BATCH_SIZE
+            || batch_age_exceeded;
 
         if !should_flush {
             // Defer: queue the transfer and sequence number for batch flush.
