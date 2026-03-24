@@ -352,7 +352,7 @@ async fn write_frame_uring(
     wire.extend_from_slice(&len.to_be_bytes());
     wire.extend_from_slice(&payload);
 
-    let (res, _) = stream.write(wire).await;
+    let (res, _) = stream.write_all(wire).await;
     res.map_err(|e| BlazerError::Transport(format!("io_uring write failed: {e}")))?;
     Ok(())
 }
@@ -807,7 +807,7 @@ async fn uring_udp_recv_loop(
         let task_resp_tx = resp_tx.clone();
 
         tokio_uring::spawn(async move {
-            let result_code = match udp_wait_for_result(task_results, ring_seq).await {
+            let result_code = match udp_wait_for_result(&task_results, ring_seq).await {
                 Some(TransactionResult::Committed { .. }) => 0u64,
                 Some(TransactionResult::Rejected { .. }) => 1u64,
                 None => {
