@@ -1,0 +1,71 @@
+---
+# benchmark.yml — Run the Blazil v0.2 DO cluster benchmark
+#
+# Prerequisites:
+#   - Cluster is running (run site.yml first)
+#   - stresstest binary compiled: cd tools/stresstest && GOOS=linux GOARCH=amd64 go build -o stresstest-linux .
+#
+# Usage:
+#   ansible-playbook -i inventory/production playbooks/benchmark.yml
+#   ansible-playbook -i inventory/production playbooks/benchmark.yml \
+#     -e "duration=300s" -e "goroutines=4" -e "window=512"
+
+- name: Run Blazil v0.2 cluster benchmark
+  hosts: node-1  # Run stresstest from node-1 (co-located, eliminates internet latency)
+  become: true
+  vars:
+    duration: "120s"
+    goroutines: "1"
+    window: "256"
+    target_port: "50051"
+    output_file: "/tmp/blazil-bench-{{ ansible_date_time.iso8601_basic_short }}.txt"
+
+  tasks:
+    - name: Ensure stresstest binary is present
+      ansible.builtin.stat:
+        path: "{{ blazil_install_dir }}/tools/stresstest/stresstest-linux"
+      register: stresstest_bin
+      failed_when: not stresstest_bin.stat.exists
+
+    - name: Make stresstest executable
+      ansible.builtin.file:
+        path: "{{ blazil_install_dir }}/tools/stresstest/stresstest-linux"
+        mode: "0755"
+
+    - name: Show benchmark configuration
+      ansible.builtin.debug:
+        msg:
+          - "Target: {{ ansible_host }}:{{ target_port }} (node-1 payments)"
+          - "Duration: {{ duration }}"
+          - "Goroutines: {{ goroutines }}"
+          - "Window: {{ window }}"
+          - "Output: {{ output_file }}"
+
+    - name: Run benchmark
+      ansible.builtin.shell:
+        cmd: |
+          {{ blazil_install_dir }}/tools/stresstest/stresstest-linux \
+            -target={{ ansible_host }}:{{ target_port }} \
+            -duration={{ duration }} \
+            -goroutines={{ goroutines }} \
+            -window={{ window }} \
+            2>&1 | tee {{ output_file }}
+      register: bench_result
+      changed_when: true
+
+    - name: Show results
+      ansible.builtin.debug:
+        var: bench_result.stdout_lines
+
+    - name: Fetch results file
+      ansible.builtin.fetch:
+        src: "{{ output_file }}"
+        dest: "../../docs/benchmark-results/do-v0.2-{{ ansible_date_time.date }}.txt"
+        flat: true
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg:
+          - "=== BENCHMARK COMPLETE ==="
+          - "Results saved to: docs/benchmark-results/do-v0.2-{{ ansible_date_time.date }}.txt"
+          - "Compare with local M4: 1,049,102 TPS (aeron:ipc, no VSR)"

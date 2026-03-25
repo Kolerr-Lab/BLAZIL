@@ -1,0 +1,81 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: blazil
+
+resources:
+  - ../../base
+
+patches:
+  # Dev: single replica of everything, auth disabled
+  - target:
+      kind: StatefulSet
+      name: blazil-engine
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+  - target:
+      kind: StatefulSet
+      name: tigerbeetle
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+  - target:
+      kind: Deployment
+      name: blazil-payments
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+  - target:
+      kind: Deployment
+      name: blazil-banking
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+  - target:
+      kind: Deployment
+      name: blazil-trading
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+  - target:
+      kind: Deployment
+      name: blazil-crypto
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+  # Dev: minimal resources
+  - target:
+      kind: StatefulSet
+      name: blazil-engine
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: "500m"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: "1"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: "512Mi"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: "2Gi"
+
+images:
+  - name: ghcr.io/kolerr-lab/blazil-engine
+    newTag: "dev"
+  - name: ghcr.io/kolerr-lab/blazil-payments
+    newTag: "dev"
+  - name: ghcr.io/kolerr-lab/blazil-banking
+    newTag: "dev"
+  - name: ghcr.io/kolerr-lab/blazil-trading
+    newTag: "dev"
+  - name: ghcr.io/kolerr-lab/blazil-crypto
+    newTag: "dev"

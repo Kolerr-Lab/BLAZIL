@@ -1,0 +1,160 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: blazil
+data:
+  datasource.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        url: http://prometheus:9090
+        access: proxy
+        isDefault: true
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: blazil
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/component: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+        app.kubernetes.io/name: grafana
+    spec:
+      containers:
+        - name: grafana
+          image: grafana/grafana:10.4.0
+          env:
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-secrets
+                  key: admin-password
+            - name: GF_AUTH_ANONYMOUS_ENABLED
+              value: "false"
+            - name: GF_SERVER_ROOT_URL
+              value: "http://grafana:3000"
+          ports:
+            - name: web
+              containerPort: 3000
+          volumeMounts:
+            - name: datasources
+              mountPath: /etc/grafana/provisioning/datasources
+            - name: dashboards-config
+              mountPath: /etc/grafana/provisioning/dashboards
+            - name: dashboards-data
+              mountPath: /var/lib/grafana/dashboards
+            - name: storage
+              mountPath: /var/lib/grafana
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 472  # grafana uid
+            allowPrivilegeEscalation: false
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+      volumes:
+        - name: datasources
+          configMap:
+            name: grafana-datasources
+        - name: dashboards-config
+          configMap:
+            name: grafana-dashboards-config
+        - name: dashboards-data
+          configMap:
+            name: grafana-dashboards-data
+        - name: storage
+          emptyDir: {}
+---
+# grafana-secrets must be created manually:
+# kubectl create secret generic grafana-secrets \
+#   --from-literal=admin-password='<secure-password>' \
+#   -n blazil
+apiVersion: v1
+kind: Secret
+metadata:
+  name: grafana-secrets
+  namespace: blazil
+  annotations:
+    # In production, use External Secrets Operator with Vault backend
+    # (infra/policies/blazil.rego enforces policy on secret access)
+    blazil.io/managed-by: vault
+type: Opaque
+stringData:
+  admin-password: "changeme"  # OVERRIDE in production via Vault / External Secrets
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards-config
+  namespace: blazil
+data:
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: blazil
+        orgId: 1
+        type: file
+        disableDeletion: false
+        updateIntervalSeconds: 30
+        options:
+          path: /var/lib/grafana/dashboards
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards-data
+  namespace: blazil
+  annotations:
+    # Dashboard JSON files are stored in infra/docker/grafana/provisioning/dashboards/
+    # and mounted here via Kustomize configMapGenerator in production overlays.
+    #
+    # kubectl create configmap grafana-dashboards-data \
+    #   --from-file=infra/docker/grafana/provisioning/dashboards/ \
+    #   -n blazil --dry-run=client -o yaml | kubectl apply -f -
+data: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: blazil
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/component: monitoring
+spec:
+  selector:
+    app: grafana
+  ports:
+    - name: web
+      port: 3000
+      targetPort: 3000
+  type: LoadBalancer

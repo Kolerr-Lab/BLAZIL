@@ -1,0 +1,47 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: blazil-cluster
+  namespace: blazil
+  annotations:
+    # TB_ADDRESSES and BLAZIL_NODES must be updated with real private IPs after
+    # terraform apply. Run: terraform output tb_addresses && terraform output blazil_nodes
+data:
+  # TigerBeetle VSR cluster — 3 replicas, real IPs required (TB rejects DNS hostnames)
+  TB_ADDRESSES: "10.10.0.1:3000,10.10.0.2:3001,10.10.0.3:3002"
+
+  # Engine inter-node mesh — used by sharding router for cross-shard transfers
+  BLAZIL_NODES: "node-1:10.10.0.1:7878,node-2:10.10.0.2:7878,node-3:10.10.0.3:7878"
+
+  # TigerBeetle VSR replica count
+  TB_REPLICA_COUNT: "3"
+
+  # TigerBeetle version — keep in sync with docker-compose files
+  TB_VERSION: "0.16.72"
+
+  # Transport backend (io-uring on Linux 5.11+, tcp for fallback)
+  BLAZIL_TRANSPORT: "io-uring"
+
+  # Sharding
+  BLAZIL_SHARDING_ENABLED: "true"
+
+  # Auth — set to "true" in production after configuring Keycloak/Vault
+  BLAZIL_AUTH_REQUIRED: "false"
+
+  # Aeron term buffer (128MB = proven working; 256MB caused mmap hang on some kernels)
+  AERON_TERM_BUFFER_LENGTH: "134217728"
+  AERON_IPC_MTU_LENGTH: "65536"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: blazil-shard-map
+  namespace: blazil
+  annotations:
+    # Maps StatefulSet pod hostname suffix (0/1/2) to logical shard identity.
+    # The engine StatefulSet init container extracts the ordinal from $HOSTNAME
+    # (e.g. blazil-engine-0 → shard 0) and sets BLAZIL_SHARD_ID accordingly.
+data:
+  node-1: "0"
+  node-2: "1"
+  node-3: "2"

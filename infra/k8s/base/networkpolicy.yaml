@@ -1,0 +1,132 @@
+---
+# Default deny-all ingress for the blazil namespace
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: blazil
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+# Engine: accept from Go services within namespace + metrics from Prometheus
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: engine-ingress
+  namespace: blazil
+spec:
+  podSelector:
+    matchLabels:
+      app: blazil-engine
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: payments
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: banking
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: trading
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: crypto
+      ports:
+        - port: 7878
+    - from:
+        - podSelector:
+            matchLabels:
+              app: prometheus
+      ports:
+        - port: 9090
+    # Inter-engine cross-shard routing
+    - from:
+        - podSelector:
+            matchLabels:
+              app: blazil-engine
+      ports:
+        - port: 7878
+---
+# TigerBeetle: accept from engine pods + inter-replica VSR traffic
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tigerbeetle-ingress
+  namespace: blazil
+spec:
+  podSelector:
+    matchLabels:
+      app: tigerbeetle
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: blazil-engine
+      ports:
+        - port: 3000
+    # Inter-replica VSR replication (ports 3000-3002 on hostNetwork)
+    - from:
+        - podSelector:
+            matchLabels:
+              app: tigerbeetle
+---
+# Go services: accept external gRPC traffic
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: grpc-services-ingress
+  namespace: blazil
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [payments, banking, trading, crypto]
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - port: 50051
+        - port: 50052
+        - port: 50053
+        - port: 50054
+    - from:
+        - podSelector:
+            matchLabels:
+              app: prometheus
+      ports:
+        - port: 9091
+        - port: 9092
+        - port: 9093
+        - port: 9094
+---
+# Monitoring: allow prometheus to scrape everything; grafana accessible externally
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: monitoring-ingress
+  namespace: blazil
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values: [prometheus, grafana]
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: grafana
+      ports:
+        - port: 9090
+    - ports:
+        - port: 3000

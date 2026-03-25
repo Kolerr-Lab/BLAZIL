@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: blazil-payments
+  namespace: blazil
+  labels:
+    app.kubernetes.io/name: blazil-payments
+    app.kubernetes.io/component: payments
+spec:
+  selector:
+    app: blazil-payments
+  ports:
+    - name: grpc
+      port: 50051
+      targetPort: 50051
+    - name: metrics
+      port: 9091
+      targetPort: 9091
+  type: LoadBalancer

@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: blazil-trading
+  namespace: blazil
+  labels:
+    app.kubernetes.io/name: blazil-trading
+    app.kubernetes.io/component: trading
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: blazil-trading
+  template:
+    metadata:
+      labels:
+        app: blazil-trading
+        app.kubernetes.io/name: blazil-trading
+        app.kubernetes.io/component: trading
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9093"
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: blazil-trading
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: trading
+          image: ghcr.io/kolerr-lab/blazil-trading:latest
+          env:
+            - name: BLAZIL_ENGINE_ADDR
+              value: "blazil-engine:7878"
+            - name: METRICS_ADDR
+              value: "0.0.0.0:9093"
+            - name: BLAZIL_AUTH_REQUIRED
+              valueFrom:
+                configMapKeyRef:
+                  name: blazil-cluster
+                  key: BLAZIL_AUTH_REQUIRED
+          ports:
+            - name: grpc
+              containerPort: 50053
+              protocol: TCP
+            - name: metrics
+              containerPort: 9093
+              protocol: TCP
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "128Mi"
+            limits:
+              cpu: "1"
+              memory: "512Mi"
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            seccompProfile:
+              type: RuntimeDefault
+          readinessProbe:
+            grpc:
+              port: 50053
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            grpc:
+              port: 50053
+            initialDelaySeconds: 15
+            periodSeconds: 10

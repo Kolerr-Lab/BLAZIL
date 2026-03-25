@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: blazil-trading
+  namespace: blazil
+  labels:
+    app.kubernetes.io/name: blazil-trading
+    app.kubernetes.io/component: trading
+spec:
+  selector:
+    app: blazil-trading
+  ports:
+    - name: grpc
+      port: 50053
+      targetPort: 50053
+    - name: metrics
+      port: 9093
+      targetPort: 9093
+  type: LoadBalancer

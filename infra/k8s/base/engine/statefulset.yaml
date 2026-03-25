@@ -1,0 +1,184 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: blazil-engine
+  namespace: blazil
+  labels:
+    app.kubernetes.io/name: blazil-engine
+    app.kubernetes.io/component: engine
+spec:
+  serviceName: blazil-engine-headless
+  replicas: 3
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: blazil-engine
+  template:
+    metadata:
+      labels:
+        app: blazil-engine
+        app.kubernetes.io/name: blazil-engine
+        app.kubernetes.io/component: engine
+    spec:
+      # One engine per node — each engine owns exactly one shard
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: blazil-engine
+              topologyKey: kubernetes.io/hostname
+
+      initContainers:
+        # Derive BLAZIL_SHARD_ID from the StatefulSet ordinal index.
+        # blazil-engine-0 → shard 0, blazil-engine-1 → shard 1, etc.
+        - name: init-shard-id
+          image: busybox:1.36
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              SHARD_ID=$(echo $HOSTNAME | grep -o '[0-9]*$')
+              NODE_NUM=$((SHARD_ID + 1))
+              echo "BLAZIL_SHARD_ID=$SHARD_ID" > /shared/engine-env
+              echo "BLAZIL_NODE_ID=node-$NODE_NUM" >> /shared/engine-env
+              echo "Engine shard: $SHARD_ID (node-$NODE_NUM)"
+          env:
+            - name: HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          volumeMounts:
+            - name: shared-env
+              mountPath: /shared
+
+      containers:
+        - name: engine
+          # Built by CI from infra/docker/Dockerfile.engine
+          # Push target: ghcr.io/kolerr-lab/blazil-engine:v0.2
+          image: ghcr.io/kolerr-lab/blazil-engine:latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              source /shared/engine-env
+              export BLAZIL_SHARD_ID BLAZIL_NODE_ID
+              exec /usr/local/bin/blazil-engine
+          env:
+            - name: BLAZIL_BIND_ADDR
+              value: "0.0.0.0:7878"
+            - name: BLAZIL_METRICS_PORT
+              value: "9090"
+            - name: BLAZIL_TB_CONNECT_RETRY
+              value: "20"
+            - name: BLAZIL_TB_CONNECT_DELAY_MS
+              value: "500"
+            - name: BLAZIL_TRANSPORT
+              valueFrom:
+                configMapKeyRef:
+                  name: blazil-cluster
+                  key: BLAZIL_TRANSPORT
+            - name: BLAZIL_TB_ADDRESS
+              valueFrom:
+                configMapKeyRef:
+                  name: blazil-cluster
+                  key: TB_ADDRESSES
+            - name: BLAZIL_NODES
+              valueFrom:
+                configMapKeyRef:
+                  name: blazil-cluster
+                  key: BLAZIL_NODES
+            - name: BLAZIL_SHARDING_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: blazil-cluster
+                  key: BLAZIL_SHARDING_ENABLED
+            - name: BLAZIL_AUTH_REQUIRED
+              valueFrom:
+                configMapKeyRef:
+                  name: blazil-cluster
+                  key: BLAZIL_AUTH_REQUIRED
+            - name: AERON_TERM_BUFFER_LENGTH
+              valueFrom:
+                configMapKeyRef:
+                  name: blazil-cluster
+                  key: AERON_TERM_BUFFER_LENGTH
+            - name: AERON_IPC_MTU_LENGTH
+              valueFrom:
+                configMapKeyRef:
+                  name: blazil-cluster
+                  key: AERON_IPC_MTU_LENGTH
+          ports:
+            - name: engine
+              containerPort: 7878
+              protocol: TCP
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          volumeMounts:
+            - name: shared-env
+              mountPath: /shared
+            - name: aeron-shm
+              mountPath: /dev/shm
+          resources:
+            requests:
+              cpu: "4"
+              memory: "4Gi"
+            limits:
+              cpu: "8"
+              memory: "12Gi"
+          securityContext:
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+            seccompProfile:
+              type: Unconfined  # Required for io_uring
+          readinessProbe:
+            tcpSocket:
+              port: 7878
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            tcpSocket:
+              port: 7878
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+
+      volumes:
+        - name: shared-env
+          emptyDir: {}
+        - name: aeron-shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 256Mi
+
+      terminationGracePeriodSeconds: 30
+
+      # Wait for TigerBeetle to be healthy before engine starts
+      initContainers:
+        - name: wait-for-tigerbeetle
+          image: busybox:1.36
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              until nc -z tigerbeetle 3000; do
+                echo "Waiting for TigerBeetle..."; sleep 2;
+              done
+              echo "TigerBeetle ready"
+        - name: init-shard-id
+          image: busybox:1.36
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              SHARD_ID=$(echo $HOSTNAME | grep -o '[0-9]*$')
+              NODE_NUM=$((SHARD_ID + 1))
+              echo "BLAZIL_SHARD_ID=$SHARD_ID" > /shared/engine-env
+              echo "BLAZIL_NODE_ID=node-$NODE_NUM" >> /shared/engine-env
+              echo "Engine shard: $SHARD_ID (node-$NODE_NUM)"
+          env:
+            - name: HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          volumeMounts:
+            - name: shared-env
+              mountPath: /shared

@@ -1,0 +1,136 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: tigerbeetle
+  namespace: blazil
+  labels:
+    app.kubernetes.io/name: tigerbeetle
+    app.kubernetes.io/component: ledger
+spec:
+  serviceName: tigerbeetle-headless
+  replicas: 3
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: tigerbeetle
+  template:
+    metadata:
+      labels:
+        app: tigerbeetle
+        app.kubernetes.io/name: tigerbeetle
+        app.kubernetes.io/component: ledger
+    spec:
+      # hostNetwork required: TigerBeetle VSR rejects DNS hostnames and needs
+      # the node's real IP for inter-replica communication. Each pod gets the
+      # node IP via hostNetwork and binds on its corresponding port (3000/3001/3002).
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+
+      # Spread replicas across nodes — one TB replica per physical node
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: tigerbeetle
+              topologyKey: kubernetes.io/hostname
+
+      initContainers:
+        # Determine TB_REPLICA from StatefulSet ordinal (tigerbeetle-0 → replica 0)
+        - name: init-replica-id
+          image: busybox:1.36
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              ORDINAL=$(echo $HOSTNAME | grep -o '[0-9]*$')
+              echo "TB_REPLICA=$ORDINAL" > /shared/tb-env
+              echo "Replica ID: $ORDINAL"
+          env:
+            - name: HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          volumeMounts:
+            - name: shared-env
+              mountPath: /shared
+
+      containers:
+        - name: tigerbeetle
+          image: ghcr.io/tigerbeetle/tigerbeetle:0.16.72
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              source /shared/tb-env
+              exec /entrypoint.sh
+          env:
+            - name: TB_REPLICA_COUNT
+              valueFrom:
+                configMapKeyRef:
+                  name: blazil-cluster
+                  key: TB_REPLICA_COUNT
+            - name: TB_ADDRESSES
+              valueFrom:
+                configMapKeyRef:
+                  name: blazil-cluster
+                  key: TB_ADDRESSES
+          ports:
+            - name: vsр
+              containerPort: 3000
+              protocol: TCP
+          volumeMounts:
+            - name: tb-data
+              mountPath: /data
+            - name: entrypoint
+              mountPath: /entrypoint.sh
+              subPath: entrypoint.sh
+            - name: shared-env
+              mountPath: /shared
+          resources:
+            requests:
+              cpu: "2"
+              memory: "4Gi"
+            limits:
+              cpu: "4"
+              memory: "8Gi"
+          securityContext:
+            # TigerBeetle requires seccomp unconfined for io_uring syscalls
+            seccompProfile:
+              type: Unconfined
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+          readinessProbe:
+            exec:
+              # Check TB is listening — 0BB8 = 3000 in hex
+              command: ["sh", "-c", "grep -q ':0BB8 ' /proc/net/tcp || grep -q ':0BB9 ' /proc/net/tcp || grep -q ':0BBA ' /proc/net/tcp"]
+            initialDelaySeconds: 15
+            periodSeconds: 5
+            failureThreshold: 30
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "grep -qE ':0BB[89A] ' /proc/net/tcp"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+
+      volumes:
+        - name: entrypoint
+          configMap:
+            name: tigerbeetle-entrypoint
+            defaultMode: 0755
+        - name: shared-env
+          emptyDir: {}
+
+      terminationGracePeriodSeconds: 60
+
+  volumeClaimTemplates:
+    - metadata:
+        name: tb-data
+        annotations:
+          # Annotate the PVC with the DO volume name for operator reference
+          blazil.io/tb-replica: "auto"
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: do-block-storage
+        resources:
+          requests:
+            storage: 50Gi

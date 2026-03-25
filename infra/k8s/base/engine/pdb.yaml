@@ -1,0 +1,13 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: blazil-engine-pdb
+  namespace: blazil
+  annotations:
+    # Never allow more than 1 engine to be unavailable simultaneously.
+    # With 3 engines (one per shard), losing 2 breaks cross-shard routing.
+spec:
+  selector:
+    matchLabels:
+      app: blazil-engine
+  maxUnavailable: 1

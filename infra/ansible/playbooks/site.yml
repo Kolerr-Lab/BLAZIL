@@ -1,0 +1,178 @@
+---
+# site.yml — Full Blazil cluster bring-up
+#
+# Usage (after terraform apply):
+#   ansible-galaxy install -r requirements.yml
+#   ansible-playbook -i inventory/production playbooks/site.yml \
+#     -e "tb_addresses=$(cd ../terraform/digitalocean && terraform output -raw tb_addresses)" \
+#     -e "blazil_nodes=$(cd ../terraform/digitalocean && terraform output -raw blazil_nodes)"
+#
+# To run only specific tags:
+#   ansible-playbook ... --tags "docker,kernel"       # setup only
+#   ansible-playbook ... --tags "start"               # start cluster only
+#   ansible-playbook ... --tags "tune"                # kernel tuning only
+
+- name: Base node setup
+  hosts: blazil_nodes
+  become: true
+  gather_facts: true
+  tags: [setup, docker, kernel]
+
+  tasks:
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+      tags: [setup]
+
+    - name: Install system packages
+      ansible.builtin.apt:
+        name:
+          - git
+          - curl
+          - wget
+          - htop
+          - iotop
+          - sysstat
+          - net-tools
+          - netcat-openbsd
+          - jq
+        state: present
+      tags: [setup]
+
+    - name: Install Docker
+      ansible.builtin.shell:
+        cmd: curl -fsSL https://get.docker.com | sh
+        creates: /usr/bin/docker
+      tags: [docker]
+
+    - name: Ensure Docker is started and enabled
+      ansible.builtin.systemd:
+        name: docker
+        state: started
+        enabled: true
+      tags: [docker]
+
+    - name: Clone / pull Blazil repo
+      ansible.builtin.git:
+        repo: "{{ blazil_repo }}"
+        dest: "{{ blazil_install_dir }}"
+        version: "{{ blazil_branch }}"
+        force: true
+      tags: [setup]
+
+    - name: Make scripts executable
+      ansible.builtin.file:
+        path: "{{ blazil_install_dir }}/scripts"
+        state: directory
+        mode: "0755"
+      tags: [setup]
+
+    - name: chmod +x all scripts
+      ansible.builtin.shell:
+        cmd: chmod +x {{ blazil_install_dir }}/scripts/*.sh
+      tags: [setup]
+
+- name: Kernel tuning for high TPS
+  hosts: blazil_nodes
+  become: true
+  tags: [tune, kernel]
+
+  tasks:
+    - name: Run do-tune.sh kernel tuning script
+      ansible.builtin.script:
+        cmd: "{{ blazil_install_dir }}/scripts/do-tune.sh"
+      register: tune_output
+      changed_when: true
+      tags: [tune]
+
+    - name: Show tuning output
+      ansible.builtin.debug:
+        var: tune_output.stdout_lines
+      tags: [tune]
+
+- name: Write node environment file
+  hosts: blazil_nodes
+  become: true
+  tags: [config]
+
+  tasks:
+    - name: Write .env.node
+      ansible.builtin.copy:
+        dest: "{{ blazil_install_dir }}/.env.node"
+        mode: "0640"
+        content: |
+          BLAZIL_NODE_ID={{ blazil_node_id }}
+          BLAZIL_SHARD_ID={{ blazil_shard_id }}
+          BLAZIL_AUTH_REQUIRED={{ blazil_auth_required }}
+          BLAZIL_TRANSPORT={{ blazil_transport }}
+          AERON_TERM_BUFFER_LENGTH={{ aeron_term_buffer_length }}
+          AERON_IPC_MTU_LENGTH={{ aeron_ipc_mtu_length }}
+      tags: [config]
+
+- name: Start Blazil cluster
+  hosts: blazil_nodes
+  become: true
+  serial: 1  # Start nodes sequentially so TigerBeetle VSR forms quorum correctly
+  tags: [start]
+
+  tasks:
+    - name: Start node via do-start.sh
+      ansible.builtin.shell:
+        cmd: |
+          cd {{ blazil_install_dir }}
+          BLAZIL_NODE_ID={{ blazil_node_id }} \
+          BLAZIL_SHARD_ID={{ blazil_shard_id }} \
+          TB_ADDRESSES={{ tb_addresses }} \
+          BLAZIL_NODES={{ blazil_nodes }} \
+          ./scripts/do-start.sh \
+            $(echo {{ tb_addresses }} | cut -d: -f1) \
+            $(echo {{ tb_addresses }} | cut -d, -f2 | cut -d: -f1) \
+            $(echo {{ tb_addresses }} | cut -d, -f3 | cut -d: -f1)
+      register: start_output
+      changed_when: true
+      tags: [start]
+
+    - name: Show start output
+      ansible.builtin.debug:
+        var: start_output.stdout_lines
+      tags: [start]
+
+    - name: Wait for engine to be ready
+      ansible.builtin.wait_for:
+        port: 7878
+        host: "{{ ansible_host }}"
+        timeout: 60
+      tags: [start]
+
+- name: Verify cluster health
+  hosts: blazil_nodes
+  tags: [verify]
+
+  tasks:
+    - name: Check engine port
+      ansible.builtin.wait_for:
+        port: 7878
+        host: "{{ ansible_host }}"
+        timeout: 10
+      tags: [verify]
+
+    - name: Check payments gRPC port
+      ansible.builtin.wait_for:
+        port: 50051
+        host: "{{ ansible_host }}"
+        timeout: 10
+      failed_when: false  # node-2/3 use different ports
+      tags: [verify]
+
+    - name: Show running containers
+      ansible.builtin.shell:
+        cmd: docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+      register: containers
+      changed_when: false
+      tags: [verify]
+
+    - name: Display containers
+      ansible.builtin.debug:
+        var: containers.stdout_lines
+      tags: [verify]

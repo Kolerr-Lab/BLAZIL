@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: blazil-crypto
+  namespace: blazil
+  labels:
+    app.kubernetes.io/name: blazil-crypto
+    app.kubernetes.io/component: crypto
+spec:
+  selector:
+    app: blazil-crypto
+  ports:
+    - name: grpc
+      port: 50054
+      targetPort: 50054
+    - name: metrics
+      port: 9094
+      targetPort: 9094
+  type: LoadBalancer

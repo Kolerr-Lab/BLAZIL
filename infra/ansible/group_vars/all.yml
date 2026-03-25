@@ -1,0 +1,33 @@
+---
+# Group variables for all Blazil nodes
+# These are overridden by TB_ADDRESSES / BLAZIL_NODES from Terraform output
+# at playbook run time:
+#   ansible-playbook site.yml \
+#     -e "tb_addresses=$(terraform output -raw tb_addresses)" \
+#     -e "blazil_nodes=$(terraform output -raw blazil_nodes)"
+
+blazil_install_dir: /opt/blazil
+blazil_repo: https://github.com/Kolerr-Lab/BLAZIL.git
+blazil_branch: main
+
+# TigerBeetle — real private IPs from Terraform (override at runtime)
+tb_addresses: "10.10.0.1:3000,10.10.0.2:3001,10.10.0.3:3002"
+
+# Engine mesh — override at runtime
+blazil_nodes: "node-1:10.10.0.1:7878,node-2:10.10.0.2:7878,node-3:10.10.0.3:7878"
+
+# Transport: io-uring on Linux 5.11+
+blazil_transport: "io-uring"
+
+# Auth — set to true in production after Keycloak/Vault configuration
+blazil_auth_required: "false"
+
+# Aeron (128MB term buffer — proven working on Ubuntu 22.04)
+aeron_term_buffer_length: "134217728"
+aeron_ipc_mtu_length: "65536"
+
+# Huge pages for Aeron shared memory (512 × 2MB = 1GB)
+nr_hugepages: 512
+
+# Docker Compose version
+docker_compose_version: "v2.24.5"

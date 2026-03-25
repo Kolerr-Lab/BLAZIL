@@ -1,0 +1,42 @@
+---
+# Headless service for stable pod DNS (blazil-engine-0.blazil-engine-headless.blazil.svc.cluster.local)
+apiVersion: v1
+kind: Service
+metadata:
+  name: blazil-engine-headless
+  namespace: blazil
+  labels:
+    app.kubernetes.io/name: blazil-engine
+    app.kubernetes.io/component: engine
+spec:
+  clusterIP: None
+  selector:
+    app: blazil-engine
+  ports:
+    - name: engine
+      port: 7878
+---
+# ClusterIP service for Go services → engine connections
+apiVersion: v1
+kind: Service
+metadata:
+  name: blazil-engine
+  namespace: blazil
+  labels:
+    app.kubernetes.io/name: blazil-engine
+    app.kubernetes.io/component: engine
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9090"
+    prometheus.io/path: "/metrics"
+spec:
+  selector:
+    app: blazil-engine
+  ports:
+    - name: engine
+      port: 7878
+      targetPort: 7878
+    - name: metrics
+      port: 9090
+      targetPort: 9090
+  type: ClusterIP

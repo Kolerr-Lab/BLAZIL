@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: blazil-payments
+  namespace: blazil
+  labels:
+    app.kubernetes.io/name: blazil-payments
+    app.kubernetes.io/component: payments
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: blazil-payments
+  template:
+    metadata:
+      labels:
+        app: blazil-payments
+        app.kubernetes.io/name: blazil-payments
+        app.kubernetes.io/component: payments
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9091"
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: blazil-payments
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: payments
+          image: ghcr.io/kolerr-lab/blazil-payments:latest
+          env:
+            - name: BLAZIL_ENGINE_ADDR
+              value: "blazil-engine:7878"
+            - name: BLAZIL_METRICS_ADDR
+              value: "0.0.0.0:9091"
+            - name: BLAZIL_SHARDING_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: blazil-cluster
+                  key: BLAZIL_SHARDING_ENABLED
+            - name: BLAZIL_NODES
+              valueFrom:
+                configMapKeyRef:
+                  name: blazil-cluster
+                  key: BLAZIL_NODES
+            - name: BLAZIL_AUTH_REQUIRED
+              valueFrom:
+                configMapKeyRef:
+                  name: blazil-cluster
+                  key: BLAZIL_AUTH_REQUIRED
+          ports:
+            - name: grpc
+              containerPort: 50051
+              protocol: TCP
+            - name: metrics
+              containerPort: 9091
+              protocol: TCP
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "256Mi"
+            limits:
+              cpu: "2"
+              memory: "1Gi"
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            seccompProfile:
+              type: RuntimeDefault
+          readinessProbe:
+            grpc:
+              port: 50051
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            grpc:
+              port: 50051
+            initialDelaySeconds: 15
+            periodSeconds: 10
