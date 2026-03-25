@@ -9,9 +9,9 @@
 
 use std::mem::size_of;
 
-use blazil_bench::scenarios::{sharded_pipeline_scenario, tcp_scenario, udp_scenario};
 #[cfg(feature = "aeron")]
 use blazil_bench::scenarios::aeron_scenario;
+use blazil_bench::scenarios::{sharded_pipeline_scenario, tcp_scenario, udp_scenario};
 use blazil_common::amount::Amount;
 use blazil_common::ids::{AccountId, LedgerId, TransactionId};
 use blazil_common::timestamp::Timestamp;
@@ -75,10 +75,7 @@ async fn main() {
     let aeron_result = {
         println!("[4/4] Aeron IPC E2E (100K events)...");
         let r = aeron_scenario::run(100_000).await;
-        println!(
-            "      → {} TPS",
-            blazil_bench::report::fmt_commas(r.tps)
-        );
+        println!("      → {} TPS", blazil_bench::report::fmt_commas(r.tps));
         Some(r)
     };
     #[cfg(not(feature = "aeron"))]
