@@ -16,7 +16,7 @@ set -e
 
 # Aeron IPC tuning: 64 MB term buffer and 64 KB MTU for maximum throughput.
 # These env vars are read by the embedded Aeron driver at startup.
-export AERON_TERM_BUFFER_LENGTH=67108864   # 64 MB
+export AERON_TERM_BUFFER_LENGTH=268435456  # 256 MB (power-of-two, reduces term buffer recycling at peak TPS)
 export AERON_IPC_MTU_LENGTH=65536          # 64 KB
 
 echo "=== Shard scaling benchmark ==="

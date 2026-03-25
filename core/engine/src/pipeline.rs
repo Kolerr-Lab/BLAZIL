@@ -88,6 +88,9 @@ pub struct PipelineBuilder {
     num_workers: usize,
     handlers: Vec<Box<dyn EventHandler>>,
     results: Arc<DashMap<i64, TransactionResult>>,
+    /// Override shard_id used for core-affinity pinning when this pipeline is
+    /// one shard of many in a `ShardedPipeline`.
+    global_shard_id: Option<usize>,
 }
 
 impl PipelineBuilder {
@@ -98,7 +101,19 @@ impl PipelineBuilder {
             num_workers: 1,
             handlers: Vec::new(),
             results: Arc::new(DashMap::new()),
+            global_shard_id: None,
         }
+    }
+
+    /// Sets the global shard index used for OS-level core-affinity pinning.
+    ///
+    /// When building one pipeline per shard inside a `ShardedPipeline`, pass
+    /// the logical shard index (0..shard_count) so each worker thread is
+    /// pinned to a distinct physical core on Linux and to the correct QoS
+    /// class slot on macOS.
+    pub fn with_global_shard_id(mut self, shard_id: usize) -> Self {
+        self.global_shard_id = Some(shard_id);
+        self
     }
 
     /// Sets the ring buffer capacity (must be a power of two).
@@ -192,17 +207,22 @@ impl PipelineBuilder {
         // Create multiple runners for parallel processing
         let mut runners = Vec::with_capacity(self.num_workers);
 
-        for (shard_id, gate) in worker_gates.iter().enumerate().take(self.num_workers) {
+        for (worker_idx, gate) in worker_gates.iter().enumerate().take(self.num_workers) {
             // Clone handlers for this worker (Arc internals are shared)
             let handlers = self.handlers.iter().map(|h| h.clone_handler()).collect();
+
+            // Use the globally-assigned shard id when provided (multi-shard setup).
+            // Fall back to the per-builder worker index for single-pipeline use.
+            let shard_id = self.global_shard_id.unwrap_or(worker_idx);
 
             runners.push(PipelineRunner {
                 ring_buffer: Arc::clone(&ring_buffer),
                 handlers,
                 shutdown: Arc::clone(&shutdown),
                 results: Arc::clone(&results),
-                shard_id,
+                shard_id: worker_idx,
                 num_shards: self.num_workers,
+                affinity_shard_id: shard_id,
                 gating_sequence: Arc::clone(gate),
             });
         }
@@ -317,10 +337,14 @@ pub struct PipelineRunner {
     shutdown: Arc<AtomicBool>,
     #[allow(dead_code)]
     results: Arc<DashMap<i64, TransactionResult>>,
-    /// Shard ID for this worker (0..num_shards)
+    /// Shard ID for this worker (0..num_shards) — used for ring-buffer position tracking.
     shard_id: usize,
     /// Total number of worker shards
     num_shards: usize,
+    /// Global shard index used exclusively for OS-level core-affinity pinning.
+    /// Equals `shard_id` for single-pipeline builds; set to the outer shard index
+    /// when this runner is one of many in a `ShardedPipeline`.
+    affinity_shard_id: usize,
     /// This worker's dedicated gating sequence
     gating_sequence: Arc<Sequence>,
 }
@@ -337,9 +361,10 @@ impl PipelineRunner {
     pub fn run(mut self) -> std::thread::JoinHandle<()> {
         let shard_id = self.shard_id;
         let num_shards = self.num_shards;
+        let affinity_shard_id = self.affinity_shard_id;
 
         std::thread::Builder::new()
-            .name(format!("blazil-shard-{}", shard_id))
+            .name(format!("blazil-shard-{}", affinity_shard_id))
             .spawn(move || {
                 // ── OS-aware thread priority & core affinity ─────────────────────
                 // macOS: promote to User-Interactive QoS → scheduler prefers
@@ -358,10 +383,12 @@ impl PipelineRunner {
 
                 // Linux (DO): hard-pin each shard to a dedicated core.
                 // Core 0 is reserved for network IRQs; shards start at core 1.
+                // Uses affinity_shard_id (the global shard index) so all shards
+                // in a ShardedPipeline land on distinct physical cores.
                 #[cfg(target_os = "linux")]
                 {
                     if let Some(core_ids) = core_affinity::get_core_ids() {
-                        if let Some(id) = core_ids.get((shard_id % core_ids.len()) + 1) {
+                        if let Some(id) = core_ids.get((affinity_shard_id % core_ids.len()) + 1) {
                             core_affinity::set_for_current(*id);
                         }
                     }

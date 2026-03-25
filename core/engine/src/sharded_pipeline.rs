@@ -172,12 +172,13 @@ impl ShardedPipeline {
 
         // Create independent pipeline for each shard.
         // Each shard gets its own OS thread + ring buffer = zero cross-shard contention.
-        for _shard_id in 0..shard_count {
+        for shard_id in 0..shard_count {
             // Each shard gets its OWN results map (no key collision across shards)
             let shard_results = Arc::new(DashMap::new());
 
             let builder = PipelineBuilder::new()
                 .with_capacity(capacity_per_shard)
+                .with_global_shard_id(shard_id)
                 .with_results(Arc::clone(&shard_results));
 
             // Build full handler chain for this shard
@@ -283,6 +284,7 @@ impl ShardedPipeline {
 
             let builder = PipelineBuilder::new()
                 .with_capacity(self.capacity_per_shard)
+                .with_global_shard_id(_shard_id)
                 .with_results(Arc::clone(&shard_results));
 
             use crate::handlers::ledger::LedgerHandler;
@@ -343,7 +345,20 @@ impl ShardedPipeline {
         // Route by debit account to ensure deterministic ordering.
         // route_to_shard uses a fast bitmask — valid when shard_count is power of 2.
         let shard_id = route_to_shard(event.debit_account_id.as_u64(), self.shard_count());
-        self.shards[shard_id].publish_event(event)
+        let shard = &self.shards[shard_id];
+
+        // Calibrated spin-wait on backpressure: 64 iterations aligned with the
+        // M4 pipeline depth, then yield to avoid monopolising the scheduler.
+        // Keeps the producer on-CPU during brief ring-buffer full stalls, which
+        // eliminates the overhead of an OS-level context switch at peak TPS.
+        while !shard.ring_buffer().has_available_capacity() {
+            for _ in 0..64 {
+                std::hint::spin_loop();
+            }
+            std::thread::yield_now();
+        }
+
+        shard.publish_event(event)
     }
 
     /// Get aggregated results from all shards.
