@@ -131,17 +131,13 @@ impl TransportServer for IoUringTransportServer {
         let shutdown = Arc::clone(&self.shutdown);
 
         tokio::task::spawn_blocking(move || {
-            // SQPOLL: kernel thread continuously polls the SQ — zero syscalls
-            // on the hot path once the sq_thread is warm.
-            tokio_uring::builder()
-                .setup_sqpoll(2_000)
-                .start(uring_accept_loop(
-                    addr,
-                    pipeline,
-                    ring_buffer,
-                    rate_limiter,
-                    shutdown,
-                ))
+            tokio_uring::start(uring_accept_loop(
+                addr,
+                pipeline,
+                ring_buffer,
+                rate_limiter,
+                shutdown,
+            ))
         })
         .await
         .map_err(|e| BlazerError::Transport(format!("io_uring task panicked: {e}")))?
@@ -610,21 +606,17 @@ impl IoUringUdpTransport {
         let bound_addr = Arc::clone(&self.bound_addr);
 
         tokio::task::spawn_blocking(move || {
-            // SQPOLL: eliminates enter() syscall on every submission — kernel
-            // thread polls the SQ ring directly.
-            tokio_uring::builder()
-                .setup_sqpoll(2_000)
-                .start(uring_udp_recv_loop(
-                    addr,
-                    pipeline,
-                    shutdown,
-                    packets_received,
-                    packets_sent,
-                    bound_addr,
-                ))
+            tokio_uring::start(uring_udp_recv_loop(
+                addr,
+                pipeline,
+                shutdown,
+                packets_received,
+                packets_sent,
+                bound_addr,
+            ))
         })
         .await
-        .map_err(|e| BlazerError::Transport(format!("io_uring UDP task panicked: {e}")))?
+        .map_err(|e| BlazerError::Transport(format!("io_uring UDP task panicked: {e}"))?
     }
 }
 
