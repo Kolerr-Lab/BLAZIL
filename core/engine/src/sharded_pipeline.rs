@@ -347,15 +347,25 @@ impl ShardedPipeline {
         let shard_id = route_to_shard(event.debit_account_id.as_u64(), self.shard_count());
         let shard = &self.shards[shard_id];
 
-        // Calibrated spin-wait on backpressure: 64 iterations aligned with the
-        // M4 pipeline depth, then yield to avoid monopolising the scheduler.
-        // Keeps the producer on-CPU during brief ring-buffer full stalls, which
-        // eliminates the overhead of an OS-level context switch at peak TPS.
+        // Calibrated spin-wait on backpressure: up to 128 rounds of 64 spin
+        // hints each (8 192 hints total, ~1–4 µs on M4/EPYC) before giving up.
+        // Keeps the producer on-CPU during brief ring-buffer full stalls —
+        // eliminates the context-switch overhead that caps Aeron IPC at ~939K TPS.
+        // Bounded so it can never deadlock (Criterion tight loops, tests, etc.).
+        let mut rounds = 0usize;
         while !shard.ring_buffer().has_available_capacity() {
+            if rounds >= 128 {
+                // Ring buffer still full after ~1–4 µs — return backpressure
+                // signal to the caller rather than spinning indefinitely.
+                return Err(blazil_common::error::BlazerError::RingBufferFull {
+                    retry_after_ms: 1,
+                });
+            }
             for _ in 0..64 {
                 std::hint::spin_loop();
             }
             std::thread::yield_now();
+            rounds += 1;
         }
 
         shard.publish_event(event)
