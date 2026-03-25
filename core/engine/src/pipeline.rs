@@ -47,6 +47,9 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+#[cfg(target_os = "macos")]
+use libc;
+
 use blazil_common::error::{BlazerError, BlazerResult};
 use dashmap::DashMap;
 use tracing::instrument;
@@ -338,6 +341,32 @@ impl PipelineRunner {
         std::thread::Builder::new()
             .name(format!("blazil-shard-{}", shard_id))
             .spawn(move || {
+                // ── OS-aware thread priority & core affinity ─────────────────────
+                // macOS: promote to User-Interactive QoS → scheduler prefers
+                // P-cores and grants highest scheduling priority.
+                #[cfg(target_os = "macos")]
+                unsafe {
+                    // QOS_CLASS_USER_INTERACTIVE = 0x21 (not re-exported by libc).
+                    extern "C" {
+                        fn pthread_set_qos_class_self_np(
+                            qos_class: libc::c_uint,
+                            relative_priority: libc::c_int,
+                        ) -> libc::c_int;
+                    }
+                    pthread_set_qos_class_self_np(0x21, 0);
+                }
+
+                // Linux (DO): hard-pin each shard to a dedicated core.
+                // Core 0 is reserved for network IRQs; shards start at core 1.
+                #[cfg(target_os = "linux")]
+                {
+                    if let Some(core_ids) = core_affinity::get_core_ids() {
+                        if let Some(id) = core_ids.get((shard_id % core_ids.len()) + 1) {
+                            core_affinity::set_for_current(*id);
+                        }
+                    }
+                }
+
                 for handler in &mut self.handlers {
                     handler.on_start();
                 }

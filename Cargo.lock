@@ -232,6 +232,7 @@ dependencies = [
  "blazil-ledger",
  "core_affinity",
  "dashmap",
+ "libc",
  "rust_decimal",
  "serde",
  "thiserror",

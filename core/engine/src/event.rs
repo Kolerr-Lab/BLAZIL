@@ -8,15 +8,19 @@
 //!
 //! # Size budget
 //!
-//! Target: **1 CPU cache line (64 bytes)**.
-//! Layout after optimisation:
+//! Target: **128-byte aligned slot** (`#[repr(C, align(128))]`).
+//! Payload layout:
 //!   6 × u64 (sequence, tx_id, debit, credit, amount_units, timestamp) = 48 B
 //!   1 × u32 (ledger_id)                                                =  4 B
 //!   1 × u16 (code)                                                     =  2 B
 //!   1 × u8  (flags bitfield)                                           =  1 B
 //!   padding                                                            =  1 B
 //!   ─────────────────────────────────────────────────────────────────────────
-//!   Total                                                              = 56 B  (< 64 B ✓)
+//!   Payload                                                            = 56 B
+//!   Alignment padding                                                  = 72 B
+//!   Slot size                                                          = 128 B
+//! 128-byte alignment prevents false sharing across L1/L2 cache lines when
+//! adjacent shard threads process sequential ring buffer slots simultaneously.
 
 use blazil_common::error::BlazerError;
 use blazil_common::ids::{AccountId, LedgerId, TransactionId, TransferId};
@@ -151,8 +155,10 @@ pub enum TransactionResult {
 ///
 /// # Size target
 ///
-/// Fit within 1 CPU cache line (64 bytes) to minimise cache misses as the
-/// event travels through handlers. Current size: **56 bytes**.
+/// 128-byte aligned (`#[repr(C, align(128))]`) to eliminate false sharing when
+/// adjacent shard threads access sequential ring buffer slots on the same L2/L3
+/// cache line. Payload is **56 bytes**; the remaining 72 bytes are padding that
+/// the compiler inserts to honour the alignment.
 ///
 /// # Examples
 ///
@@ -171,6 +177,9 @@ pub enum TransactionResult {
 /// // sequence starts at -1 (unassigned)
 /// assert_eq!(event.sequence, -1);
 /// ```
+// 128-byte alignment prevents false sharing when adjacent shards race on the
+// same L2/L3 cache line on M4 P-cores and EPYC NUMA clusters.
+#[repr(C, align(128))]
 #[derive(Debug, Clone)]
 pub struct TransactionEvent {
     /// Monotonic sequence number assigned by the ring buffer.
@@ -296,12 +305,19 @@ mod tests {
     }
 
     #[test]
-    fn event_size_fits_one_cache_line() {
-        use std::mem::size_of;
+    fn event_size_fits_two_cache_lines() {
+        use std::mem::{align_of, size_of};
+        // align(128) pads the struct to exactly 128 bytes to prevent false sharing
+        // across L1/L2 cache lines on M4 P-cores and EPYC NUMA clusters.
         assert!(
-            size_of::<TransactionEvent>() <= 64,
-            "TransactionEvent must fit in one cache line (64 bytes), got {}",
+            size_of::<TransactionEvent>() <= 128,
+            "TransactionEvent must fit within 128-byte alignment slot, got {}",
             size_of::<TransactionEvent>()
+        );
+        assert_eq!(
+            align_of::<TransactionEvent>(),
+            128,
+            "TransactionEvent must be 128-byte aligned"
         );
     }
 }
