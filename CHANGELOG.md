@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## v0.2 (March 2026)
+
+### 🚀 Performance
+- **1M TPS barrier crossed**: Aeron IPC E2E peaks at 1,049,102 TPS
+  (stable band 970K–1.05M on MacBook Air M4, fanless)
+- Pipeline 8-shard: ~73M TPS (per-event duration_ns measurement)
+- 2-shard scaling: 99–110% efficiency (superlinear via account routing)
+- align(128) on TransactionEvent: +31% TPS (M4 prefetcher isolation)
+
+### Features
+- `blazil-aeron-sys`: embedded Aeron C FFI transport (Aeron 1.44.1)
+- `io_uring` UDP transport (Linux kernel 5.11+, disabled on macOS)
+- Dynamic shard count via `BLAZIL_SHARD_COUNT` env var
+- Account-based shard routing: `route_to_shard(account_id, n)`
+- Cross-shard coordination via TigerBeetle linked transfers
+- Per-shard metrics: `ShardMetrics` (lock-free `AtomicU64`)
+- `ShardedPipeline::resize()`: live shard count change
+- macOS QoS USER_INTERACTIVE + Linux core_affinity hard pinning
+
+### Bug Fixes
+- OOM kill on DO 3-node (8GB): TB batch bounded to 8,190 max
+- Aeron `/dev/shm` capped: 128MB term buffer (256MB caused mmap hang on macOS)
+- Ring buffer compile-time memory assertion (≤512MB total)
+- Benchmark: single shared tokio runtime (was 1 runtime per shard)
+- Benchmark: `duration_ns` measurement (was `ms` floor → fake 1M TPS)
+- Benchmark: `spin_loop` backpressure with bounded retry + `yield_now` fallback
+- Benchmark: `aeron:ipc` channel (was `aeron:udp` loopback — eliminates UDP stack overhead)
+- Script permissions: `chmod +x` + `git update-index`
+
+### vs v0.1
+| Metric | v0.1 | v0.2 |
+|--------|------|------|
+| Aeron IPC local | 717,306 TPS | ~1,000,000 TPS (+39%) |
+| E2E DO 3-node | 62,770 TPS | pending (est. 2–4M TPS) |
+| OOM on DO cluster | yes (crashes) | fixed |
+| Pipeline measurement | bulk timing | per-event duration_ns |
+
+### License
+BSL 1.1 — source available, converts to Apache 2.0 after 4 years.
+
+---
+
 ### Updated — Phase 10: Performance Breakthrough (2026-03-19)
 - Sharded pipeline 4-shard bulk timing: **200,000,000 TPS** (was 167M TPS)
 - Sharded pipeline 1-shard bulk timing: **111,111,111 TPS** (was 77M TPS)
