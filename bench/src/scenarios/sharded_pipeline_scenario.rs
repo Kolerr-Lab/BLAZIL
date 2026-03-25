@@ -14,8 +14,8 @@ use blazil_engine::sharded_pipeline::ShardedPipeline;
 use crate::metrics::BenchmarkResult;
 use crate::report::fmt_commas;
 
-const WARMUP_EVENTS: u64 = 1_000;
-const MEASURE_EVENTS: u64 = 100_000;
+const WARMUP_EVENTS: u64 = 10_000;
+const BENCH_EVENTS: u64 = 1_000_000;
 const CAPACITY_PER_SHARD: usize = 1_048_576;
 const MAX_AMOUNT_UNITS: u64 = 1_000_000;
 
@@ -34,7 +34,7 @@ fn scaling_sweep_blocking() {
     let mut results: Vec<(usize, BenchmarkResult)> = Vec::new();
 
     for &sc in shard_counts {
-        let r = run_once_blocking(MEASURE_EVENTS, sc);
+        let r = run_once_blocking(BENCH_EVENTS, sc);
         results.push((sc, r));
     }
 
@@ -145,14 +145,19 @@ pub fn run_once_blocking(events: u64, shard_count: usize) -> BenchmarkResult {
             // Wait for all producers to be ready (all events pre-generated)
             barrier.wait();
 
-            // Timed section: pure publishing, no allocation, 100% cache hits
+            // Timed section: record per-event publish latency.
+            // `publish_with_backpressure` is sync, so Instant::now() before/after
+            // each call accurately captures ring-buffer round-trip cost.
+            let mut latencies = Vec::with_capacity(events_per_thread as usize);
             let start = Instant::now();
             for event in thread_events {
+                let t0 = Instant::now();
                 publish_with_backpressure(&sharded, event);
+                latencies.push(t0.elapsed().as_nanos() as u64);
             }
             let duration = start.elapsed();
 
-            (events_per_thread, duration)
+            (events_per_thread, duration, latencies)
         });
         handles.push(handle);
     }
@@ -164,22 +169,23 @@ pub fn run_once_blocking(events: u64, shard_count: usize) -> BenchmarkResult {
     // Wait for all producers to finish and collect results
     let mut total_events = 0;
     let mut max_duration = std::time::Duration::ZERO;
+    let mut all_latencies: Vec<u64> = Vec::new();
     for handle in handles {
-        let (thread_events, thread_duration) = handle.join().expect("producer thread panicked");
+        let (thread_events, thread_duration, mut lats) =
+            handle.join().expect("producer thread panicked");
         total_events += thread_events;
         max_duration = max_duration.max(thread_duration);
+        all_latencies.append(&mut lats);
     }
 
     let _overall_duration = overall_start.elapsed();
 
-    // Wait for all shards to finish processing (after timing stops)
+    // Wait for all shards to finish processing (after timing stops).
     std::thread::sleep(std::time::Duration::from_millis(200));
 
-    // All producer threads finished, unwrap Arc to call stop()
-    let sharded = Arc::try_unwrap(sharded).unwrap_or_else(|_| {
-        panic!("Failed to unwrap Arc<ShardedPipeline> - references still exist")
-    });
-    sharded.stop();
+    // Drop the Arc — refcount is 1 (all producer threads have joined),
+    // so Drop fires immediately and calls ShardedPipeline::stop_internal().
+    drop(sharded);
 
     // Use max thread duration as the effective duration (bottleneck)
     BenchmarkResult::new(
@@ -189,18 +195,28 @@ pub fn run_once_blocking(events: u64, shard_count: usize) -> BenchmarkResult {
         ),
         total_events,
         max_duration,
-        &mut [], // No per-event latency tracking in multi-threaded mode
+        &mut all_latencies,
     )
 }
 
-/// Publish with spin-retry on backpressure (matches pipeline benchmark).
+/// Publish with spin-retry on backpressure.
+///
+/// Spins up to 1 000 times (fast path), then yields to the OS scheduler to
+/// avoid pegging a core when the ring is genuinely full.
 fn publish_with_backpressure(sharded: &ShardedPipeline, event: TransactionEvent) -> i64 {
     let mut event = event;
+    let mut spins = 0usize;
     loop {
         match sharded.publish_event(event) {
             Ok(seq) => return seq,
             Err(_) => {
-                std::hint::spin_loop(); // Fast spin, no sleep!
+                spins += 1;
+                if spins < 1_000 {
+                    std::hint::spin_loop();
+                } else {
+                    std::thread::yield_now();
+                    spins = 0;
+                }
                 event = TransactionEvent::new(
                     TransactionId::new(),
                     AccountId::new(),

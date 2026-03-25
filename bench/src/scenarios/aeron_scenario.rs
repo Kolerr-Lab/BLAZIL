@@ -32,11 +32,10 @@ pub mod inner {
     use blazil_ledger::client::LedgerClient;
     use blazil_ledger::mock::InMemoryLedgerClient;
     use blazil_transport::aeron::{
-        AeronContext, AeronPublication, AeronSubscription, EmbeddedAeronDriver, REQ_STREAM_ID,
-        RSP_STREAM_ID,
+        AeronContext, AeronPublication, AeronSubscription, REQ_STREAM_ID, RSP_STREAM_ID,
     };
     use blazil_transport::aeron_transport::AeronTransportServer;
-    use blazil_transport::protocol::{deserialize_response, serialize_request, TransactionRequest};
+    use blazil_transport::protocol::{serialize_request, TransactionRequest};
     use blazil_transport::server::TransportServer;
 
     use crate::metrics::BenchmarkResult;

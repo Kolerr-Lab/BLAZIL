@@ -24,6 +24,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 use blazil_common::error::BlazerResult;
 
@@ -131,7 +132,10 @@ pub struct ShardedPipeline {
     capacity_per_shard: usize,
     /// Max amount units — kept for resize().
     max_amount_units: u64,
-    _handles: Vec<JoinHandle<()>>, // Keep thread handles alive
+    handles: Vec<JoinHandle<()>>,
+    /// Single shared tokio runtime for all shard async operations (ledger I/O).
+    /// Stored as `Option` so `stop_internal` can take ownership for `shutdown_timeout`.
+    runtime: Option<Arc<tokio::runtime::Runtime>>,
 }
 
 impl ShardedPipeline {
@@ -154,8 +158,20 @@ impl ShardedPipeline {
         let mut shards = Vec::with_capacity(shard_count);
         let mut handles = Vec::new();
 
-        // Create independent pipeline for each shard
-        // Each shard: dedicated thread + dedicated tokio runtime = zero contention
+        // Single shared tokio runtime for all shard async operations (ledger calls).
+        // Two workers give enough I/O parallelism across all shards without the
+        // overhead of N separate runtimes (one per shard).
+        let runtime = Arc::new(
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .thread_name("blazil-ledger")
+                .enable_all()
+                .build()
+                .expect("failed to create shared ledger runtime"),
+        );
+
+        // Create independent pipeline for each shard.
+        // Each shard gets its own OS thread + ring buffer = zero cross-shard contention.
         for _shard_id in 0..shard_count {
             // Each shard gets its OWN results map (no key collision across shards)
             let shard_results = Arc::new(DashMap::new());
@@ -171,22 +187,12 @@ impl ShardedPipeline {
             use crate::handlers::validation::ValidationHandler;
             use blazil_ledger::mock::InMemoryLedgerClient;
 
-            // Each shard gets its own dedicated tokio runtime (NO SHARING)
-            // This eliminates scheduler contention between shards (LMAX pattern)
-            let shard_runtime = Arc::new(
-                tokio::runtime::Builder::new_multi_thread()
-                    .worker_threads(1) // Single worker per shard
-                    .enable_all()
-                    .build()
-                    .expect("failed to create shard runtime"),
-            );
-
             let validation = ValidationHandler::new(Arc::clone(&shard_results));
             let risk = RiskHandler::new(max_amount_units, Arc::clone(&shard_results));
             let ledger_client = Arc::new(InMemoryLedgerClient::new_unbounded());
             let ledger = LedgerHandler::new(
                 ledger_client,
-                shard_runtime, // Dedicated runtime per shard
+                Arc::clone(&runtime), // shared runtime — one for all shards
                 Arc::clone(&shard_results),
             );
             let publish = PublishHandler::new(Arc::clone(&shard_results));
@@ -221,7 +227,8 @@ impl ShardedPipeline {
             shard_count: AtomicUsize::new(shard_count),
             capacity_per_shard,
             max_amount_units,
-            _handles: handles,
+            handles,
+            runtime: Some(runtime),
         })
     }
 
@@ -261,7 +268,7 @@ impl ShardedPipeline {
             shard.stop();
         }
         // Wait for consumer threads to finish.
-        let old_handles = std::mem::take(&mut self._handles);
+        let old_handles = std::mem::take(&mut self.handles);
         for h in old_handles {
             let _ = h.join();
         }
@@ -284,19 +291,15 @@ impl ShardedPipeline {
             use crate::handlers::validation::ValidationHandler;
             use blazil_ledger::mock::InMemoryLedgerClient;
 
-            let shard_runtime = Arc::new(
-                tokio::runtime::Builder::new_multi_thread()
-                    .worker_threads(1)
-                    .enable_all()
-                    .build()
-                    .expect("failed to create shard runtime"),
-            );
-
             let validation = ValidationHandler::new(Arc::clone(&shard_results));
             let risk = RiskHandler::new(self.max_amount_units, Arc::clone(&shard_results));
             let ledger_client = Arc::new(InMemoryLedgerClient::new_unbounded());
-            let ledger =
-                LedgerHandler::new(ledger_client, shard_runtime, Arc::clone(&shard_results));
+            let shared_rt = Arc::clone(
+                self.runtime
+                    .as_ref()
+                    .expect("resize: runtime was taken — pipeline already stopped"),
+            );
+            let ledger = LedgerHandler::new(ledger_client, shared_rt, Arc::clone(&shard_results));
             let publish = PublishHandler::new(Arc::clone(&shard_results));
 
             let (pipeline, runners) = builder
@@ -314,7 +317,7 @@ impl ShardedPipeline {
         }
 
         self.shards = new_shards;
-        self._handles = new_handles;
+        self.handles = new_handles;
         // ── Step 3: publish new count atomically ───────────────────────────
         self.shard_count
             .store(new_shard_count, AtomicOrdering::Release);
@@ -365,13 +368,56 @@ impl ShardedPipeline {
         combined
     }
 
-    /// Signal all shards to stop processing and wait for graceful shutdown.
+    /// Non-blocking stop signal — sets the shutdown flag on every shard worker.
     ///
-    /// This will process all pending events before returning.
-    pub fn stop(self) {
-        for shard in self.shards {
+    /// Does **not** join threads or shut down the runtime. Useful when you need
+    /// to signal shutdown without blocking (e.g. staged teardown, tests).
+    pub fn stop_signal(&self) {
+        for shard in &self.shards {
             shard.stop();
         }
+    }
+
+    /// Drain all shard workers and tear down the shared tokio runtime.
+    ///
+    /// Sets the shutdown flag on every shard, joins every OS thread (draining
+    /// in-flight events), then shuts down the runtime.  Uses a scoped std thread
+    /// for the final `shutdown_timeout` call so that it is always executed outside
+    /// any tokio async context — this avoids the "cannot drop a runtime in an async
+    /// context" panic that fires when `Drop` is called inside `#[tokio::test]`.
+    ///
+    /// Idempotent: safe to call if already stopped (second call is a no-op).
+    fn stop_internal(&mut self) {
+        // 1. Signal every shard worker to exit after its current batch.
+        for shard in &self.shards {
+            shard.stop();
+        }
+        // 2. Join all worker OS-threads (drains in-flight events).
+        //    After joining, every LedgerHandler (which clones Arc<Runtime>) has
+        //    been dropped, so the Arc refcount is about to fall to 1.
+        for h in std::mem::take(&mut self.handles) {
+            let _ = h.join();
+        }
+        // 3. Shut down the shared tokio runtime from a plain std thread.
+        //    `Runtime::shutdown_timeout` panics when called from an async context
+        //    (e.g. inside a `#[tokio::test]`).  Pinning the call to a scoped
+        //    std::thread guarantees it runs outside any tokio executor context.
+        if let Some(rt) = self.runtime.take() {
+            if let Ok(owned) = Arc::try_unwrap(rt) {
+                std::thread::scope(|s| {
+                    s.spawn(move || owned.shutdown_timeout(Duration::from_secs(5)));
+                });
+            }
+        }
+    }
+
+    /// Signal all shards to stop and wait for graceful shutdown.
+    ///
+    /// After this call the pipeline is unusable. Prefer letting the value drop
+    /// (which calls the same logic automatically via [`Drop`]); use this only
+    /// when you need explicit, synchronous teardown.
+    pub fn stop(mut self) {
+        self.stop_internal();
     }
 
     /// Get the number of shards in this pipeline.
@@ -395,6 +441,16 @@ impl ShardedPipeline {
     /// Panics if shard_id >= shard_count.
     pub fn shard_results(&self, shard_id: usize) -> Arc<DashMap<i64, TransactionResult>> {
         Arc::clone(self.shards[shard_id].results())
+    }
+}
+
+impl Drop for ShardedPipeline {
+    /// Gracefully drain all shard workers and shut down the shared runtime on drop.
+    ///
+    /// This is a no-op if [`stop`][ShardedPipeline::stop] was already called
+    /// (handles and runtime are already cleared).
+    fn drop(&mut self) {
+        self.stop_internal();
     }
 }
 

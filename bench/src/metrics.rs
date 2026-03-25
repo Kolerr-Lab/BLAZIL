@@ -8,8 +8,9 @@ pub struct BenchmarkResult {
     pub scenario: String,
     pub total_events: u64,
     pub duration_ms: u64,
-    pub tps: u64,     // transactions per second
-    pub mean_ns: u64, // mean latency per tx
+    pub duration_ns: u64, // nanosecond-precision duration (use for Criterion)
+    pub tps: u64,         // transactions per second
+    pub mean_ns: u64,     // mean latency per tx
     pub min_ns: u64,
     pub max_ns: u64,
     pub p50_ns: u64,
@@ -27,8 +28,9 @@ impl BenchmarkResult {
         latencies.sort_unstable();
 
         let len = latencies.len();
+        let duration_ns = duration.as_nanos().max(1) as u64;
         let duration_ms = duration.as_millis().max(1) as u64;
-        let tps = events * 1_000 / duration_ms;
+        let tps = events * 1_000_000_000 / duration_ns;
 
         let mean_ns = if len > 0 {
             (latencies.iter().map(|&x| x as u128).sum::<u128>() / len as u128) as u64
@@ -47,6 +49,7 @@ impl BenchmarkResult {
             scenario: scenario.to_owned(),
             total_events: events,
             duration_ms,
+            duration_ns,
             tps,
             mean_ns,
             min_ns,

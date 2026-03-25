@@ -23,13 +23,16 @@ mod aeron_ipc_tests {
         AeronContext, AeronPublication, AeronSubscription, EmbeddedAeronDriver,
     };
 
-    const TEST_AERON_DIR: &str = "/tmp/aeron-blazil-test";
+    /// Each test gets its own Aeron directory so parallel test runs don't
+    /// conflict — the C driver deletes and recreates the dir on start.
+    const TEST_AERON_DIR_SINGLE: &str = "/tmp/aeron-blazil-test-single";
+    const TEST_AERON_DIR_1000: &str = "/tmp/aeron-blazil-test-1000";
     const TEST_CHANNEL: &str = "aeron:ipc";
     const REG_TIMEOUT: Duration = Duration::from_secs(5);
 
     /// Start a new embedded driver for each test, in a clean directory.
-    fn start_driver() -> EmbeddedAeronDriver {
-        let driver = EmbeddedAeronDriver::new(Some(TEST_AERON_DIR));
+    fn start_driver(dir: &str) -> EmbeddedAeronDriver {
+        let driver = EmbeddedAeronDriver::new(Some(dir));
         driver.start().expect("EmbeddedAeronDriver::start");
         driver
     }
@@ -40,9 +43,9 @@ mod aeron_ipc_tests {
     #[test]
     #[ignore = "requires aeron feature + C library (git submodule)"]
     fn test_ipc_single_message() {
-        let driver = start_driver();
+        let driver = start_driver(TEST_AERON_DIR_SINGLE);
 
-        let ctx = AeronContext::new(TEST_AERON_DIR).expect("AeronContext::new");
+        let ctx = AeronContext::new(TEST_AERON_DIR_SINGLE).expect("AeronContext::new");
 
         let pub_ = AeronPublication::new(&ctx, TEST_CHANNEL, 1001, REG_TIMEOUT)
             .expect("AeronPublication::new");
@@ -88,8 +91,8 @@ mod aeron_ipc_tests {
     #[test]
     #[ignore = "requires aeron feature + C library (git submodule)"]
     fn test_ipc_1000_messages() {
-        let driver = start_driver();
-        let ctx = AeronContext::new(TEST_AERON_DIR).expect("AeronContext::new");
+        let driver = start_driver(TEST_AERON_DIR_1000);
+        let ctx = AeronContext::new(TEST_AERON_DIR_1000).expect("AeronContext::new");
 
         let pub_ =
             AeronPublication::new(&ctx, TEST_CHANNEL, 2001, REG_TIMEOUT).expect("AeronPublication");
@@ -244,13 +247,24 @@ mod aeron_ipc_tests {
             let client_sub = AeronSubscription::new(&ctx, &channel_c, RSP_STREAM_ID, REG_TIMEOUT)
                 .expect("client sub");
 
-            let conn_deadline = std::time::Instant::now() + Duration::from_secs(3);
-            while !client_pub.is_connected() && std::time::Instant::now() < conn_deadline {
+            // Wait for BOTH directions to connect:
+            //   client_pub.is_connected() → server sub is ready to receive
+            //   client_sub.is_connected() → server pub is ready to send responses
+            // Without the second check, the server's offer() returns NOT_CONNECTED
+            // and responses are silently dropped.
+            let conn_deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while (!client_pub.is_connected() || !client_sub.is_connected())
+                && std::time::Instant::now() < conn_deadline
+            {
                 std::thread::sleep(Duration::from_millis(10));
             }
             assert!(
                 client_pub.is_connected(),
                 "client pub should see server sub"
+            );
+            assert!(
+                client_sub.is_connected(),
+                "client sub should see server pub — increase startup sleep if this fails"
             );
 
             // Send 10 requests.
@@ -261,7 +275,7 @@ mod aeron_ipc_tests {
                     credit_account_id: credit_id.to_string(),
                     amount: "1.00".to_owned(),
                     currency: "USD".to_owned(),
-                    ledger_id: 0,
+                    ledger_id: 1, // LedgerId::USD — must be non-zero
                     code: i + 1,
                 };
                 let bytes = serialize_request(&req).expect("serialize");
@@ -270,7 +284,7 @@ mod aeron_ipc_tests {
 
             // Collect 10 responses.
             let mut responses: Vec<Vec<u8>> = Vec::new();
-            let recv_deadline = std::time::Instant::now() + Duration::from_secs(5);
+            let recv_deadline = std::time::Instant::now() + Duration::from_secs(10);
             while responses.len() < 10 && std::time::Instant::now() < recv_deadline {
                 client_sub.poll_fragments(&mut responses, 10);
                 std::hint::spin_loop();

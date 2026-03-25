@@ -5,13 +5,20 @@
 //!
 //!   BLAZIL_SHARD_COUNT=4 cargo bench --bench sharded_pipeline_scenario
 
+use std::sync::Arc;
+use std::time::Instant;
+
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 
-use blazil_bench::scenarios::sharded_pipeline_scenario;
-use blazil_engine::sharded_pipeline::from_env;
+use blazil_common::ids::{AccountId, LedgerId, TransactionId};
+use blazil_engine::event::TransactionEvent;
+use blazil_engine::sharded_pipeline::{from_env, ShardedPipeline};
 
-/// Event count kept small so each Criterion iteration completes in < 2 s.
+/// Number of events published per Criterion iteration.
+/// Kept at 1 000 so each sample completes in microseconds.
 const BENCH_EVENTS: u64 = 1_000;
+const CAPACITY_PER_SHARD: usize = 1_048_576;
+const MAX_AMOUNT_UNITS: u64 = 1_000_000;
 
 fn sharded_pipeline_bench(c: &mut Criterion) {
     let shard_count = from_env();
@@ -26,11 +33,57 @@ fn sharded_pipeline_bench(c: &mut Criterion) {
         BenchmarkId::from_parameter(shard_count),
         &shard_count,
         |b, &sc| {
+            // ── One-time pipeline setup (not timed) ──────────────────────────
+            // Build once and warm up before the Criterion timing loop so the
+            // 100 ms warmup-settle sleep is paid only once, not per iteration.
+            let sharded = Arc::new(
+                ShardedPipeline::new(sc, CAPACITY_PER_SHARD, MAX_AMOUNT_UNITS)
+                    .expect("valid sharded pipeline"),
+            );
+            // Warmup: prime the ring buffers and shard worker threads.
+            for i in 0u64..200 {
+                let event = TransactionEvent::new(
+                    TransactionId::new(),
+                    AccountId::from_u64(i * sc as u64), // routes to shard 0
+                    AccountId::new(),
+                    100u64,
+                    LedgerId::USD,
+                    1,
+                );
+                sharded.publish_event(event).ok();
+            }
+            // Let shard workers drain the warmup events.
+            std::thread::sleep(std::time::Duration::from_millis(50));
+
+            // ── Criterion timing loop ─────────────────────────────────────────
+            // Each iteration: pre-generate events (not timed), then time only
+            // the ring-buffer publish phase.  Ring capacity (1 M) >> BENCH_EVENTS
+            // (1 K) so publish_event never spins on backpressure.
             b.iter_custom(|iters| {
                 let mut total = std::time::Duration::ZERO;
                 for _ in 0..iters {
-                    let result = sharded_pipeline_scenario::run_once_blocking(BENCH_EVENTS, sc);
-                    total += std::time::Duration::from_millis(result.duration_ms);
+                    // Pre-generate (outside timed region).
+                    let events: Vec<TransactionEvent> = (0..BENCH_EVENTS)
+                        .map(|i| {
+                            // Spread across shards for realistic routing.
+                            let account_id = i * sc as u64 + (i % sc as u64);
+                            TransactionEvent::new(
+                                TransactionId::new(),
+                                AccountId::from_u64(account_id),
+                                AccountId::new(),
+                                100u64,
+                                LedgerId::USD,
+                                1,
+                            )
+                        })
+                        .collect();
+
+                    // Timed: pure ring-buffer publish, no allocation.
+                    let start = Instant::now();
+                    for event in events {
+                        sharded.publish_event(event).ok();
+                    }
+                    total += start.elapsed();
                 }
                 total
             });

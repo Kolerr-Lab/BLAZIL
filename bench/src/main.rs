@@ -10,6 +10,8 @@
 use std::mem::size_of;
 
 use blazil_bench::scenarios::{sharded_pipeline_scenario, tcp_scenario, udp_scenario};
+#[cfg(feature = "aeron")]
+use blazil_bench::scenarios::aeron_scenario;
 use blazil_common::amount::Amount;
 use blazil_common::ids::{AccountId, LedgerId, TransactionId};
 use blazil_common::timestamp::Timestamp;
@@ -46,40 +48,64 @@ async fn main() {
     println!();
 
     println!("Events: sharded=100K (scaling sweep 1/2/4/8 shards)");
-    println!("Events: tcp=10K, udp=100K (E2E transport comparison)");
+    println!("Events: tcp=10K, udp=100K, aeron=100K (E2E transport comparison)");
     println!("Runs per scenario: 1 (fast mode)\n");
 
     // Sharded pipeline scaling test — full 1/2/4/8 sweep with table output
-    println!("[1/3] Sharded Pipeline scaling sweep (100K events x 4 configs)...");
+    println!("[1/4] Sharded Pipeline scaling sweep (100K events x 4 configs)...");
     sharded_pipeline_scenario::run_scaling_sweep().await;
 
     // E2E transport comparison
-    println!("[2/3] TCP E2E (10K events)...");
+    println!("[2/4] TCP E2E (10K events)...");
     let tcp_result = tcp_scenario::run(10_000).await;
     println!(
         "      → {} TPS",
         blazil_bench::report::fmt_commas(tcp_result.tps)
     );
 
-    println!("[3/3] UDP E2E (100K events)...");
+    println!("[3/4] UDP E2E (100K events)...");
     let udp_result = udp_scenario::run(100_000).await;
     println!(
         "      → {} TPS",
         blazil_bench::report::fmt_commas(udp_result.tps)
     );
 
-    // E2E transport comparison
+    // Aeron IPC E2E (only when built with --features aeron)
+    #[cfg(feature = "aeron")]
+    let aeron_result = {
+        println!("[4/4] Aeron IPC E2E (100K events)...");
+        let r = aeron_scenario::run(100_000).await;
+        println!(
+            "      → {} TPS",
+            blazil_bench::report::fmt_commas(r.tps)
+        );
+        Some(r)
+    };
+    #[cfg(not(feature = "aeron"))]
+    let aeron_result: Option<blazil_bench::metrics::BenchmarkResult> = None;
+
+    // E2E transport comparison table
     let transport_speedup = udp_result.tps as f64 / tcp_result.tps as f64;
     println!("\n=== E2E TRANSPORT COMPARISON ===");
     println!(
-        "TCP E2E:  {} TPS (baseline)",
+        "TCP E2E:   {:>12} TPS (baseline)",
         blazil_bench::report::fmt_commas(tcp_result.tps)
     );
     println!(
-        "UDP E2E:  {} TPS",
-        blazil_bench::report::fmt_commas(udp_result.tps)
+        "UDP E2E:   {:>12} TPS  ({:.1}x TCP)",
+        blazil_bench::report::fmt_commas(udp_result.tps),
+        transport_speedup,
     );
-    println!("Speedup:  {:.1}x over TCP", transport_speedup);
+    if let Some(ref ar) = aeron_result {
+        let aeron_speedup = ar.tps as f64 / tcp_result.tps as f64;
+        println!(
+            "Aeron IPC: {:>12} TPS  ({:.1}x TCP,  p99={}ns)",
+            blazil_bench::report::fmt_commas(ar.tps),
+            aeron_speedup,
+            ar.p99_ns,
+        );
+    }
+    println!("Speedup (UDP/TCP):  {:.1}x", transport_speedup);
     println!(
         "Gap closed: {:.1}% (target was 20-30x)",
         (transport_speedup / 20.0) * 100.0
@@ -89,7 +115,7 @@ async fn main() {
     #[cfg(all(feature = "io-uring", target_os = "linux"))]
     {
         use blazil_bench::scenarios::io_uring_udp_scenario;
-        println!("[4/3] io_uring UDP E2E (100K events)...");
+        println!("\n[5/5] io_uring UDP E2E (100K events)...");
         let io_uring_result = io_uring_udp_scenario::run(100_000).await;
         println!(
             "      -> {} TPS",
