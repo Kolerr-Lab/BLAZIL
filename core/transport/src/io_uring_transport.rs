@@ -616,7 +616,7 @@ impl IoUringUdpTransport {
             ))
         })
         .await
-        .map_err(|e| BlazerError::Transport(format!("io_uring UDP task panicked: {e}"))?
+        .map_err(|e| BlazerError::Transport(format!("io_uring UDP task panicked: {e}")))?
     }
 }
 
