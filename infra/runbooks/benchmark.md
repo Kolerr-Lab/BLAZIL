@@ -10,7 +10,7 @@ validate performance before and after changes.
 | Environment | Transport | TPS | P99 Latency |
 |---|---|---|---|
 | v0.1 (M2 MacBook) | gRPC | 62,770 | ~15ms |
-| v0.2 (M4 MacBook, local) | Aeron IPC | 1,049,102 | <1ms |
+| v0.2 (M4 MacBook, local) | Aeron IPC | 1,203,108 | <1ms |
 | DO cluster (3× s-8vcpu-16gb) | io-uring | 2–3M (projected) | TBD |
 | DO cluster (3× c-8) | io-uring | 3–5M (projected) | TBD |
 

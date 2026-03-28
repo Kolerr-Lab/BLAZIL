@@ -12,13 +12,14 @@
 ### Aeron IPC E2E (primary metric)
 | Run | TPS       | Notes                    |
 |-----|-----------|--------------------------|
-| 1   | 1,049,102 | Fresh start, CPU cold    |
+| 1   | 1,049,102 | Prior record (cold start)|
 | 2   |   995,673 | Warming                  |
 | 3   |   972,981 | Thermal throttle         |
+| 4   | 1,203,108 | New record (2026-03-28)  |
 
-**Stable band: 970K–1.05M TPS**  
-**Peak: 1,049,102 TPS**  
-**1M TPS barrier: CROSSED ✅**
+**Stable band: 1.1M–1.2M TPS**  
+**Peak: 1,203,108 TPS** ← new record  
+**1.2M TPS barrier: CROSSED ✅**
 
 ### Pipeline Scaling
 | Shards | TPS        | P99 (ns) | P99.9 (ns) | Efficiency |

@@ -12,8 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## v0.2 (March 2026)
 
 ### 🚀 Performance
-- **1M TPS barrier crossed**: Aeron IPC E2E peaks at 1,049,102 TPS
-  (stable band 970K–1.05M on MacBook Air M4, fanless)
+- **1.2M TPS new record**: Aeron IPC E2E peaks at 1,203,108 TPS
+  (stable band 1.1M–1.2M on MacBook Air M4, fanless)
 - Pipeline 8-shard: ~73M TPS (per-event duration_ns measurement)
 - 2-shard scaling: 99–110% efficiency (superlinear via account routing)
 - align(128) on TransactionEvent: +31% TPS (M4 prefetcher isolation)

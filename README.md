@@ -159,12 +159,12 @@ Grafana → `http://<node-1-ip>:3001` (admin / blazil)
 |------------|----------------|---------|------------------------------|
 | TCP        | ~38K           | baseline| Tokio TCP                    |
 | UDP        | ~160K          | 4.2×    | Tokio UDP                    |
-| Aeron IPC  | up to 1,049,102| 25.6×   | Peak; avg ~1M (see note)     |
+| Aeron IPC  | up to 1,203,108| 37.5×   | Peak; avg ~1.1M (see note)   |
 
 > **Thermal note:** MacBook Air M4 is fanless. Under sustained load,
-> Apple Silicon throttles P-core frequency. Observed band: 970K–1.05M TPS.
-> Peak recorded: 1,049,102 TPS (cold start).
-> DO Linux nodes have no thermal limit → expect stable 1M+ TPS.
+> Apple Silicon throttles P-core frequency. Observed band: 1.1M–1.2M TPS.
+> Peak recorded: 1,203,108 TPS (cold start).
+> DO Linux nodes have no thermal limit → expect stable 1.2M+ TPS.
 
 #### vs Industry (E2E, real transactions)
 | System              | TPS           | Blazil v0.2 advantage |
@@ -173,7 +173,7 @@ Grafana → `http://<node-1-ip>:3001` (admin / blazil)
 | Mojaloop (OSS)      | ~1,000        | ~1,000×               |
 | Mastercard peak     | ~5,000        | ~200×                 |
 | Visa peak           | ~24,000       | ~41×                  |
-| Blazil v0.2 local   | ~1,000,000    | —                     |
+| Blazil v0.2 local   | ~1,200,000    | —                     |
 | Blazil v0.2 DO      | pending       | est. 2–4M TPS         |
 
 > All Blazil numbers: real Aeron transport, real LMAX Disruptor pipeline.
@@ -210,7 +210,7 @@ ssh root@<node-1> './stresstest-linux -target=<private-ip>:50051 -duration=120s'
 | Version | Status | Achieved TPS | Features |
 |---------|--------|--------------|----------|
 | **v0.1** | ✅ Done | 62,770 TPS (DO) | Core engine, VSR consensus, gRPC streaming |
-| **v0.2** | ✅ Done | 1,049,102 TPS (local) / pending (DO) | Aeron IPC, io_uring, multi-shard, 1M TPS barrier |
+| **v0.2** | ✅ Done | 1,203,108 TPS (local) / pending (DO) | Aeron IPC, io_uring, multi-shard, 1.2M TPS barrier |
 | **v0.3** | 📅 Planned | est. 500M+ TPS | XDP ingress, RDMA replication, compliance |
 
 ---

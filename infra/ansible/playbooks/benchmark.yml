@@ -68,4 +68,4 @@
         msg:
           - "=== BENCHMARK COMPLETE ==="
           - "Results saved to: docs/benchmark-results/do-v0.2-{{ ansible_date_time.date }}.txt"
-          - "Compare with local M4: 1,049,102 TPS (aeron:ipc, no VSR)"
+          - "Compare with local M4: 1,203,108 TPS (aeron:ipc, no VSR)"
