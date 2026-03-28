@@ -24,10 +24,10 @@
 ### Pipeline Scaling
 | Shards | TPS        | P99 (ns) | P99.9 (ns) | Efficiency |
 |--------|------------|----------|------------|------------|
-| 1      | ~20M       | 42       | 750        | baseline   |
-| 2      | ~40M       | 42       | 792        | 99–110%    |
-| 4      | ~55M       | 125      | 1,292      | 65%        |
-| 8      | ~73M       | 125      | 1,583      | 47%        |
+| 1      | 20,724,028 | 42       | 667        | baseline   |
+| 2      | 40,483,850 | 42       | 584        | 97.7%      |
+| 4      | 61,005,677 | 84       | 1,083      | 73.6%      |
+| 8      | 80,513,139 | 125      | 1,333      | 48.6%      |
 
 **2-shard superlinear scaling (99–110%)** confirmed via
 account-based routing — same-account transactions always
@@ -58,7 +58,7 @@ land on same shard, eliminating cross-shard cache contention.
 Uses `duration_ns` per-event measurement (accurate).  
 v0.1 used bulk timing (no per-event overhead) → numbers not directly comparable.  
 v0.1 bulk: 111M TPS (1-shard), 200M TPS (4-shard).  
-v0.2 per-event: ~20M TPS (1-shard), ~73M TPS (8-shard).  
+v0.2 per-event: 20,724,028 TPS (1-shard), 80,513,139 TPS (8-shard).  
 Both are valid — different measurement contexts.
 
 ### E2E TPS

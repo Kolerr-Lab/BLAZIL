@@ -149,16 +149,16 @@ Grafana → `http://<node-1-ip>:3001` (admin / blazil)
 #### Pipeline Scaling (duration_ns, per-event accurate)
 | Shards | TPS        | P99 (ns) | P99.9 (ns) | Efficiency |
 |--------|------------|----------|------------|------------|
-| 1      | ~20M       | 42       | 750        | baseline   |
-| 2      | ~40M       | 42       | 792        | ~99–110%   |
-| 4      | ~55M       | 125      | 1,292      | ~65%       |
-| 8      | ~73M       | 125      | 1,583      | ~47%       |
+| 1      | 20,724,028 | 42       | 667        | baseline   |
+| 2      | 40,483,850 | 42       | 584        | 97.7%      |
+| 4      | 61,005,677 | 84       | 1,083      | 73.6%      |
+| 8      | 80,513,139 | 125      | 1,333      | 48.6%      |
 
 #### E2E Transport Comparison (single node, real pipeline)
 | Transport  | TPS            | vs TCP  | Notes                        |
 |------------|----------------|---------|------------------------------|
-| TCP        | ~38K           | baseline| Tokio TCP                    |
-| UDP        | ~160K          | 4.2×    | Tokio UDP                    |
+| TCP        | 32,045         | baseline| Tokio TCP                    |
+| UDP        | 163,215        | 5.1×    | Tokio UDP                    |
 | Aeron IPC  | up to 1,203,108| 37.5×   | Peak; avg ~1.1M (see note)   |
 
 > **Thermal note:** MacBook Air M4 is fanless. Under sustained load,

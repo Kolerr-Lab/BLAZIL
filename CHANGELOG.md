@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### 🚀 Performance
 - **1.2M TPS new record**: Aeron IPC E2E peaks at 1,203,108 TPS
   (stable band 1.1M–1.2M on MacBook Air M4, fanless)
-- Pipeline 8-shard: ~73M TPS (per-event duration_ns measurement)
+- Pipeline 8-shard: 80,513,139 TPS (per-event); 1-shard: 20,724,028 TPS
 - 2-shard scaling: 99–110% efficiency (superlinear via account routing)
 - align(128) on TransactionEvent: +31% TPS (M4 prefetcher isolation)
 
@@ -55,8 +55,8 @@ BSL 1.1 — source available, converts to Apache 2.0 after 4 years.
 - Sharded pipeline 4-shard bulk timing: **200,000,000 TPS** (was 167M TPS)
 - Sharded pipeline 1-shard bulk timing: **111,111,111 TPS** (was 77M TPS)
 - Pipeline latency-tracked: **24,390,243 TPS**, P99 42ns, P99.9 83ns
-- UDP E2E: **135,135 TPS** (window-based pipelining, concurrent tasks, semaphore backpressure)
-- TCP E2E: **38,610 TPS** baseline
+- UDP E2E: **163,215 TPS** (5.1× TCP)
+- TCP E2E: **32,045 TPS** baseline
 - DO cluster E2E: **62,770 TPS** unchanged (real VSR, real disk, $252/month)
 - Added `UdpTransportServer` with split-fd + mpsc response channel design
 - Fixed executor starvation with `Semaphore(2048)` + `sleep(1µs)` in wait loop
