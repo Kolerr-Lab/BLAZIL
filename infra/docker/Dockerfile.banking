@@ -4,7 +4,7 @@ WORKDIR /app
 COPY . .
 WORKDIR /app/services/banking
 ENV GOWORK=off
-RUN go build -o /banking .
+RUN go mod download && go build -o /banking .
 
 FROM alpine:3.19
 RUN apk add --no-cache ca-certificates

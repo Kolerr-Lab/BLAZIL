@@ -4,7 +4,7 @@ WORKDIR /app
 COPY . .
 WORKDIR /app/services/trading
 ENV GOWORK=off
-RUN go build -o /trading .
+RUN go mod download && go build -o /trading .
 
 FROM alpine:3.19
 RUN apk add --no-cache ca-certificates

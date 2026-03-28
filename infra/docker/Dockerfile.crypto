@@ -4,7 +4,7 @@ WORKDIR /app
 COPY . .
 WORKDIR /app/services/crypto
 ENV GOWORK=off
-RUN go build -o /crypto .
+RUN go mod download && go build -o /crypto .
 
 FROM alpine:3.19
 RUN apk add --no-cache ca-certificates

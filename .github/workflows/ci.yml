@@ -67,30 +67,29 @@ jobs:
         run: |
           for svc in payments banking trading crypto; do
             echo "Building $svc..."
-            cd services/$svc && GOWORK=off go build ./... && cd ../..
+            (cd services/$svc && GOWORK=off go build ./...)
           done
-          for lib in observability secrets auth policy; do
+          for lib in observability secrets auth policy discovery sharding; do
             echo "Building $lib..."
-            cd libs/$lib && GOWORK=off go build ./... && cd ../..
+            (cd libs/$lib && GOWORK=off go build ./...)
           done
 
       - name: Test all services
         run: |
           for svc in payments banking trading crypto; do
-            cd services/$svc && GOWORK=off go test -race ./... && cd ../..
+            (cd services/$svc && GOWORK=off go test -race ./...)
           done
-          for lib in observability secrets auth policy; do
-            cd libs/$lib && GOWORK=off go test -race ./... && cd ../..
+          for lib in observability secrets auth policy discovery sharding; do
+            (cd libs/$lib && GOWORK=off go test -race ./...)
           done
 
       - name: Vet
         run: |
           for svc in payments banking trading crypto; do
-            cd services/$svc && GOWORK=off go vet ./... && cd ../..
+            (cd services/$svc && GOWORK=off go vet ./...)
           done
-
-  integration-test:
-    name: Integration Tests
+          for lib in observability secrets auth policy discovery sharding; do
+            (cd libs/$lib && GOWORK=off go vet ./...)
     runs-on: ubuntu-latest
     needs: [rust-ci, go-ci]
     steps:

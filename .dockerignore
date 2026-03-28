@@ -1,0 +1,31 @@
+# Rust build artifacts — can be several GB, never needed inside Docker
+target/
+
+# Git history
+.git/
+
+# Aeron C submodule — only needed when building with --features aeron.
+# Dockerfile.engine uses io-uring only (no aeron feature), so exclude here.
+# If you ever re-enable --features aeron in Docker, remove this line.
+core/aeron-sys/aeron/
+
+# Local dev / IDE
+.env
+.env.*
+*.env
+.vscode/
+.idea/
+*.iml
+
+# Benchmark / test artifacts
+bench/target/
+docs/benchmark-screenshots/
+docs/benchmark-results/
+
+# CI
+.github/
+
+# Misc
+*.log
+*.tmp
+RELEASE-*.md

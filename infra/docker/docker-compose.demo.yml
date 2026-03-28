@@ -92,6 +92,7 @@ services:
       context: ../..
       dockerfile: infra/docker/Dockerfile.banking
     container_name: blazil-banking
+    restart: on-failure
     environment:
       BLAZIL_ENGINE_ADDR: blazil-engine:7878
       BANKING_METRICS_ADDR: "0.0.0.0:9092"
@@ -107,6 +108,7 @@ services:
       context: ../..
       dockerfile: infra/docker/Dockerfile.trading
     container_name: blazil-trading
+    restart: on-failure
     environment:
       BLAZIL_ENGINE_ADDR: blazil-engine:7878
       METRICS_ADDR: "0.0.0.0:9093"
@@ -122,6 +124,7 @@ services:
       context: ../..
       dockerfile: infra/docker/Dockerfile.crypto
     container_name: blazil-crypto
+    restart: on-failure
     environment:
       BLAZIL_ENGINE_ADDR: blazil-engine:7878
       METRICS_ADDR: "0.0.0.0:9094"
@@ -137,6 +140,7 @@ services:
       context: ../..
       dockerfile: infra/docker/Dockerfile.loadgen
     container_name: blazil-loadgen
+    restart: on-failure
     environment:
       PAYMENTS_ADDR: blazil-payments:50051
       BANKING_ADDR: blazil-banking:50052
