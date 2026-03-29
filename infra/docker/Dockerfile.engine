@@ -30,8 +30,19 @@ RUN curl -fsSL https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.x
     && ln -s /usr/local/zig-linux-x86_64-0.13.0/zig /usr/local/bin/zig
 
 COPY . .
-RUN cargo build --release -p blazil-transport \
-    --features blazil-transport/io-uring
+# BuildKit cache mounts:
+#   /root/.cargo/registry — crate sources (includes tigerbeetle-unofficial-sys + bundled zig/download.sh)
+#   /app/target           — build artifacts INCLUDING the Zig 0.14.1 compiler downloaded by
+#                           tigerbeetle-unofficial-sys/build.rs and libtb_client.a compiled by it.
+#                           Without this cache, every cold Docker build re-downloads Zig from
+#                           pkg.machengine.org and recompiles the C client (~2-3 min), which is
+#                           fragile and slow. With it, Zig is downloaded exactly once.
+RUN --mount=type=cache,target=/root/.cargo/registry \
+    --mount=type=cache,target=/root/.cargo/git \
+    --mount=type=cache,target=/app/target \
+    cargo build --release -p blazil-transport \
+      --features blazil-transport/tigerbeetle-client,blazil-transport/io-uring \
+    && cp target/release/blazil-transport /tmp/blazil-transport
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Stage 2: minimal runtime image
@@ -39,6 +50,6 @@ RUN cargo build --release -p blazil-transport \
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /app/target/release/blazil-transport /usr/local/bin/blazil-transport
+COPY --from=builder /tmp/blazil-transport /usr/local/bin/blazil-transport
 EXPOSE 7878 9090
 CMD ["blazil-transport"]
