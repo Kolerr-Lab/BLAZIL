@@ -28,7 +28,7 @@ services:
   # ── TigerBeetle Cluster (3 replicas, VSR consensus) ─────────────────────────
 
   tigerbeetle-0:
-    image: ghcr.io/tigerbeetle/tigerbeetle:0.16.72
+    image: ghcr.io/tigerbeetle/tigerbeetle:0.16.78
     container_name: blazil-tigerbeetle-0
     entrypoint: ["/entrypoint.sh"]
     environment:
@@ -56,7 +56,7 @@ services:
       start_period: 15s
 
   tigerbeetle-1:
-    image: ghcr.io/tigerbeetle/tigerbeetle:0.16.72
+    image: ghcr.io/tigerbeetle/tigerbeetle:0.16.78
     container_name: blazil-tigerbeetle-1
     entrypoint: ["/entrypoint.sh"]
     environment:
@@ -81,7 +81,7 @@ services:
       start_period: 15s
 
   tigerbeetle-2:
-    image: ghcr.io/tigerbeetle/tigerbeetle:0.16.72
+    image: ghcr.io/tigerbeetle/tigerbeetle:0.16.78
     container_name: blazil-tigerbeetle-2
     entrypoint: ["/entrypoint.sh"]
     environment:
