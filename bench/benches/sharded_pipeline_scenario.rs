@@ -14,9 +14,11 @@ use blazil_common::ids::{AccountId, LedgerId, TransactionId};
 use blazil_engine::event::TransactionEvent;
 use blazil_engine::sharded_pipeline::{from_env, ShardedPipeline};
 
-/// Number of events published per Criterion iteration.
-/// Kept at 1 000 so each sample completes in microseconds.
-const BENCH_EVENTS: u64 = 1_000;
+// BENCH_EVENTS: measures single-thread producer write throughput.
+// This bench intentionally measures ring buffer write latency per producer,
+// NOT multi-shard scaling efficiency (use `cargo run -p blazil-bench --release` for that).
+// Higher shard count = more cache misses from single producer = expected lower throughput here.
+const BENCH_EVENTS: u64 = 1_000_000;
 const CAPACITY_PER_SHARD: usize = 1_048_576;
 const MAX_AMOUNT_UNITS: u64 = 1_000_000;
 
