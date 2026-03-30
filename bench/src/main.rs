@@ -24,7 +24,14 @@ async fn main() {
         .with_max_level(tracing::Level::ERROR)
         .try_init();
 
-    println!("Starting Blazil benchmark suite...\n");
+    // Parse --events N from CLI args (used by scripts/aeron-bench.sh).
+    // Defaults match the hardcoded values used before arg parsing was added.
+    let args: Vec<String> = std::env::args().collect();
+    let events: u64 = args
+        .windows(2)
+        .find(|w| w[0] == "--events")
+        .and_then(|w| w[1].parse().ok())
+        .unwrap_or(100_000);
 
     // ── Field size breakdown ─────────────────────────────────────────────────
     println!("=== Field sizes ===");
@@ -48,7 +55,7 @@ async fn main() {
     println!();
 
     println!("Events: sharded=100K (scaling sweep 1/2/4/8 shards)");
-    println!("Events: tcp=10K, udp=100K, aeron=100K (E2E transport comparison)");
+    println!("Events: tcp=10K, udp={events}, aeron={events} (E2E transport comparison)");
     println!("Runs per scenario: 1 (fast mode)\n");
 
     // Sharded pipeline scaling test — full 1/2/4/8 sweep with table output
@@ -57,14 +64,14 @@ async fn main() {
 
     // E2E transport comparison
     println!("[2/4] TCP E2E (10K events)...");
-    let tcp_result = tcp_scenario::run(10_000).await;
+    let tcp_result = tcp_scenario::run(10_000).await; // TCP baseline kept at 10K — slow transport
     println!(
         "      → {} TPS",
         blazil_bench::report::fmt_commas(tcp_result.tps)
     );
 
-    println!("[3/4] UDP E2E (100K events)...");
-    let udp_result = udp_scenario::run(100_000).await;
+    println!("[3/4] UDP E2E ({events} events)...");
+    let udp_result = udp_scenario::run(events).await;
     println!(
         "      → {} TPS",
         blazil_bench::report::fmt_commas(udp_result.tps)
@@ -73,8 +80,8 @@ async fn main() {
     // Aeron IPC E2E (only when built with --features aeron)
     #[cfg(feature = "aeron")]
     let aeron_result = {
-        println!("[4/4] Aeron IPC E2E (100K events)...");
-        let r = aeron_scenario::run(100_000).await;
+        println!("[4/4] Aeron IPC E2E ({events} events)...");
+        let r = aeron_scenario::run(events).await;
         println!("      → {} TPS", blazil_bench::report::fmt_commas(r.tps));
         Some(r)
     };
