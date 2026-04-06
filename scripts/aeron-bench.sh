@@ -18,12 +18,14 @@
 set -euo pipefail
 
 EVENTS="${1:-100000}"
+PAYLOAD_SIZE="${PAYLOAD_SIZE:-128}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 echo "=== Blazil Aeron Benchmark ==="
-echo "Events : ${EVENTS}"
-echo "Root   : ${WORKSPACE_ROOT}"
+echo "Events  : ${EVENTS}"
+echo "Payload : ${PAYLOAD_SIZE} bytes"
+echo "Root    : ${WORKSPACE_ROOT}"
 echo ""
 
 # Verify submodule is present.
@@ -41,6 +43,6 @@ cargo build --release --features aeron -p blazil-bench
 
 # Run the bench binary.
 echo ""
-echo "Running Aeron IPC E2E benchmark (${EVENTS} events)…"
+echo "Running Aeron IPC E2E benchmark (${EVENTS} events, ${PAYLOAD_SIZE}B payload)…"
 cargo run --release --features aeron --bin blazil-bench \
-  -- --scenario aeron --events "${EVENTS}"
+  -- --scenario aeron --events "${EVENTS}" --payload-size "${PAYLOAD_SIZE}"

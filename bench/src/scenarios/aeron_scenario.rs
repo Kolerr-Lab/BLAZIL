@@ -55,8 +55,9 @@ pub mod inner {
     // Max spin retries on Aeron offer backpressure before yielding.
     const OFFER_SPIN_RETRIES: usize = 64;
 
-    pub async fn run(events: u64) -> BenchmarkResult {
+    pub async fn run(events: u64, payload_size: usize) -> BenchmarkResult {
         let usd = parse_currency("USD").expect("USD");
+        println!("Payload size : {payload_size} bytes");
 
         // ── pipeline ──────────────────────────────────────────────────────────
         let ledger_client = Arc::new(InMemoryLedgerClient::new_unbounded());
@@ -160,8 +161,9 @@ pub mod inner {
             // and the ring-buffer shard worker threads.
             let mut warmup_resp: Vec<Vec<u8>> = Vec::new();
             for i in 0..WARMUP_EVENTS {
-                let bytes = serialize_request(&make_request(i, &debit_id_str, &credit_id_str))
+                let mut bytes = serialize_request(&make_request(i, &debit_id_str, &credit_id_str))
                     .expect("serialize");
+                bytes.resize(payload_size.max(bytes.len()), 0u8);
                 // Spin-retry on offer backpressure during warmup.
                 let mut retries = 0usize;
                 while client_pub.offer(&bytes).is_err() {
@@ -195,9 +197,10 @@ pub mod inner {
             // Fill window.
             let initial = WINDOW_SIZE.min(total_usize);
             for i in 0..initial {
-                let bytes =
+                let mut bytes =
                     serialize_request(&make_request(i as u64, &debit_id_str, &credit_id_str))
                         .expect("serialize");
+                bytes.resize(payload_size.max(bytes.len()), 0u8);
                 send_times.push(Instant::now());
                 // Spin-retry on offer backpressure to keep P-cores hot.
                 let mut retries = 0usize;
@@ -224,12 +227,13 @@ pub mod inner {
                     received += 1;
 
                     if sent < total_usize {
-                        let bytes = serialize_request(&make_request(
+                        let mut bytes = serialize_request(&make_request(
                             sent as u64,
                             &debit_id_str,
                             &credit_id_str,
                         ))
                         .expect("serialize");
+                        bytes.resize(payload_size.max(bytes.len()), 0u8);
                         send_times.push(Instant::now());
                         // Spin-retry keeps P-cores hot on Aeron backpressure.
                         let mut retries = 0usize;

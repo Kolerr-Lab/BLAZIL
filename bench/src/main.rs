@@ -33,6 +33,19 @@ async fn main() {
         .and_then(|w| w[1].parse().ok())
         .unwrap_or(100_000);
 
+    let payload_size: usize = {
+        let mut ps = 128usize;
+        let mut iter = args.iter();
+        while let Some(arg) = iter.next() {
+            if arg == "--payload-size" {
+                if let Some(val) = iter.next() {
+                    ps = val.parse().unwrap_or(128);
+                }
+            }
+        }
+        ps
+    };
+
     // ── Field size breakdown ─────────────────────────────────────────────────
     println!("=== Field sizes ===");
     println!("i64:           {} bytes", size_of::<i64>());
@@ -81,7 +94,7 @@ async fn main() {
     #[cfg(feature = "aeron")]
     let aeron_result = {
         println!("[4/4] Aeron IPC E2E ({events} events)...");
-        let r = aeron_scenario::run(events).await;
+        let r = aeron_scenario::run(events, payload_size).await;
         println!("      → {} TPS", blazil_bench::report::fmt_commas(r.tps));
         Some(r)
     };
