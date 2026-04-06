@@ -33,6 +33,7 @@ async fn main() {
         .and_then(|w| w[1].parse().ok())
         .unwrap_or(100_000);
 
+    #[cfg(feature = "aeron")]
     let payload_size: usize = {
         let mut ps = 128usize;
         let mut iter = args.iter();
