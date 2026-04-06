@@ -2,7 +2,7 @@
 # Decision: COPY . . (full workspace) instead of spec's COPY tools/loadgen .
 # Reason: loadgen imports real proto-generated types from the 4 service modules;
 #         partial copy would break replace directives and transitive deps.
-FROM golang:1.25-alpine AS builder
+FROM golang:1.25.8-alpine AS builder
 WORKDIR /app
 COPY . .
 WORKDIR /app/tools/loadgen
