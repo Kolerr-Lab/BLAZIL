@@ -12,12 +12,12 @@
 #   ./scripts/aeron-bench.sh [EVENTS]
 #
 # Examples:
-#   ./scripts/aeron-bench.sh             # 100 000 events (default)
-#   ./scripts/aeron-bench.sh 1000000     # 1 M events
+#   ./scripts/aeron-bench.sh             # 1 000 000 events (default)
+#   ./scripts/aeron-bench.sh 100000      # 100 K events (quick local check)
 
 set -euo pipefail
 
-EVENTS="${1:-100000}"
+EVENTS="${1:-1000000}"
 PAYLOAD_SIZE="${PAYLOAD_SIZE:-128}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
