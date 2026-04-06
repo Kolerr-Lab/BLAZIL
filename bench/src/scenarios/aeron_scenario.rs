@@ -35,7 +35,7 @@ pub mod inner {
         AeronContext, AeronPublication, AeronSubscription, REQ_STREAM_ID, RSP_STREAM_ID,
     };
     use blazil_transport::aeron_transport::AeronTransportServer;
-    use blazil_transport::protocol::{serialize_request, TransactionRequest};
+    use blazil_transport::protocol::{deserialize_response, serialize_request, TransactionRequest};
     use blazil_transport::server::TransportServer;
 
     use crate::metrics::BenchmarkResult;
@@ -190,6 +190,8 @@ pub mod inner {
             let mut responses: Vec<Vec<u8>> = Vec::new();
             let mut sent = 0usize;
             let mut received = 0usize;
+            let mut committed = 0u64;
+            let mut rejected = 0u64;
             let total_usize = total as usize;
 
             let wall_start = Instant::now();
@@ -220,9 +222,13 @@ pub mod inner {
             while received < total_usize {
                 responses.clear();
                 let count = client_sub.poll_fragments(&mut responses, WINDOW_SIZE);
-                for _ in 0..responses.len() {
+                for resp_bytes in &responses {
                     if let Some(t0) = send_times.get(received) {
                         latencies.push(t0.elapsed().as_nanos() as u64);
+                    }
+                    match deserialize_response(resp_bytes) {
+                        Ok(r) if r.committed => committed += 1,
+                        _ => rejected += 1,
                     }
                     received += 1;
 
@@ -264,14 +270,25 @@ pub mod inner {
             drop(client_sub);
             drop(ctx);
 
-            (duration, latencies)
+            (duration, latencies, committed, rejected)
         })
         .await
         .expect("bench blocking task");
 
-        let (duration, mut latencies) = result;
+        let (duration, mut latencies, committed, rejected) = result;
 
         server.shutdown().await;
+
+        let total_responses = committed + rejected;
+        let error_rate = if total_responses > 0 {
+            rejected as f64 / total_responses as f64 * 100.0
+        } else {
+            0.0
+        };
+        println!(
+            "Committed : {} / Rejected : {} / Error rate : {:.2}%",
+            committed, rejected, error_rate,
+        );
 
         BenchmarkResult::new("Aeron IPC E2E", events, duration, &mut latencies)
     }
