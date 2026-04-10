@@ -47,9 +47,13 @@ pub mod inner {
     // the UDP loopback network stack entirely for maximum throughput.
     const BENCH_CHANNEL: &str = "aeron:ipc";
     const REG_TIMEOUT: Duration = Duration::from_secs(5);
-    // Larger window keeps the pipeline fully saturated at target ~1M TPS:
-    // 1M TPS × 1ms P99 latency ≈ 1000 in-flight; 2048 gives 2× headroom.
-    const WINDOW_SIZE: usize = 2048;
+    // Window size: tuned per backend.
+    // InMemory: 2048 — saturates the pipeline at ~1M TPS.
+    // Real TigerBeetle (VSR, 3-node): 256 — TB batch RTT ~5-20ms, so
+    //   2048 in-flight would flood the ring buffer before TB can drain it.
+    //   256 keeps ~1 full TB batch (MAX_TB_BATCH_SIZE=8190) in transit.
+    const WINDOW_SIZE_INMEM: usize = 2048;
+    const WINDOW_SIZE_TB: usize = 256;
     // 2000 events: enough to prime Aeron's flow-control and IPC log buffer.
     const WARMUP_EVENTS: u64 = 2000;
     // Larger ring buffer: 128K slots prevents any pipeline backpressure.
@@ -77,11 +81,13 @@ pub mod inner {
 
         if let Some(ref addr) = tb_addr {
             println!("Ledger      : TigerBeetle @ {addr}");
+            println!("Window size : {} (TB mode)", WINDOW_SIZE_TB);
             #[cfg(feature = "tigerbeetle-client")]
             {
                 return run_with_ledger(
                     events,
                     payload_size,
+                    WINDOW_SIZE_TB,
                     usd,
                     ledger_rt,
                     TigerBeetleClient::connect(addr, 0)
@@ -95,9 +101,11 @@ pub mod inner {
         }
 
         println!("Ledger      : InMemory (set BLAZIL_TB_ADDRESS for real TB)");
+        println!("Window size : {} (InMemory mode)", WINDOW_SIZE_INMEM);
         run_with_ledger(
             events,
             payload_size,
+            WINDOW_SIZE_INMEM,
             usd,
             ledger_rt,
             InMemoryLedgerClient::new_unbounded(),
@@ -108,6 +116,7 @@ pub mod inner {
     async fn run_with_ledger<C: LedgerClient + Send + Sync + 'static>(
         events: u64,
         payload_size: usize,
+        window_size: usize,
         usd: blazil_common::currency::Currency,
         ledger_rt: Arc<tokio::runtime::Runtime>,
         ledger_client: C,
@@ -243,7 +252,7 @@ pub mod inner {
             let wall_start = Instant::now();
 
             // Fill window.
-            let initial = WINDOW_SIZE.min(total_usize);
+            let initial = window_size.min(total_usize);
             for i in 0..initial {
                 let mut bytes =
                     serialize_request(&make_request(i as u64, &debit_id_str, &credit_id_str))
@@ -267,7 +276,7 @@ pub mod inner {
             // Drain loop.
             while received < total_usize {
                 responses.clear();
-                let count = client_sub.poll_fragments(&mut responses, WINDOW_SIZE);
+                let count = client_sub.poll_fragments(&mut responses, window_size);
                 for resp_bytes in &responses {
                     if let Some(t0) = send_times.get(received) {
                         latencies.push(t0.elapsed().as_nanos() as u64);
