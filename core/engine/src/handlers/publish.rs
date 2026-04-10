@@ -25,7 +25,7 @@
 use std::sync::Arc;
 
 use dashmap::DashMap;
-use tracing::{debug, error};
+use tracing::debug;
 
 use crate::event::{TransactionEvent, TransactionResult};
 use crate::handler::EventHandler;
@@ -94,13 +94,20 @@ impl EventHandler for PublishHandler {
 
         match self.results.get(&sequence) {
             None => {
-                // LedgerHandler deferred this event's result to a future batch
-                // flush. Store the sequence number; we'll process it at end_of_batch
-                // once LedgerHandler has written the result to the map.
+                // Two legitimate reasons for None:
+                //
+                // 1. LedgerHandler has not yet flushed this event's result
+                //    (deferred batch — result arrives at end_of_batch).
+                //    Action: defer, check again at flush_deferred().
+                //
+                // 2. The transport's drain_ready_results() already remove()'d
+                //    the result and sent the reply to the client.
+                //    Action: nothing left to do — skip silently.
+                //
+                // We cannot distinguish the two cases here without additional
+                // state, so we defer conservatively. flush_deferred() handles
+                // case 2 (missing at flush = already drained).
                 self.deferred.push(sequence);
-                // Do NOT flush deferred here — results aren't ready until
-                // LedgerHandler fires its flush (which happens before us for
-                // the same event at end_of_batch).
                 return;
             }
             Some(result_ref) => {
@@ -174,11 +181,14 @@ impl PublishHandler {
                     }
                 }
                 None => {
-                    // LedgerHandler must always write a result before we flush.
-                    // If we see None here it is a pipeline bug.
-                    error!(
+                    // Result already consumed by the transport's drain_ready_results().
+                    // In the async-pipeline model the serve thread races to remove()
+                    // results from the shared map as soon as LedgerHandler writes them.
+                    // If the entry is gone it means the reply was already sent — this
+                    // is correct behaviour, not a bug.
+                    debug!(
                         sequence = seq,
-                        "PublishHandler: pipeline bug — deferred event still has no result at flush"
+                        "PublishHandler: result already drained by transport layer"
                     );
                 }
             }
