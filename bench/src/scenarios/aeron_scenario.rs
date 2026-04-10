@@ -310,6 +310,10 @@ pub mod inner {
         let credit_id_str = credit_id.to_string();
         let total = events;
 
+        // Expose serve-thread internals to bench heartbeat.
+        let serve_pending_len = Arc::clone(server.pending_len());
+        let serve_offer_fail = Arc::clone(server.offer_failures());
+
         // active_tb_tasks is moved into the blocking closure so the heartbeat
         // can read it. The Arc keeps the counter alive for the full bench run.
         let result = tokio::task::spawn_blocking(move || {
@@ -476,9 +480,13 @@ pub mod inner {
                             0.0
                         };
                         let active = active_tb_tasks.load(Ordering::Relaxed);
+                        let pending_n = serve_pending_len.load(Ordering::Relaxed);
+                        let offer_fail = serve_offer_fail.load(Ordering::Relaxed);
+                        let vm_mb = vm_rss_mb();
                         println!(
-                            "[heartbeat] elapsed={:.1}s recv={}/{} committed={} rejected={} \
-                             sent={} active_tb={} tps_avg={:.0}",
+                            "[heartbeat] elapsed={:.1}s recv={}/{} committed={} \
+                             rejected={} sent={} active_tb={} pending={} \
+                             offer_fail={} vm_rss={}MB tps_avg={:.0}",
                             elapsed,
                             received,
                             total_usize,
@@ -486,6 +494,9 @@ pub mod inner {
                             rejected,
                             sent,
                             active,
+                            pending_n,
+                            offer_fail,
+                            vm_mb,
                             tps_avg
                         );
                         last_heartbeat = Instant::now();
@@ -525,6 +536,31 @@ pub mod inner {
         );
 
         BenchmarkResult::new("Aeron IPC E2E", events, duration, &mut latencies)
+    }
+
+    /// Returns current process RSS in MB.
+    /// Linux: reads /proc/self/status. Other platforms: returns 0.
+    fn vm_rss_mb() -> u64 {
+        #[cfg(target_os = "linux")]
+        {
+            if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
+                for line in status.lines() {
+                    if let Some(rest) = line.strip_prefix("VmRSS:") {
+                        let kb: u64 = rest
+                            .split_whitespace()
+                            .next()
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0);
+                        return kb / 1024;
+                    }
+                }
+            }
+            0
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            0
+        }
     }
 
     fn make_request(seq: u64, debit_id: &str, credit_id: &str) -> TransactionRequest {

@@ -34,11 +34,10 @@
 //! The [`aeron_serve_blocking`] function enforces this ordering via explicit
 //! `drop` calls before the driver is dropped.
 
-use std::collections::VecDeque;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -115,6 +114,11 @@ pub struct AeronTransportServer {
     aeron_dir: String,
     pipeline: Arc<Pipeline>,
     shutdown: Arc<AtomicBool>,
+    /// Live count of in-flight (seq, req_id) pairs awaiting TB results.
+    /// Written by the serve thread; read by bench/monitoring.
+    pending_len: Arc<AtomicUsize>,
+    /// Cumulative Aeron publication offer() failures (back-pressure spills).
+    offer_failures: Arc<AtomicU64>,
 }
 
 impl AeronTransportServer {
@@ -129,7 +133,19 @@ impl AeronTransportServer {
             aeron_dir: aeron_dir.to_owned(),
             pipeline,
             shutdown: Arc::new(AtomicBool::new(false)),
+            pending_len: Arc::new(AtomicUsize::new(0)),
+            offer_failures: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// Current pending-window size (requests in-flight, awaiting TB results).
+    pub fn pending_len(&self) -> &Arc<AtomicUsize> {
+        &self.pending_len
+    }
+
+    /// Cumulative Aeron offer() failure count since start.
+    pub fn offer_failures(&self) -> &Arc<AtomicU64> {
+        &self.offer_failures
     }
 }
 
@@ -144,9 +160,18 @@ impl TransportServer for AeronTransportServer {
         let aeron_dir = self.aeron_dir.clone();
         let pipeline = Arc::clone(&self.pipeline);
         let shutdown = Arc::clone(&self.shutdown);
+        let pending_len = Arc::clone(&self.pending_len);
+        let offer_failures = Arc::clone(&self.offer_failures);
 
         tokio::task::spawn_blocking(move || {
-            aeron_serve_blocking(channel, aeron_dir, pipeline, shutdown)
+            aeron_serve_blocking(
+                channel,
+                aeron_dir,
+                pipeline,
+                shutdown,
+                pending_len,
+                offer_failures,
+            )
         })
         .await
         .map_err(|e| BlazerError::Transport(format!("Aeron blocking task panicked: {e}")))?
@@ -175,6 +200,8 @@ fn aeron_serve_blocking(
     aeron_dir: String,
     pipeline: Arc<Pipeline>,
     shutdown: Arc<AtomicBool>,
+    pending_len_metric: Arc<AtomicUsize>,
+    offer_failures_metric: Arc<AtomicU64>,
 ) -> BlazerResult<()> {
     // ── 1. Embedded C Media Driver ────────────────────────────────────────────
     let driver = EmbeddedAeronDriver::new(Some(&aeron_dir));
@@ -251,25 +278,26 @@ fn aeron_serve_blocking(
     // Sliding window: (ring-buffer seq, request_id as u64) per in-flight event.
     // u64 is 8 bytes — Copy, stack-sized, zero heap allocation per slot.
     //
-    // VecDeque maintains strict ring-buffer insertion order. The TB Zig client
-    // uses a single TCP connection to the cluster and delivers batch completions
-    // in submission order. With MAX_CONCURRENT_BATCHES=8 capping in-flight tasks
-    // in LedgerHandler, results in the DashMap are effectively in sequence order:
-    // all seqs in batch N arrive in the DashMap before seqs in batch N+1 start.
-    // Front-check is O(1) miss when TB has not yet responded; O(k) drain when a
-    // batch completes.
-    //
-    // NOTE: `drain_ready_results` is bounded at MAX_DRAIN_PER_CALL results per
-    // invocation. This prevents the serve thread from stalling for long when a
-    // full batch (8,190 results × ~100 ns DashMap::remove = ~820 µs) arrives.
-    // Remaining results are picked up on the next serve loop iteration.
-    let mut pending: VecDeque<(i64, u64)> = VecDeque::with_capacity(PIPELINE_DEPTH);
+    // Uses Vec + swap_remove for O(1) middle removal. drain_ready_results scans
+    // forward so out-of-order completions (mock clients, parallel tokio tasks)
+    // do not cause head-of-line blocking. Real TB delivers in submission order
+    // (single TCP connection) — in that case the first hit is always index 0.
+    let mut pending: Vec<(i64, u64)> = Vec::with_capacity(PIPELINE_DEPTH);
     // Idle spin counter for the adaptive yield strategy.
     let mut idle_spins: u32 = 0;
+    // Periodic serve-thread diagnostics (always visible; bench sets log=ERROR).
+    let mut last_diag = Instant::now();
 
     while !shutdown.load(Ordering::Acquire) {
         // ── Phase 1: drain completed results (non-blocking, bounded) ─────
-        drain_ready_results(&mut pending, pipeline.results(), &pub_, MAX_DRAIN_PER_CALL);
+        drain_ready_results(
+            &mut pending,
+            pipeline.results(),
+            &pub_,
+            MAX_DRAIN_PER_CALL,
+            &offer_failures_metric,
+        );
+        pending_len_metric.store(pending.len(), Ordering::Relaxed);
 
         // ── Phase 2: poll Aeron → publish to ring buffer ──────────────────
         frags.clear();
@@ -321,6 +349,7 @@ fn aeron_serve_blocking(
                     pipeline.results(),
                     &pub_,
                     MAX_DRAIN_PER_CALL,
+                    &offer_failures_metric,
                 );
                 if n == 0 {
                     // Nothing drained — TB batch not yet complete. Spin lightly.
@@ -331,7 +360,7 @@ fn aeron_serve_blocking(
             // Single producer guarantee: capacity verified above — cannot
             // return RingBufferFull here.
             match pipeline.publish_event(event) {
-                Ok(seq) => pending.push_back((seq, req_id_u64)),
+                Ok(seq) => pending.push((seq, req_id_u64)),
                 Err(e) => {
                     let req_id_str = TransactionId::from_u64(req_id_u64).to_string();
                     error!(request_id = %req_id_str, error = %e, "Aeron: publish_event failed");
@@ -344,19 +373,7 @@ fn aeron_serve_blocking(
         }
 
         if count == 0 {
-            // Adaptive idle: spin_loop for the first SPIN_BEFORE_YIELD
-            // iterations, then yield_now() once.
-            //
-            // Pure busy-spin is correct when TB results are arriving fast
-            // (results in map, drain immediately finds them). But when the
-            // pipeline is waiting for a TB VSR round trip, the serve thread
-            // must occasionally yield so that:
-            //   a) tokio worker threads can run TB async I/O callbacks
-            //   b) Aeron's embedded C driver conductor/receiver threads get
-            //      scheduled (they share the same OS process)
-            //
-            // 64 spins ≈ ~100–200 ns at 3 GHz — negligible throughput cost
-            // but sufficient to un-starve the TB callback path.
+            // Adaptive idle: spin_loop for SPIN_BEFORE_YIELD iters, then yield.
             idle_spins = idle_spins.wrapping_add(1);
             if idle_spins & (SPIN_BEFORE_YIELD - 1) == 0 {
                 std::thread::yield_now();
@@ -365,6 +382,15 @@ fn aeron_serve_blocking(
             }
         } else {
             idle_spins = 0;
+        }
+
+        // Serve-thread diagnostics every 5 s — always visible regardless of
+        // tracing log level (bench binary sets ERROR, suppressing warn!/info!).
+        if last_diag.elapsed().as_secs() >= 5 {
+            let pending_n = pending.len();
+            let offer_fail = offer_failures_metric.load(Ordering::Relaxed);
+            println!("[serve-diag] pending={pending_n} offer_fail={offer_fail}");
+            last_diag = Instant::now();
         }
     }
 
@@ -383,57 +409,73 @@ fn aeron_serve_blocking(
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Maximum results drained from `pending` in a single `drain_ready_results`
-/// call. Prevents the serve thread from stalling for a full batch completion
-/// (~8,190 DashMap::remove × ~100 ns = ~820 µs) and starving the Aeron poll.
-/// Remaining results are picked up immediately on the next loop iteration.
+/// call. Limits per-call reply time to <= 512 x ~100 ns = ~51 us.
 const MAX_DRAIN_PER_CALL: usize = 512;
 
-/// Drains completed TB results from the front of `pending` and sends replies.
+/// Maximum consecutive non-ready entries to scan before giving up.
 ///
-/// # Why VecDeque + front-check?
+/// Allows the drain to skip an entire stalled batch and still drain results
+/// from later batches -- fixing head-of-line blocking when out-of-order
+/// completion occurs (mock/test clients using tokio::sleep).
+/// Cost when blocked: 8192 x ~100 ns DashMap lookup = ~820 us worst case.
+const MAX_PENDING_SCAN: usize = 8_192;
+
+/// Drains completed results from `pending` and sends Aeron replies.
 ///
-/// The TB Zig client delivers batch completions for a single connection in
-/// submission order. `LedgerHandler` caps concurrent in-flight tasks at
-/// `MAX_CONCURRENT_BATCHES` (backpressure spin), so batch N+1 cannot start
-/// until a slot is free — meaning DashMap entries for batch N are inserted
-/// before batch N+1’s. Front-check drains in order without touching the rest.
+/// # Out-of-order completion fix
 ///
-/// - Front ready   → pop_front + reply + advance (O(1) per result)
-/// - Front not yet → break (O(1) miss; avoids wasted scan)
+/// The previous VecDeque front-check broke immediately when the front entry
+/// was not yet in the DashMap, even if later entries were ready. This caused
+/// head-of-line blocking when concurrent tokio tasks (mock client, or real TB
+/// under load) completed batches out of submission order:
 ///
-/// Returns the number of results drained. Callers use this to avoid yielding
-/// when useful work was done.
+/// - Batch 2 completes first: 8,190 results inserted in DashMap.
+/// - Drain sees front = seq from batch 1 (not ready): break immediately.
+/// - Bench client window fills up, nothing drains: TPS decays to 0.
+///
+/// Fix: scan forward through `pending` using `swap_remove` (O(1) middle
+/// removal) and skip non-ready entries up to MAX_PENDING_SCAN consecutive
+/// misses. Real TB (single TCP, in-order) always hits at index 0 -- O(1).
 #[inline(always)]
 fn drain_ready_results(
-    pending: &mut VecDeque<(i64, u64)>,
+    pending: &mut Vec<(i64, u64)>,
     results: &Arc<DashMap<i64, TransactionResult>>,
     pub_: &AeronPublication,
     max_drain: usize,
+    offer_failures: &AtomicU64,
 ) -> usize {
     let mut drained = 0;
-    while drained < max_drain {
-        if let Some(&(seq, req_id_u64)) = pending.front() {
-            if let Some((_, result)) = results.remove(&seq) {
-                pending.pop_front();
-                // String allocation happens only here, at reply time — not
-                // during the in-flight window (u64 lives entirely on stack).
-                let req_id_str = TransactionId::from_u64(req_id_u64).to_string();
-                let resp = build_response(&req_id_str, result);
-                if let Ok(bytes) = serialize_response(&resp) {
-                    let _ = pub_.offer(&bytes);
-                }
-                drained += 1;
-            } else {
-                // Front not ready — rest of queue guaranteed not ready.
-                break;
+    let mut i = 0;
+    let mut consecutive_miss: usize = 0;
+    while i < pending.len() && drained < max_drain {
+        let (seq, req_id_u64) = pending[i];
+        if let Some((_, result)) = results.remove(&seq) {
+            // O(1): swap last element into position i, pop last.
+            let last = pending.len() - 1;
+            if i != last {
+                pending[i] = pending[last];
             }
+            pending.pop();
+            consecutive_miss = 0;
+            // Don't increment i -- the swapped-in element at i needs checking.
+            let req_id_str = TransactionId::from_u64(req_id_u64).to_string();
+            let resp = build_response(&req_id_str, result);
+            if let Ok(bytes) = serialize_response(&resp) {
+                if pub_.offer(&bytes).is_err() {
+                    offer_failures.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            drained += 1;
         } else {
-            break; // pending is empty
+            i += 1;
+            consecutive_miss += 1;
+            if consecutive_miss >= MAX_PENDING_SCAN {
+                break; // nothing in this window is ready -- stop scanning
+            }
         }
     }
     drained
 }
-
 /// Parses a [`TransactionRequest`] into a [`TransactionEvent`].
 fn build_event(req: TransactionRequest) -> BlazerResult<TransactionEvent> {
     let debit_account_id = AccountId::from_str(&req.debit_account_id).map_err(|_| {
