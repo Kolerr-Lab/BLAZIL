@@ -126,7 +126,7 @@ impl<C: LedgerClient> LedgerHandler<C> {
     }
 }
 
-impl<C: LedgerClient + 'static> EventHandler for LedgerHandler<C> {
+impl<C: LedgerClient + Send + Sync + 'static> EventHandler for LedgerHandler<C> {
     fn on_event(&mut self, event: &mut TransactionEvent, sequence: i64, end_of_batch: bool) {
         // Rule 1: skip if already rejected.
         if self.results.contains_key(&sequence) {
@@ -181,8 +181,11 @@ impl<C: LedgerClient + 'static> EventHandler for LedgerHandler<C> {
             .map(|started| started.elapsed() >= Duration::from_micros(BATCH_FLUSH_TIMEOUT_US))
             .unwrap_or(false);
 
+        // NOTE: flush when adding *this* transfer would reach the limit (+1 for current).
+        // Without the -1 the batch would include MAX_TB_BATCH_SIZE deferred + 1 current =
+        // MAX_TB_BATCH_SIZE+1 which exceeds TigerBeetle’s hard cap of 8,190 per request.
         let should_flush = end_of_batch
-            || self.deferred_transfers.len() >= MAX_TB_BATCH_SIZE
+            || self.deferred_transfers.len() + 1 >= MAX_TB_BATCH_SIZE
             || batch_age_exceeded;
 
         if !should_flush {
@@ -225,78 +228,74 @@ impl<C: LedgerClient + 'static> EventHandler for LedgerHandler<C> {
 
         debug!(
             sequence,
-            batch_size, batch_age_ms, end_of_batch, "LedgerHandler: FLUSHING BATCH to TigerBeetle"
+            batch_size, batch_age_ms, end_of_batch, "LedgerHandler: spawning async TB batch"
         );
 
-        // Single batched call to TigerBeetle.
-        let tb_t0 = Instant::now();
-        let results = self
-            .runtime
-            .block_on(client.create_transfers_batch(all_transfers));
-        let tb_elapsed_ms = tb_t0.elapsed().as_millis();
+        // ── Non-blocking TB dispatch ────────────────────────────────────────────
+        //
+        // CRITICAL CHANGE: we spawn an async task instead of blocking via
+        // block_on(). The runner thread returns IMMEDIATELY from on_event,
+        // advances the ring-buffer gating sequence, and begins accumulating
+        // the NEXT batch while TigerBeetle is processing the current one.
+        //
+        // This pipelines consecutive TB batches: batch N+1 is in the TB TCP
+        // send buffer before batch N VSR consensus completes. Effective TPS
+        // is then (N_concurrent_batches × batch_size) / TB_RTT instead of
+        // batch_size / TB_RTT, keeping throughput flat even as TB_RTT grows.
+        //
+        // The serve thread’s VecDeque front-check is still correct because the
+        // Zig TB client processes requests for a single connection in submission
+        // order — batch 0 results always arrive before batch 1 results.
+        let results_map = Arc::clone(&self.results);
+        let current_seq = sequence;
+        self.runtime.spawn(async move {
+            let tb_t0 = Instant::now();
+            let tb_results = client.create_transfers_batch(all_transfers).await;
+            let tb_elapsed_ms = tb_t0.elapsed().as_millis();
 
-        if tb_elapsed_ms > 5 {
-            warn!(
-                batch_size,
-                tb_elapsed_ms, "LedgerHandler: SLOW batch write (>5 ms)"
-            );
-        } else {
-            info!(batch_size, tb_elapsed_ms, "LedgerHandler: batch committed");
-        }
+            if tb_elapsed_ms > 5 {
+                warn!(
+                    batch_size,
+                    tb_elapsed_ms, "LedgerHandler: SLOW batch write (>5 ms)"
+                );
+            } else {
+                info!(batch_size, tb_elapsed_ms, "LedgerHandler: batch committed");
+            }
 
-        // Write results to external map for deferred events.
-        for (i, seq) in prev_sequences.iter().enumerate() {
-            let result = &results[i];
-            let tr = match result {
+            // Write deferred sequences’ results to the shared map.
+            for (i, seq) in prev_sequences.iter().enumerate() {
+                let tr = match &tb_results[i] {
+                    Ok(transfer_id) => {
+                        debug!(sequence = seq, %transfer_id, "LedgerHandler: deferred committed");
+                        TransactionResult::Committed {
+                            transfer_id: *transfer_id,
+                            timestamp: Timestamp::now(),
+                        }
+                    }
+                    Err(e) => {
+                        debug!(sequence = seq, error = %e, "LedgerHandler: deferred rejected");
+                        TransactionResult::Rejected { reason: e.clone() }
+                    }
+                };
+                results_map.insert(*seq, tr);
+            }
+
+            // Write current event’s result.
+            let tr = match &tb_results[prev_n] {
                 Ok(transfer_id) => {
-                    debug!(
-                        sequence = seq,
-                        %transfer_id,
-                        "LedgerHandler: deferred event committed"
-                    );
+                    debug!(sequence = current_seq, %transfer_id, "LedgerHandler: current committed");
                     TransactionResult::Committed {
                         transfer_id: *transfer_id,
                         timestamp: Timestamp::now(),
                     }
                 }
                 Err(e) => {
-                    debug!(
-                        sequence = seq,
-                        error = %e,
-                        "LedgerHandler: deferred event rejected"
-                    );
+                    debug!(sequence = current_seq, error = %e, "LedgerHandler: current rejected");
                     TransactionResult::Rejected { reason: e.clone() }
                 }
             };
-
-            self.results.insert(*seq, tr);
-        }
-
-        // Write current event's result to external map.
-        let current_result = &results[prev_n];
-        let tr = match current_result {
-            Ok(transfer_id) => {
-                debug!(
-                    sequence,
-                    %transfer_id,
-                    "LedgerHandler: current event committed"
-                );
-                TransactionResult::Committed {
-                    transfer_id: *transfer_id,
-                    timestamp: Timestamp::now(),
-                }
-            }
-            Err(e) => {
-                debug!(
-                    sequence,
-                    error = %e,
-                    "LedgerHandler: current event rejected"
-                );
-                TransactionResult::Rejected { reason: e.clone() }
-            }
-        };
-
-        self.results.insert(sequence, tr);
+            results_map.insert(current_seq, tr);
+        });
     }
 
     fn clone_handler(&self) -> Box<dyn EventHandler> {
