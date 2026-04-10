@@ -45,7 +45,10 @@ pub mod inner {
     const BENCH_AERON_DIR: &str = "/tmp/aeron-blazil-bench";
     // True IPC (shared-memory log buffer via embedded driver) — eliminates
     // the UDP loopback network stack entirely for maximum throughput.
-    const BENCH_CHANNEL: &str = "aeron:ipc";
+    // term-length=67108864: 64 MB IPC log buffer (4× default 16 MB) prevents
+    // Aeron back-pressure / Status Message storms when the window is full
+    // and TB batch RTT is high.
+    const BENCH_CHANNEL: &str = "aeron:ipc?term-length=67108864";
     const REG_TIMEOUT: Duration = Duration::from_secs(5);
     // Window size: tuned per backend.
     // InMemory: 2048 — saturates the pipeline at ~1M TPS.
@@ -329,8 +332,8 @@ pub mod inner {
                     }
                 }
                 if count == 0 {
-                    // Heartbeat every 5s: shows if bench is stuck and where.
-                    if last_heartbeat.elapsed().as_secs() >= 5 {
+                    // Heartbeat every 10s: shows if bench is stuck and where.
+                    if last_heartbeat.elapsed().as_secs() >= 10 {
                         let elapsed = wall_start.elapsed().as_secs_f64();
                         let tps = if elapsed > 0.0 { received as f64 / elapsed } else { 0.0 };
                         println!(

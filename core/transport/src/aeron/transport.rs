@@ -34,6 +34,7 @@
 //! The [`aeron_serve_blocking`] function enforces this ordering via explicit
 //! `drop` calls before the driver is dropped.
 
+use std::collections::VecDeque;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -82,16 +83,18 @@ const PIPELINE_DEPTH: usize = 2048;
 /// After this many consecutive empty Aeron polls, call yield_now() once
 /// to let tokio worker threads (TB async callbacks) and Aeron C driver
 /// background threads get scheduled. Must be a power of two.
-const SPIN_BEFORE_YIELD: u32 = 64;
+/// 512 spins ≈ ~1–2 µs on a 3 GHz core — enough to un-starve TB callbacks
+/// without flooding the OS scheduler with unnecessary context switches.
+const SPIN_BEFORE_YIELD: u32 = 512;
 
 /// Timeout waiting for publication / subscription async registration.
 const REGISTRATION_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Maximum number of fragments processed per `poll_fragments` call.
-/// Matches WINDOW_SIZE_TB=256 so the serve loop can absorb a full bench
-/// window in one shot, allowing LedgerHandler to build a maximum-size
-/// TigerBeetle batch (up to 8,190 transfers) per round trip.
-const FRAGMENT_LIMIT: usize = 256;
+/// Must be ≥ WINDOW_SIZE_TB (1024) so the serve loop can absorb the full
+/// in-flight window in a single poll, allowing LedgerHandler to build a
+/// maximum-size TigerBeetle batch (up to 8,190 transfers) per round trip.
+const FRAGMENT_LIMIT: usize = 1024;
 
 // ── AeronTransportServer ──────────────────────────────────────────────────────
 
@@ -232,9 +235,15 @@ fn aeron_serve_blocking(
     let mut frags: Vec<Vec<u8>> = Vec::with_capacity(FRAGMENT_LIMIT);
     // Sliding window: (ring-buffer seq, request_id as u64) per in-flight event.
     // u64 is 8 bytes — Copy, stack-sized, zero heap allocation for the window.
-    // swap_remove gives O(1) removal; reply order does not matter since every
-    // TransactionResponse carries its own request_id.
-    let mut pending: Vec<(i64, u64)> = Vec::with_capacity(PIPELINE_DEPTH);
+    //
+    // VecDeque maintains strict ring-buffer insertion order. Since LedgerHandler
+    // processes events sequentially (one `block_on` batch at a time), results
+    // become available in monotonically increasing sequence order. Checking only
+    // the FRONT of the deque is therefore O(1) per drain call when TB has not
+    // yet responded — versus the previous Vec approach which did a full O(n)
+    // DashMap scan every iteration (up to 1024 misses × ~50 ns = ~51 µs wasted
+    // overhead per loop cycle, causing the observed TPS collapse under load).
+    let mut pending: VecDeque<(i64, u64)> = VecDeque::with_capacity(PIPELINE_DEPTH);
     // Idle spin counter for the adaptive yield strategy.
     let mut idle_spins: u32 = 0;
 
@@ -292,7 +301,7 @@ fn aeron_serve_blocking(
             // Single producer guarantee: capacity verified above — cannot
             // return RingBufferFull here.
             match pipeline.publish_event(event) {
-                Ok(seq) => pending.push((seq, req_id_u64)),
+                Ok(seq) => pending.push_back((seq, req_id_u64)),
                 Err(e) => {
                     let req_id_str = TransactionId::from_u64(req_id_u64).to_string();
                     error!(request_id = %req_id_str, error = %e, "Aeron: publish_event failed");
@@ -343,27 +352,37 @@ fn aeron_serve_blocking(
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Drains completed TB results from `pending` and sends replies.
+/// Drains completed TB results from the front of `pending` and sends replies.
 ///
-/// Scans the full `pending` slice each call; uses `swap_remove` for O(1)
-/// removal (last element fills the gap — reply order does not matter since
-/// every response carries its own `request_id`).
+/// # Why VecDeque + front-check?
+///
+/// LedgerHandler processes events in ring-buffer sequence order and issues one
+/// `block_on(create_transfers_batch)` at a time. This means results become
+/// available in strictly increasing sequence order: all seqs in batch N are
+/// inserted into the DashMap before any seq in batch N+1.
+///
+/// Maintaining `pending` in insertion (= ring-buffer sequence) order via a
+/// VecDeque lets us check only the FRONT element each call:
+/// - Front ready   → pop_front + reply, check new front (O(1) per result)
+/// - Front not yet → break immediately (O(1) miss vs previous O(n) full scan)
+///
+/// The old Vec + swap_remove approach did a full O(n) DashMap scan every
+/// iteration. With 1024 in-flight items and ~50 ns per DashMap miss, each
+/// drain call burned ~51 µs of wasted work while TB was processing a batch —
+/// exactly the feedback loop that caused TPS to collapse under sustained load.
 ///
 /// Called both in the main serve loop and inside the ring-buffer-full
-/// backpressure spin so that TB batch completions are always forwarded to
-/// the client even when the ring buffer is temporarily saturated.
+/// backpressure spin so that completed results are always forwarded to the
+/// client even when the ring buffer is temporarily saturated.
 #[inline(always)]
 fn drain_ready_results(
-    pending: &mut Vec<(i64, u64)>,
+    pending: &mut VecDeque<(i64, u64)>,
     results: &Arc<DashMap<i64, TransactionResult>>,
     pub_: &AeronPublication,
 ) {
-    let mut i = 0;
-    while i < pending.len() {
-        let seq = pending[i].0;
+    while let Some(&(seq, req_id_u64)) = pending.front() {
         if let Some((_, result)) = results.remove(&seq) {
-            // O(1): swap last element into slot i, decrement len.
-            let (_, req_id_u64) = pending.swap_remove(i);
+            pending.pop_front();
             // String allocation happens only here, at reply time — not during
             // the in-flight window. The u64 lived entirely on the stack.
             let req_id_str = TransactionId::from_u64(req_id_u64).to_string();
@@ -372,9 +391,9 @@ fn drain_ready_results(
                 // AeronPublication::offer already spins on back-pressure.
                 let _ = pub_.offer(&bytes);
             }
-            // Do NOT increment i — the new occupant of slot i needs checking.
         } else {
-            i += 1;
+            // Front not ready — rest of queue is guaranteed not ready either.
+            break;
         }
     }
 }
