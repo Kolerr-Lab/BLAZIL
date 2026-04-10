@@ -34,6 +34,7 @@
 //! The [`aeron_serve_blocking`] function enforces this ordering via explicit
 //! `drop` calls before the driver is dropped.
 
+use std::collections::VecDeque;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -119,6 +120,13 @@ pub struct AeronTransportServer {
     pending_len: Arc<AtomicUsize>,
     /// Cumulative Aeron publication offer() failures (back-pressure spills).
     offer_failures: Arc<AtomicU64>,
+    /// Sequence-based reorder buffer: one AtomicBool per ring-buffer slot.
+    ///
+    /// LedgerHandler sets `flags[seq % cap] = true` (Release) after writing
+    /// the result to the DashMap. The drain checks this flag (Acquire) instead
+    /// of polling the DashMap, giving O(1) cache-friendly ready detection.
+    /// Size must equal the ring buffer capacity (power of 2).
+    ready_flags: Option<Arc<Vec<AtomicBool>>>,
 }
 
 impl AeronTransportServer {
@@ -135,7 +143,18 @@ impl AeronTransportServer {
             shutdown: Arc::new(AtomicBool::new(false)),
             pending_len: Arc::new(AtomicUsize::new(0)),
             offer_failures: Arc::new(AtomicU64::new(0)),
+            ready_flags: None,
         }
+    }
+
+    /// Attach a sequence reorder buffer.
+    ///
+    /// When set, the drain path uses O(1) AtomicBool flag-checks instead of
+    /// DashMap polling, and VecDeque ordering is restored (in-order drain).
+    /// Must be the same `Arc<Vec<AtomicBool>>` passed to `LedgerHandler::with_reorder_flags`.
+    pub fn with_reorder_flags(mut self, flags: Arc<Vec<AtomicBool>>) -> Self {
+        self.ready_flags = Some(flags);
+        self
     }
 
     /// Current pending-window size (requests in-flight, awaiting TB results).
@@ -162,6 +181,7 @@ impl TransportServer for AeronTransportServer {
         let shutdown = Arc::clone(&self.shutdown);
         let pending_len = Arc::clone(&self.pending_len);
         let offer_failures = Arc::clone(&self.offer_failures);
+        let ready_flags = self.ready_flags.clone();
 
         tokio::task::spawn_blocking(move || {
             aeron_serve_blocking(
@@ -171,6 +191,7 @@ impl TransportServer for AeronTransportServer {
                 shutdown,
                 pending_len,
                 offer_failures,
+                ready_flags,
             )
         })
         .await
@@ -202,6 +223,7 @@ fn aeron_serve_blocking(
     shutdown: Arc<AtomicBool>,
     pending_len_metric: Arc<AtomicUsize>,
     offer_failures_metric: Arc<AtomicU64>,
+    ready_flags: Option<Arc<Vec<AtomicBool>>>,
 ) -> BlazerResult<()> {
     // ── 1. Embedded C Media Driver ────────────────────────────────────────────
     let driver = EmbeddedAeronDriver::new(Some(&aeron_dir));
@@ -278,11 +300,14 @@ fn aeron_serve_blocking(
     // Sliding window: (ring-buffer seq, request_id as u64) per in-flight event.
     // u64 is 8 bytes — Copy, stack-sized, zero heap allocation per slot.
     //
-    // Uses Vec + swap_remove for O(1) middle removal. drain_ready_results scans
-    // forward so out-of-order completions (mock clients, parallel tokio tasks)
-    // do not cause head-of-line blocking. Real TB delivers in submission order
-    // (single TCP connection) — in that case the first hit is always index 0.
-    let mut pending: Vec<(i64, u64)> = Vec::with_capacity(PIPELINE_DEPTH);
+    // VecDeque maintains insertion order (ring-buffer submission order).
+    // When ready_flags is Some, drain checks AtomicBool[seq%cap] instead of
+    // polling the DashMap — O(1) cache-line read, Acquire semantics guarantee
+    // the result is visible. When flags are not provided, falls back to direct
+    // DashMap front-check (fine for in-order TB delivery).
+    let mut pending: VecDeque<(i64, u64)> = VecDeque::with_capacity(PIPELINE_DEPTH);
+    // Borrow the ready-flags slice once for the loop lifetime.
+    let flags_ref: Option<&[AtomicBool]> = ready_flags.as_deref().map(|v| v.as_slice());
     // Idle spin counter for the adaptive yield strategy.
     let mut idle_spins: u32 = 0;
     // Periodic serve-thread diagnostics (always visible; bench sets log=ERROR).
@@ -293,6 +318,7 @@ fn aeron_serve_blocking(
         drain_ready_results(
             &mut pending,
             pipeline.results(),
+            flags_ref,
             &pub_,
             MAX_DRAIN_PER_CALL,
             &offer_failures_metric,
@@ -347,6 +373,7 @@ fn aeron_serve_blocking(
                 let n = drain_ready_results(
                     &mut pending,
                     pipeline.results(),
+                    flags_ref,
                     &pub_,
                     MAX_DRAIN_PER_CALL,
                     &offer_failures_metric,
@@ -360,7 +387,7 @@ fn aeron_serve_blocking(
             // Single producer guarantee: capacity verified above — cannot
             // return RingBufferFull here.
             match pipeline.publish_event(event) {
-                Ok(seq) => pending.push((seq, req_id_u64)),
+                Ok(seq) => pending.push_back((seq, req_id_u64)),
                 Err(e) => {
                     let req_id_str = TransactionId::from_u64(req_id_u64).to_string();
                     error!(request_id = %req_id_str, error = %e, "Aeron: publish_event failed");
@@ -408,69 +435,89 @@ fn aeron_serve_blocking(
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Maximum results drained from `pending` in a single `drain_ready_results`
-/// call. Limits per-call reply time to <= 512 x ~100 ns = ~51 us.
+/// Maximum results drained per `drain_ready_results` call.
+/// Prevents the serve thread stalling > 512 * reply_overhead per iteration.
 const MAX_DRAIN_PER_CALL: usize = 512;
 
-/// Maximum consecutive non-ready entries to scan before giving up.
+/// Drains completed results from `pending` and sends Aeron reply messages.
 ///
-/// Allows the drain to skip an entire stalled batch and still drain results
-/// from later batches -- fixing head-of-line blocking when out-of-order
-/// completion occurs (mock/test clients using tokio::sleep).
-/// Cost when blocked: 8192 x ~100 ns DashMap lookup = ~820 us worst case.
-const MAX_PENDING_SCAN: usize = 8_192;
-
-/// Drains completed results from `pending` and sends Aeron replies.
+/// # Two modes
 ///
-/// # Out-of-order completion fix
+/// ## Reorder-buffer mode (`ready_flags` = Some)
 ///
-/// The previous VecDeque front-check broke immediately when the front entry
-/// was not yet in the DashMap, even if later entries were ready. This caused
-/// head-of-line blocking when concurrent tokio tasks (mock client, or real TB
-/// under load) completed batches out of submission order:
+/// Uses a VecDeque (insertion-ordered) + AtomicBool flag array.
 ///
-/// - Batch 2 completes first: 8,190 results inserted in DashMap.
-/// - Drain sees front = seq from batch 1 (not ready): break immediately.
-/// - Bench client window fills up, nothing drains: TPS decays to 0.
+/// LedgerHandler stores each result in the DashMap then does:
+///   `flags[seq % cap].store(true, Release)`
 ///
-/// Fix: scan forward through `pending` using `swap_remove` (O(1) middle
-/// removal) and skip non-ready entries up to MAX_PENDING_SCAN consecutive
-/// misses. Real TB (single TCP, in-order) always hits at index 0 -- O(1).
+/// Here we check:
+///   `flags[front_seq % cap].load(Acquire)` — O(1), cache-line aligned.
+///
+/// The Acquire/Release pair guarantees the DashMap insert is visible.
+/// If the front is not flagged, we break immediately (head-of-line wait).
+/// When the flag IS set, Result is guaranteed present — no DashMap miss.
+///
+/// ## Fallback mode (`ready_flags` = None)
+///
+/// Plain DashMap front-check on VecDeque front. Correct for real TB
+/// (in-order single-TCP delivery). May stall on out-of-order completions.
 #[inline(always)]
 fn drain_ready_results(
-    pending: &mut Vec<(i64, u64)>,
+    pending: &mut VecDeque<(i64, u64)>,
     results: &Arc<DashMap<i64, TransactionResult>>,
+    ready_flags: Option<&[AtomicBool]>,
     pub_: &AeronPublication,
     max_drain: usize,
     offer_failures: &AtomicU64,
 ) -> usize {
     let mut drained = 0;
-    let mut i = 0;
-    let mut consecutive_miss: usize = 0;
-    while i < pending.len() && drained < max_drain {
-        let (seq, req_id_u64) = pending[i];
-        if let Some((_, result)) = results.remove(&seq) {
-            // O(1): swap last element into position i, pop last.
-            let last = pending.len() - 1;
-            if i != last {
-                pending[i] = pending[last];
+
+    if let Some(flags) = ready_flags {
+        // Reorder-buffer path: O(1) per entry via AtomicBool Acquire check.
+        let mask = flags.len() - 1; // flags.len() is power of 2
+        while drained < max_drain {
+            let &(seq, req_id_u64) = match pending.front() {
+                Some(v) => v,
+                None => break,
+            };
+            let idx = (seq as usize) & mask;
+            // Acquire: all writes done before the Release store are visible.
+            if !flags[idx].load(Ordering::Acquire) {
+                break; // front result not yet written -- head-of-line wait
             }
-            pending.pop();
-            consecutive_miss = 0;
-            // Don't increment i -- the swapped-in element at i needs checking.
-            let req_id_str = TransactionId::from_u64(req_id_u64).to_string();
-            let resp = build_response(&req_id_str, result);
-            if let Ok(bytes) = serialize_response(&resp) {
-                if pub_.offer(&bytes).is_err() {
-                    offer_failures.fetch_add(1, Ordering::Relaxed);
+            pending.pop_front();
+            // Clear flag for slot reuse. Relaxed: no subsequent dependent read.
+            flags[idx].store(false, Ordering::Relaxed);
+            if let Some((_, result)) = results.remove(&seq) {
+                let req_id_str = TransactionId::from_u64(req_id_u64).to_string();
+                let resp = build_response(&req_id_str, result);
+                if let Ok(bytes) = serialize_response(&resp) {
+                    if pub_.offer(&bytes).is_err() {
+                        offer_failures.fetch_add(1, Ordering::Relaxed);
+                    }
                 }
             }
             drained += 1;
-        } else {
-            i += 1;
-            consecutive_miss += 1;
-            if consecutive_miss >= MAX_PENDING_SCAN {
-                break; // nothing in this window is ready -- stop scanning
+        }
+    } else {
+        // Fallback: direct DashMap check on front entry.
+        while drained < max_drain {
+            let &(seq, req_id_u64) = match pending.front() {
+                Some(v) => v,
+                None => break,
+            };
+            if let Some((_, result)) = results.remove(&seq) {
+                pending.pop_front();
+                let req_id_str = TransactionId::from_u64(req_id_u64).to_string();
+                let resp = build_response(&req_id_str, result);
+                if let Ok(bytes) = serialize_response(&resp) {
+                    if pub_.offer(&bytes).is_err() {
+                        offer_failures.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+                drained += 1;
+            } else {
+                break;
             }
         }
     }
