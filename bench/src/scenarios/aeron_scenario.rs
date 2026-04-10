@@ -23,7 +23,8 @@ pub mod inner {
     use std::time::{Duration, Instant};
 
     use blazil_common::currency::parse_currency;
-    use blazil_common::ids::{AccountId, LedgerId};
+    use blazil_common::error::BlazerResult;
+    use blazil_common::ids::{AccountId, LedgerId, TransferId};
     use blazil_engine::handlers::ledger::LedgerHandler;
     use blazil_engine::handlers::publish::PublishHandler;
     use blazil_engine::handlers::risk::RiskHandler;
@@ -34,6 +35,7 @@ pub mod inner {
     use blazil_ledger::mock::InMemoryLedgerClient;
     #[cfg(feature = "tigerbeetle-client")]
     use blazil_ledger::tigerbeetle::TigerBeetleClient;
+    use blazil_ledger::transfer::Transfer;
     use blazil_transport::aeron::{
         AeronContext, AeronPublication, AeronSubscription, REQ_STREAM_ID, RSP_STREAM_ID,
     };
@@ -43,6 +45,12 @@ pub mod inner {
 
     use crate::metrics::BenchmarkResult;
 
+    // On Linux, /dev/shm is a tmpfs mounted in RAM — guaranteed zero page-fault
+    // latency for Aeron's shared-memory log buffers. On macOS /dev/shm is absent
+    // so we fall back to /tmp.
+    #[cfg(target_os = "linux")]
+    const BENCH_AERON_DIR: &str = "/dev/shm/aeron-blazil-bench";
+    #[cfg(not(target_os = "linux"))]
     const BENCH_AERON_DIR: &str = "/tmp/aeron-blazil-bench";
     // True IPC (shared-memory log buffer via embedded driver) — eliminates
     // the UDP loopback network stack entirely for maximum throughput.
@@ -66,6 +74,56 @@ pub mod inner {
     const CAPACITY: usize = 131_072;
     // Max spin retries on Aeron offer backpressure before yielding.
     const OFFER_SPIN_RETRIES: usize = 64;
+
+    // ── Isolation-test mock ───────────────────────────────────────────────────
+    // Set BLAZIL_MOCK_DELAY_MS=2 to replace real TigerBeetle with a mock
+    // client that sleeps for `delay_ms` then returns Ok for every transfer.
+    //
+    // Isolation logic:
+    //   TPS FLAT   with mock  → bottleneck is TigerBeetle/Network/DO disk.
+    //   TPS DECAY  with mock  → bottleneck is Rust pipeline / Aeron / memory.
+    struct DelayedMockLedgerClient {
+        inner: InMemoryLedgerClient,
+        delay: Duration,
+    }
+
+    impl DelayedMockLedgerClient {
+        fn new(delay_ms: u64) -> Self {
+            Self {
+                inner: InMemoryLedgerClient::new_unbounded(),
+                delay: Duration::from_millis(delay_ms),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl LedgerClient for DelayedMockLedgerClient {
+        async fn create_account(&self, account: Account) -> BlazerResult<AccountId> {
+            self.inner.create_account(account).await
+        }
+        async fn create_transfer(&self, transfer: Transfer) -> BlazerResult<TransferId> {
+            tokio::time::sleep(self.delay).await;
+            self.inner.create_transfer(transfer).await
+        }
+        async fn get_account(&self, id: &AccountId) -> BlazerResult<Account> {
+            self.inner.get_account(id).await
+        }
+        async fn get_transfer(&self, id: &TransferId) -> BlazerResult<Transfer> {
+            self.inner.get_transfer(id).await
+        }
+        async fn create_transfers_batch(
+            &self,
+            transfers: Vec<Transfer>,
+        ) -> Vec<BlazerResult<TransferId>> {
+            // Simulate a single VSR round-trip latency for the whole batch.
+            tokio::time::sleep(self.delay).await;
+            // Return Ok for every transfer — mock never rejects.
+            transfers.into_iter().map(|t| Ok(*t.id())).collect()
+        }
+        async fn get_account_balances(&self, ids: &[AccountId]) -> BlazerResult<Vec<Account>> {
+            self.inner.get_account_balances(ids).await
+        }
+    }
 
     pub async fn run(events: u64, payload_size: usize) -> BenchmarkResult {
         let usd = parse_currency("USD").expect("USD");
@@ -134,6 +192,27 @@ pub mod inner {
             }
             #[cfg(not(feature = "tigerbeetle-client"))]
             let _ = addr;
+        }
+
+        // ── Isolation test: mock ledger with configurable delay ───────────
+        if let Ok(delay_str) = std::env::var("BLAZIL_MOCK_DELAY_MS") {
+            let delay_ms: u64 = delay_str.parse().unwrap_or(2);
+            println!("Ledger      : [MOCK] DelayedMock @ {delay_ms}ms (isolation test)");
+            println!(
+                "Window size : {} (TB-mode window — same pipeline pressure)",
+                WINDOW_SIZE_TB
+            );
+            println!("BLAZIL_MOCK_DELAY_MS={delay_ms}: if TPS is flat → bottleneck is TB/DO.");
+            println!("                              if TPS decays → bottleneck is Rust/Aeron.");
+            return run_with_ledger(
+                events,
+                payload_size,
+                WINDOW_SIZE_TB,
+                usd,
+                ledger_rt,
+                DelayedMockLedgerClient::new(delay_ms),
+            )
+            .await;
         }
 
         println!("Ledger      : InMemory (set BLAZIL_TB_ADDRESS for real TB)");
