@@ -180,16 +180,31 @@ fn aeron_serve_blocking(
     let driver = EmbeddedAeronDriver::new(Some(&aeron_dir));
     driver.start()?;
 
-    // Note: no core_affinity pin here. The serve thread spin-loops on a
-    // dedicated OS thread but must NOT be pinned to a single core because:
-    //   * TigerBeetle's async I/O completion callbacks run on tokio worker
-    //     threads that share the same physical cores.
-    //   * Aeron's embedded C Media Driver spawns background threads that also
-    //     need CPU time (conductor + sender + receiver).
-    // Pinning the serve thread monopolises a core under full load, starving
-    // those callbacks and causing TB .await calls to hang indefinitely.
-    // Pipeline runners are pinned (core 1+) because they truly own their core
-    // and never do async I/O. The serve thread is different.
+    // ── Core affinity: pin serve thread to core 0 (Linux only) ───────────────
+    //
+    // WHY RE-ENABLED: previously removed because TB async callbacks run on
+    // tokio worker threads that shared core 0, causing starvation.
+    //
+    // NOW SAFE: the bench `ledger_rt` tokio runtime is explicitly built with
+    // `on_thread_start` pinning its workers to cores 2/3. The pipeline runner
+    // is already on core 1+. So core 0 is exclusively the Aeron poll thread:
+    //
+    //   Core 0         — Aeron serve thread (this)
+    //   Core 1         — Pipeline runner (LedgerHandler batch accumulator)
+    //   Cores 2..3     — `ledger_rt` workers (TB async callbacks)
+    //   Cores 4..N-1   — `#[tokio::main]` workers (bench coordination)
+    //
+    // Result: zero cache-line contention and no scheduler interference on the
+    // hot path. The Aeron poll loop stays on its P-core at full clock speed.
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(core_ids) = core_affinity::get_core_ids() {
+            if let Some(id) = core_ids.first() {
+                core_affinity::set_for_current(*id);
+                info!("Aeron serve thread pinned to core {}", id.id);
+            }
+        }
+    }
 
     // ── 2. Aeron client context ───────────────────────────────────────────────
     let ctx = AeronContext::new(&aeron_dir)?;

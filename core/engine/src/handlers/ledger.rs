@@ -41,6 +41,7 @@
 //! to 8,190 transfers).  Values > 5 ms emit a `WARN`.
 
 use std::mem;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -87,6 +88,11 @@ pub struct LedgerHandler<C: LedgerClient> {
     /// Metadata for deferred events: sequence numbers only.
     /// Results are written to the external results map after batch flush.
     deferred_sequences: Vec<i64>,
+    /// Count of currently in-flight TB `runtime.spawn()` tasks.
+    /// Incremented just before spawn, decremented inside the async task when
+    /// it completes. Exposed via `active_tasks()` for external monitoring.
+    /// A persistently growing value means TB is building backpressure on disk.
+    active_tasks: Arc<AtomicUsize>,
 }
 
 impl<C: LedgerClient> Clone for LedgerHandler<C> {
@@ -99,6 +105,8 @@ impl<C: LedgerClient> Clone for LedgerHandler<C> {
             batch_started_at: None,
             deferred_transfers: Vec::new(),
             deferred_sequences: Vec::new(),
+            // Share the same counter — all shards feed into one number.
+            active_tasks: Arc::clone(&self.active_tasks),
         }
     }
 }
@@ -122,7 +130,25 @@ impl<C: LedgerClient> LedgerHandler<C> {
             results,
             deferred_transfers: Vec::with_capacity(MAX_TB_BATCH_SIZE),
             deferred_sequences: Vec::with_capacity(MAX_TB_BATCH_SIZE),
+            active_tasks: Arc::new(AtomicUsize::new(0)),
         }
+    }
+
+    /// Returns a reference to the shared active-task counter.
+    ///
+    /// Clone the `Arc` before calling `PipelineBuilder::add_handler` so that
+    /// an external monitor (e.g. the bench client drain loop) can observe how
+    /// many TigerBeetle batches are currently in-flight.
+    ///
+    /// ```rust
+    /// let handler = LedgerHandler::new(client, rt, results);
+    /// let active = Arc::clone(handler.active_tasks());
+    /// builder = builder.add_handler(handler);
+    /// // ... later, in a heartbeat:
+    /// println!("active_tb_tasks={}", active.load(std::sync::atomic::Ordering::Relaxed));
+    /// ```
+    pub fn active_tasks(&self) -> &Arc<AtomicUsize> {
+        &self.active_tasks
     }
 }
 
@@ -248,10 +274,16 @@ impl<C: LedgerClient + Send + Sync + 'static> EventHandler for LedgerHandler<C> 
         // order — batch 0 results always arrive before batch 1 results.
         let results_map = Arc::clone(&self.results);
         let current_seq = sequence;
+        // Track in-flight count. Increment BEFORE spawn so the monitoring
+        // counter is never transiently zero between dispatched batches.
+        let active_tasks = Arc::clone(&self.active_tasks);
+        active_tasks.fetch_add(1, Ordering::Relaxed);
         self.runtime.spawn(async move {
             let tb_t0 = Instant::now();
             let tb_results = client.create_transfers_batch(all_transfers).await;
             let tb_elapsed_ms = tb_t0.elapsed().as_millis();
+            // Decrement after TB response arrives.
+            active_tasks.fetch_sub(1, Ordering::Relaxed);
 
             if tb_elapsed_ms > 5 {
                 warn!(

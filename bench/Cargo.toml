@@ -23,6 +23,7 @@ blazil-common    = { path = "../core/common" }
 blazil-engine    = { path = "../core/engine" }
 blazil-ledger    = { path = "../core/ledger" }
 blazil-transport = { path = "../core/transport" }
+core_affinity    = "0.8"
 rmp-serde        = "1"
 tokio            = { workspace = true }
 tracing          = { workspace = true }

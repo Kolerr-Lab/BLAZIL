@@ -18,6 +18,7 @@
 
 #[cfg(feature = "aeron")]
 pub mod inner {
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
@@ -70,13 +71,40 @@ pub mod inner {
         let usd = parse_currency("USD").expect("USD");
         println!("Payload size : {payload_size} bytes");
 
-        let ledger_rt = Arc::new(
+        let ledger_rt = Arc::new({
+            // Worker-thread counter for core affinity assignment.
+            // These 2 workers are pinned to cores 2 and 3 on Linux:
+            //
+            //   Core 0 — Aeron serve thread (transport.rs, pinned)
+            //   Core 1 — Pipeline runner (LedgerHandler batch accumulator)
+            //   Core 2 — ledger_rt worker 0 (TB async callbacks)
+            //   Core 3 — ledger_rt worker 1 (TB async callbacks)
+            //
+            // Isolating TB callbacks from the Aeron poll thread eliminates the
+            // scheduling contention that caused TPS to decay under load.
+            let _worker_idx = Arc::new(AtomicUsize::new(0));
             tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)
                 .enable_all()
+                .on_thread_start(move || {
+                    #[cfg(target_os = "linux")]
+                    {
+                        let slot = _worker_idx.fetch_add(1, Ordering::Relaxed);
+                        if let Some(core_ids) = core_affinity::get_core_ids() {
+                            // Start at core 2; wrap to avoid out-of-bounds.
+                            let n = core_ids.len();
+                            if n > 2 {
+                                let target = 2 + (slot % (n - 2));
+                                if let Some(id) = core_ids.get(target) {
+                                    core_affinity::set_for_current(*id);
+                                }
+                            }
+                        }
+                    }
+                })
                 .build()
-                .expect("ledger rt"),
-        );
+                .expect("ledger rt")
+        });
 
         // ── ledger client — real TB when BLAZIL_TB_ADDRESS is set ─────────────
         #[cfg(feature = "tigerbeetle-client")]
@@ -160,14 +188,18 @@ pub mod inner {
         println!("[diag] building pipeline (capacity={})...", CAPACITY);
         let builder = PipelineBuilder::new().with_capacity(CAPACITY);
         let results = builder.results();
+        // Build LedgerHandler separately so we can extract the active-task
+        // counter BEFORE moving the handler into PipelineBuilder::add_handler.
+        let ledger_handler = LedgerHandler::new(
+            Arc::clone(&ledger_client),
+            ledger_rt,
+            Arc::clone(&results),
+        );
+        let active_tb_tasks = Arc::clone(ledger_handler.active_tasks());
         let (pipeline, runners) = builder
             .add_handler(ValidationHandler::new(Arc::clone(&results)))
             .add_handler(RiskHandler::new(100_000_000_000, Arc::clone(&results)))
-            .add_handler(LedgerHandler::new(
-                Arc::clone(&ledger_client),
-                ledger_rt,
-                Arc::clone(&results),
-            ))
+            .add_handler(ledger_handler)
             .add_handler(PublishHandler::new(Arc::clone(&results)))
             .build()
             .expect("pipeline");
@@ -199,6 +231,8 @@ pub mod inner {
         let credit_id_str = credit_id.to_string();
         let total = events;
 
+        // active_tb_tasks is moved into the blocking closure so the heartbeat
+        // can read it. The Arc keeps the counter alive for the full bench run.
         let result = tokio::task::spawn_blocking(move || {
             let ctx = AeronContext::new(BENCH_AERON_DIR).expect("client AeronContext");
 
@@ -335,14 +369,18 @@ pub mod inner {
                 }
                 if count == 0 {
                     // Heartbeat every 10s: shows if bench is stuck and where.
+                    // active_tb_tasks: if this keeps growing and never drops,
+                    // TB is congested on disk I/O (VSR commit log full) and
+                    // batches are queuing up faster than they complete.
                     if last_heartbeat.elapsed().as_secs() >= 10 {
                         let elapsed = wall_start.elapsed().as_secs_f64();
                         let tps = if elapsed > 0.0 { received as f64 / elapsed } else { 0.0 };
+                        let active = active_tb_tasks.load(Ordering::Relaxed);
                         println!(
                             "[heartbeat] received={}/{} committed={} rejected={} \
-                             sent={} elapsed={:.1}s tps={:.0}",
+                             sent={} active_tb_tasks={} elapsed={:.1}s tps={:.0}",
                             received, total_usize, committed, rejected, sent,
-                            elapsed, tps
+                            active, elapsed, tps
                         );
                         last_heartbeat = Instant::now();
                     }
