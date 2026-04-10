@@ -190,11 +190,8 @@ pub mod inner {
         let results = builder.results();
         // Build LedgerHandler separately so we can extract the active-task
         // counter BEFORE moving the handler into PipelineBuilder::add_handler.
-        let ledger_handler = LedgerHandler::new(
-            Arc::clone(&ledger_client),
-            ledger_rt,
-            Arc::clone(&results),
-        );
+        let ledger_handler =
+            LedgerHandler::new(Arc::clone(&ledger_client), ledger_rt, Arc::clone(&results));
         let active_tb_tasks = Arc::clone(ledger_handler.active_tasks());
         let (pipeline, runners) = builder
             .add_handler(ValidationHandler::new(Arc::clone(&results)))
@@ -203,7 +200,10 @@ pub mod inner {
             .add_handler(PublishHandler::new(Arc::clone(&results)))
             .build()
             .expect("pipeline");
-        println!("[diag] pipeline OK, spawning {} runner(s)...", runners.len());
+        println!(
+            "[diag] pipeline OK, spawning {} runner(s)...",
+            runners.len()
+        );
 
         let pipeline = Arc::new(pipeline);
         let _run_handles: Vec<_> = runners.into_iter().map(|r| r.run()).collect();
@@ -289,11 +289,18 @@ pub mod inner {
                 client_sub.poll_fragments(&mut warmup_resp, 256);
                 std::thread::yield_now(); // let TB callback threads run
             }
-            println!("[diag] warmup done: got {}/{} responses", warmup_resp.len(), WARMUP_EVENTS);
+            println!(
+                "[diag] warmup done: got {}/{} responses",
+                warmup_resp.len(),
+                WARMUP_EVENTS
+            );
             warmup_resp.clear();
             // Let the pipeline drain and CPU frequency stabilize.
             std::thread::sleep(Duration::from_millis(50));
-            println!("[diag] starting main bench ({} events, window={})...", total, window_size);
+            println!(
+                "[diag] starting main bench ({} events, window={})...",
+                total, window_size
+            );
 
             // ── benchmark: window-based pipelined send/recv ────────────────
             let mut send_times = Vec::with_capacity(total as usize);
@@ -368,19 +375,39 @@ pub mod inner {
                     }
                 }
                 if count == 0 {
-                    // Heartbeat every 10s: shows if bench is stuck and where.
-                    // active_tb_tasks: if this keeps growing and never drops,
-                    // TB is congested on disk I/O (VSR commit log full) and
-                    // batches are queuing up faster than they complete.
-                    if last_heartbeat.elapsed().as_secs() >= 10 {
+                    // Heartbeat every 5s (was 10s — shorter interval makes TPS
+                    // decay visible immediately rather than after 10s of decay).
+                    //
+                    // active_tb_tasks: should stay ≤ MAX_CONCURRENT_BATCHES (8).
+                    //   If stuck at 8 and tps_delta=0: TB is disk I/O bound;
+                    //     run `iostat -x 1 5` on the TB node to confirm.
+                    //   If stuck at 0 and tps_delta=0: serve thread isn't
+                    //     receiving from bench client; check Aeron connection.
+                    //   If growing monotonically: backpressure cap is too low
+                    //     or TB is truly overloaded.
+                    //
+                    // tps_delta: instantaneous TPS since last heartbeat.
+                    //   Should be close to the opening TPS. Decay here = pipeline
+                    //   bottleneck. Flat = healthy.
+                    if last_heartbeat.elapsed().as_secs() >= 5 {
                         let elapsed = wall_start.elapsed().as_secs_f64();
-                        let tps = if elapsed > 0.0 { received as f64 / elapsed } else { 0.0 };
+                        let tps_avg = if elapsed > 0.0 {
+                            received as f64 / elapsed
+                        } else {
+                            0.0
+                        };
                         let active = active_tb_tasks.load(Ordering::Relaxed);
                         println!(
-                            "[heartbeat] received={}/{} committed={} rejected={} \
-                             sent={} active_tb_tasks={} elapsed={:.1}s tps={:.0}",
-                            received, total_usize, committed, rejected, sent,
-                            active, elapsed, tps
+                            "[heartbeat] elapsed={:.1}s recv={}/{} committed={} rejected={} \
+                             sent={} active_tb={} tps_avg={:.0}",
+                            elapsed,
+                            received,
+                            total_usize,
+                            committed,
+                            rejected,
+                            sent,
+                            active,
+                            tps_avg
                         );
                         last_heartbeat = Instant::now();
                     }

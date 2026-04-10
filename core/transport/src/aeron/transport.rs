@@ -249,22 +249,27 @@ fn aeron_serve_blocking(
     // by the C trampoline in AeronSubscription; unavoidable with current ABI.
     let mut frags: Vec<Vec<u8>> = Vec::with_capacity(FRAGMENT_LIMIT);
     // Sliding window: (ring-buffer seq, request_id as u64) per in-flight event.
-    // u64 is 8 bytes — Copy, stack-sized, zero heap allocation for the window.
+    // u64 is 8 bytes — Copy, stack-sized, zero heap allocation per slot.
     //
-    // VecDeque maintains strict ring-buffer insertion order. Since LedgerHandler
-    // processes events sequentially (one `block_on` batch at a time), results
-    // become available in monotonically increasing sequence order. Checking only
-    // the FRONT of the deque is therefore O(1) per drain call when TB has not
-    // yet responded — versus the previous Vec approach which did a full O(n)
-    // DashMap scan every iteration (up to 1024 misses × ~50 ns = ~51 µs wasted
-    // overhead per loop cycle, causing the observed TPS collapse under load).
+    // VecDeque maintains strict ring-buffer insertion order. The TB Zig client
+    // uses a single TCP connection to the cluster and delivers batch completions
+    // in submission order. With MAX_CONCURRENT_BATCHES=8 capping in-flight tasks
+    // in LedgerHandler, results in the DashMap are effectively in sequence order:
+    // all seqs in batch N arrive in the DashMap before seqs in batch N+1 start.
+    // Front-check is O(1) miss when TB has not yet responded; O(k) drain when a
+    // batch completes.
+    //
+    // NOTE: `drain_ready_results` is bounded at MAX_DRAIN_PER_CALL results per
+    // invocation. This prevents the serve thread from stalling for long when a
+    // full batch (8,190 results × ~100 ns DashMap::remove = ~820 µs) arrives.
+    // Remaining results are picked up on the next serve loop iteration.
     let mut pending: VecDeque<(i64, u64)> = VecDeque::with_capacity(PIPELINE_DEPTH);
     // Idle spin counter for the adaptive yield strategy.
     let mut idle_spins: u32 = 0;
 
     while !shutdown.load(Ordering::Acquire) {
-        // ── Phase 1: drain completed results (non-blocking) ───────────────
-        drain_ready_results(&mut pending, pipeline.results(), &pub_);
+        // ── Phase 1: drain completed results (non-blocking, bounded) ─────
+        drain_ready_results(&mut pending, pipeline.results(), &pub_, MAX_DRAIN_PER_CALL);
 
         // ── Phase 2: poll Aeron → publish to ring buffer ──────────────────
         frags.clear();
@@ -308,9 +313,19 @@ fn aeron_serve_blocking(
             // Busy-spin on ring-buffer backpressure — never yield to OS.
             // Drain Phase 1 inside the spin: frees ring-buffer slots as TB
             // batches complete, so we unblock as fast as physically possible.
+            // Use MAX_DRAIN_PER_CALL per iteration to keep the spin tight;
+            // remaining results are picked up in the next outer-loop Phase 1.
             while !pipeline.ring_buffer().has_available_capacity() {
-                drain_ready_results(&mut pending, pipeline.results(), &pub_);
-                std::hint::spin_loop();
+                let n = drain_ready_results(
+                    &mut pending,
+                    pipeline.results(),
+                    &pub_,
+                    MAX_DRAIN_PER_CALL,
+                );
+                if n == 0 {
+                    // Nothing drained — TB batch not yet complete. Spin lightly.
+                    std::hint::spin_loop();
+                }
             }
 
             // Single producer guarantee: capacity verified above — cannot
@@ -367,50 +382,56 @@ fn aeron_serve_blocking(
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+/// Maximum results drained from `pending` in a single `drain_ready_results`
+/// call. Prevents the serve thread from stalling for a full batch completion
+/// (~8,190 DashMap::remove × ~100 ns = ~820 µs) and starving the Aeron poll.
+/// Remaining results are picked up immediately on the next loop iteration.
+const MAX_DRAIN_PER_CALL: usize = 512;
+
 /// Drains completed TB results from the front of `pending` and sends replies.
 ///
 /// # Why VecDeque + front-check?
 ///
-/// LedgerHandler processes events in ring-buffer sequence order and issues one
-/// `block_on(create_transfers_batch)` at a time. This means results become
-/// available in strictly increasing sequence order: all seqs in batch N are
-/// inserted into the DashMap before any seq in batch N+1.
+/// The TB Zig client delivers batch completions for a single connection in
+/// submission order. `LedgerHandler` caps concurrent in-flight tasks at
+/// `MAX_CONCURRENT_BATCHES` (backpressure spin), so batch N+1 cannot start
+/// until a slot is free — meaning DashMap entries for batch N are inserted
+/// before batch N+1’s. Front-check drains in order without touching the rest.
 ///
-/// Maintaining `pending` in insertion (= ring-buffer sequence) order via a
-/// VecDeque lets us check only the FRONT element each call:
-/// - Front ready   → pop_front + reply, check new front (O(1) per result)
-/// - Front not yet → break immediately (O(1) miss vs previous O(n) full scan)
+/// - Front ready   → pop_front + reply + advance (O(1) per result)
+/// - Front not yet → break (O(1) miss; avoids wasted scan)
 ///
-/// The old Vec + swap_remove approach did a full O(n) DashMap scan every
-/// iteration. With 1024 in-flight items and ~50 ns per DashMap miss, each
-/// drain call burned ~51 µs of wasted work while TB was processing a batch —
-/// exactly the feedback loop that caused TPS to collapse under sustained load.
-///
-/// Called both in the main serve loop and inside the ring-buffer-full
-/// backpressure spin so that completed results are always forwarded to the
-/// client even when the ring buffer is temporarily saturated.
+/// Returns the number of results drained. Callers use this to avoid yielding
+/// when useful work was done.
 #[inline(always)]
 fn drain_ready_results(
     pending: &mut VecDeque<(i64, u64)>,
     results: &Arc<DashMap<i64, TransactionResult>>,
     pub_: &AeronPublication,
-) {
-    while let Some(&(seq, req_id_u64)) = pending.front() {
-        if let Some((_, result)) = results.remove(&seq) {
-            pending.pop_front();
-            // String allocation happens only here, at reply time — not during
-            // the in-flight window. The u64 lived entirely on the stack.
-            let req_id_str = TransactionId::from_u64(req_id_u64).to_string();
-            let resp = build_response(&req_id_str, result);
-            if let Ok(bytes) = serialize_response(&resp) {
-                // AeronPublication::offer already spins on back-pressure.
-                let _ = pub_.offer(&bytes);
+    max_drain: usize,
+) -> usize {
+    let mut drained = 0;
+    while drained < max_drain {
+        if let Some(&(seq, req_id_u64)) = pending.front() {
+            if let Some((_, result)) = results.remove(&seq) {
+                pending.pop_front();
+                // String allocation happens only here, at reply time — not
+                // during the in-flight window (u64 lives entirely on stack).
+                let req_id_str = TransactionId::from_u64(req_id_u64).to_string();
+                let resp = build_response(&req_id_str, result);
+                if let Ok(bytes) = serialize_response(&resp) {
+                    let _ = pub_.offer(&bytes);
+                }
+                drained += 1;
+            } else {
+                // Front not ready — rest of queue guaranteed not ready.
+                break;
             }
         } else {
-            // Front not ready — rest of queue is guaranteed not ready either.
-            break;
+            break; // pending is empty
         }
     }
+    drained
 }
 
 /// Parses a [`TransactionRequest`] into a [`TransactionEvent`].

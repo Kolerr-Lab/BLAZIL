@@ -69,6 +69,43 @@ const MAX_TB_BATCH_SIZE: usize = 8_190;
 /// zero extra latency relative to the network round-trip.
 const BATCH_FLUSH_TIMEOUT_US: u64 = 500;
 
+/// Maximum number of concurrent in-flight TigerBeetle async tasks.
+///
+/// This is the key backpressure constant that prevents unbounded growth.
+///
+/// # Why this prevents TPS decay
+///
+/// Without a cap, as TB VSR RTT grows (journal growth, DO disk I/O pressure,
+/// compaction), the runner thread spawns new batches faster than TB can
+/// complete old ones. Each in-flight task holds:
+///   - `prev_sequences`: Vec<i64> up to 8,189 entries (65 KB)
+///   - `all_transfers`: Vec<Transfer> up to 8,189 entries (~800 KB)
+///   - A clone of `results_map` Arc (DashMap growing with 8,190 new entries)
+///
+/// With no cap: 100 concurrent tasks × ~865 KB/task = ~85 MB heap pressure
+/// + DashMap with 819,000 entries → severe cache thrashing → each drain
+/// call takes longer → serve thread stalls longer → less time polling Aeron
+/// → fewer new events/sec → TPS decay. Positive feedback loop.
+///
+/// With cap=8: max 8 × 8,190 = 65,520 DashMap entries and ~6.8 MB heap for
+/// in-flight task data. Bounded at all TB RTT values. TPS stays flat.
+///
+/// When the cap is reached, the runner thread spin-waits (yielding every
+/// SPIN_BEFORE_BLOCK iterations) until a TB task completes and decrements the
+/// counter. This propagates backpressure through the ring buffer to the serve
+/// thread: runner stops advancing gating_sequence → ring buffer fills up →
+/// serve thread enters backpressure spin → drain speeds up → TB task
+/// completes → runner resumes. Self-regulating.
+///
+/// The runner thread is a dedicated pinned OS thread — blocking it briefly is
+/// intentional and correct.
+const MAX_CONCURRENT_BATCHES: usize = 8;
+
+/// Spin iterations before yielding in the concurrent-batch backpressure wait.
+/// ~512 spins ≈ ~1 µs at 3 GHz — minimises OS context switch overhead while
+/// unblocking quickly when a TB task completes.
+const SPIN_BEFORE_BLOCK: u32 = 512;
+
 // ── LedgerHandler ─────────────────────────────────────────────────────────────
 
 /// Commits transactions to TigerBeetle in batches.
@@ -274,6 +311,33 @@ impl<C: LedgerClient + Send + Sync + 'static> EventHandler for LedgerHandler<C> 
         // order — batch 0 results always arrive before batch 1 results.
         let results_map = Arc::clone(&self.results);
         let current_seq = sequence;
+
+        // ── Backpressure: cap concurrent in-flight TB tasks ───────────────────
+        //
+        // Without this cap, if TB RTT grows (DO disk I/O pressure, journal
+        // compaction), tasks accumulate faster than they complete. Each task
+        // holds a full Transfer Vec (~800 KB). 100 tasks = ~85 MB heap +
+        // DashMap with 819,000 entries = severe cache thrashing = serve thread
+        // drain stalls = fewer Aeron polls/sec = TPS decay feedback loop.
+        //
+        // Spin-wait on the DEDICATED runner thread (not a tokio thread — it is
+        // safe to block here). The runner stops advancing the ring-buffer
+        // gating sequence, which fills the ring buffer, which stalls the serve
+        // thread's publish path (it enters the backpressure spin and calls
+        // drain), which drains the oldest TB results, which decrements
+        // active_tasks here. Self-regulating backpressure.
+        {
+            let mut spins: u32 = 0;
+            while self.active_tasks.load(Ordering::Acquire) >= MAX_CONCURRENT_BATCHES {
+                spins = spins.wrapping_add(1);
+                if spins & (SPIN_BEFORE_BLOCK - 1) == 0 {
+                    std::thread::yield_now();
+                } else {
+                    std::hint::spin_loop();
+                }
+            }
+        }
+
         // Track in-flight count. Increment BEFORE spawn so the monitoring
         // counter is never transiently zero between dispatched batches.
         let active_tasks = Arc::clone(&self.active_tasks);

@@ -203,6 +203,7 @@ dependencies = [
  "blazil-engine",
  "blazil-ledger",
  "blazil-transport",
+ "core_affinity",
  "criterion",
  "rmp-serde",
  "rust_decimal",
