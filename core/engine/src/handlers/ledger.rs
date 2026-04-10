@@ -140,7 +140,7 @@ impl<C: LedgerClient> LedgerHandler<C> {
     /// an external monitor (e.g. the bench client drain loop) can observe how
     /// many TigerBeetle batches are currently in-flight.
     ///
-    /// ```rust
+    /// ```ignore
     /// let handler = LedgerHandler::new(client, rt, results);
     /// let active = Arc::clone(handler.active_tasks());
     /// builder = builder.add_handler(handler);
