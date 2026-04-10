@@ -79,6 +79,11 @@ pub const RSP_STREAM_ID: i32 = 1002;
 /// only if TB is exceptionally slow — not on the hot path.
 const PIPELINE_DEPTH: usize = 2048;
 
+/// After this many consecutive empty Aeron polls, call yield_now() once
+/// to let tokio worker threads (TB async callbacks) and Aeron C driver
+/// background threads get scheduled. Must be a power of two.
+const SPIN_BEFORE_YIELD: u32 = 64;
+
 /// Timeout waiting for publication / subscription async registration.
 const REGISTRATION_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -172,19 +177,16 @@ fn aeron_serve_blocking(
     let driver = EmbeddedAeronDriver::new(Some(&aeron_dir));
     driver.start()?;
 
-    // ── 1b. Core affinity — pin serve thread to core 0 (Linux only) ─────────
-    // Core 0 is the network-transport core on DO nodes. Pipeline workers start
-    // at core 1+. Pinning prevents the OS scheduler from migrating this tight
-    // spin loop between cores, which would flush L1/L2 caches and add ~µs jitter.
-    #[cfg(target_os = "linux")]
-    {
-        if let Some(core_ids) = core_affinity::get_core_ids() {
-            if let Some(id) = core_ids.first() {
-                core_affinity::set_for_current(*id);
-                info!(core = id.id, "Aeron serve thread pinned to core");
-            }
-        }
-    }
+    // Note: no core_affinity pin here. The serve thread spin-loops on a
+    // dedicated OS thread but must NOT be pinned to a single core because:
+    //   * TigerBeetle's async I/O completion callbacks run on tokio worker
+    //     threads that share the same physical cores.
+    //   * Aeron's embedded C Media Driver spawns background threads that also
+    //     need CPU time (conductor + sender + receiver).
+    // Pinning the serve thread monopolises a core under full load, starving
+    // those callbacks and causing TB .await calls to hang indefinitely.
+    // Pipeline runners are pinned (core 1+) because they truly own their core
+    // and never do async I/O. The serve thread is different.
 
     // ── 2. Aeron client context ───────────────────────────────────────────────
     let ctx = AeronContext::new(&aeron_dir)?;
@@ -233,6 +235,8 @@ fn aeron_serve_blocking(
     // swap_remove gives O(1) removal; reply order does not matter since every
     // TransactionResponse carries its own request_id.
     let mut pending: Vec<(i64, u64)> = Vec::with_capacity(PIPELINE_DEPTH);
+    // Idle spin counter for the adaptive yield strategy.
+    let mut idle_spins: u32 = 0;
 
     while !shutdown.load(Ordering::Acquire) {
         // ── Phase 1: drain completed results (non-blocking) ───────────────
@@ -300,8 +304,28 @@ fn aeron_serve_blocking(
             }
         }
 
-        if count == 0 && pending.is_empty() {
-            std::hint::spin_loop();
+        if count == 0 {
+            // Adaptive idle: spin_loop for the first SPIN_BEFORE_YIELD
+            // iterations, then yield_now() once.
+            //
+            // Pure busy-spin is correct when TB results are arriving fast
+            // (results in map, drain immediately finds them). But when the
+            // pipeline is waiting for a TB VSR round trip, the serve thread
+            // must occasionally yield so that:
+            //   a) tokio worker threads can run TB async I/O callbacks
+            //   b) Aeron's embedded C driver conductor/receiver threads get
+            //      scheduled (they share the same OS process)
+            //
+            // 64 spins ≈ ~100–200 ns at 3 GHz — negligible throughput cost
+            // but sufficient to un-starve the TB callback path.
+            idle_spins = idle_spins.wrapping_add(1);
+            if idle_spins & (SPIN_BEFORE_YIELD - 1) == 0 {
+                std::thread::yield_now();
+            } else {
+                std::hint::spin_loop();
+            }
+        } else {
+            idle_spins = 0;
         }
     }
 

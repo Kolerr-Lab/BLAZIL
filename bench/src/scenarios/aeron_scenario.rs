@@ -149,6 +149,7 @@ pub mod inner {
             ))
             .await
             .expect("credit account");
+        println!("[diag] credit account OK");
 
         // ── pipeline ──────────────────────────────────────────────────────────
         let builder = PipelineBuilder::new().with_capacity(CAPACITY);
