@@ -31,6 +31,8 @@ pub mod inner {
     use blazil_ledger::account::{Account, AccountFlags};
     use blazil_ledger::client::LedgerClient;
     use blazil_ledger::mock::InMemoryLedgerClient;
+    #[cfg(feature = "tigerbeetle-client")]
+    use blazil_ledger::tigerbeetle::TigerBeetleClient;
     use blazil_transport::aeron::{
         AeronContext, AeronPublication, AeronSubscription, REQ_STREAM_ID, RSP_STREAM_ID,
     };
@@ -59,8 +61,6 @@ pub mod inner {
         let usd = parse_currency("USD").expect("USD");
         println!("Payload size : {payload_size} bytes");
 
-        // ── pipeline ──────────────────────────────────────────────────────────
-        let ledger_client = Arc::new(InMemoryLedgerClient::new_unbounded());
         let ledger_rt = Arc::new(
             tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)
@@ -69,6 +69,52 @@ pub mod inner {
                 .expect("ledger rt"),
         );
 
+        // ── ledger client — real TB when BLAZIL_TB_ADDRESS is set ─────────────
+        #[cfg(feature = "tigerbeetle-client")]
+        let tb_addr = std::env::var("BLAZIL_TB_ADDRESS").ok();
+        #[cfg(not(feature = "tigerbeetle-client"))]
+        let tb_addr: Option<String> = None;
+
+        if let Some(ref addr) = tb_addr {
+            println!("Ledger      : TigerBeetle @ {addr}");
+            #[cfg(feature = "tigerbeetle-client")]
+            {
+                return run_with_ledger(
+                    events,
+                    payload_size,
+                    usd,
+                    ledger_rt,
+                    TigerBeetleClient::connect(addr, 0)
+                        .await
+                        .expect("TigerBeetle connect"),
+                )
+                .await;
+            }
+            #[cfg(not(feature = "tigerbeetle-client"))]
+            let _ = addr;
+        }
+
+        println!("Ledger      : InMemory (set BLAZIL_TB_ADDRESS for real TB)");
+        run_with_ledger(
+            events,
+            payload_size,
+            usd,
+            ledger_rt,
+            InMemoryLedgerClient::new_unbounded(),
+        )
+        .await
+    }
+
+    async fn run_with_ledger<C: LedgerClient + Send + Sync + 'static>(
+        events: u64,
+        payload_size: usize,
+        usd: blazil_common::currency::Currency,
+        ledger_rt: Arc<tokio::runtime::Runtime>,
+        ledger_client: C,
+    ) -> BenchmarkResult {
+        let ledger_client = Arc::new(ledger_client);
+
+        // ── accounts ──────────────────────────────────────────────────────────
         let debit_id = ledger_client
             .create_account(Account::new(
                 AccountId::new(),
@@ -79,7 +125,6 @@ pub mod inner {
             ))
             .await
             .expect("debit account");
-
         let credit_id = ledger_client
             .create_account(Account::new(
                 AccountId::new(),
@@ -91,13 +136,14 @@ pub mod inner {
             .await
             .expect("credit account");
 
+        // ── pipeline ──────────────────────────────────────────────────────────
         let builder = PipelineBuilder::new().with_capacity(CAPACITY);
         let results = builder.results();
         let (pipeline, runners) = builder
             .add_handler(ValidationHandler::new(Arc::clone(&results)))
             .add_handler(RiskHandler::new(100_000_000_000, Arc::clone(&results)))
             .add_handler(LedgerHandler::new(
-                ledger_client,
+                Arc::clone(&ledger_client),
                 ledger_rt,
                 Arc::clone(&results),
             ))

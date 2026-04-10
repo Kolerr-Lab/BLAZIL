@@ -86,10 +86,7 @@ async fn main() {
     let tcp_result = if scenario_filter.is_none() {
         println!("[2/4] TCP E2E (10K events)...");
         let r = tcp_scenario::run(10_000).await;
-        println!(
-            "      → {} TPS",
-            blazil_bench::report::fmt_commas(r.tps)
-        );
+        println!("      → {} TPS", blazil_bench::report::fmt_commas(r.tps));
         Some(r)
     } else {
         None
@@ -98,10 +95,7 @@ async fn main() {
     let udp_result = if scenario_filter.is_none() {
         println!("[3/4] UDP E2E ({events} events)...");
         let r = udp_scenario::run(events).await;
-        println!(
-            "      → {} TPS",
-            blazil_bench::report::fmt_commas(r.tps)
-        );
+        println!("      → {} TPS", blazil_bench::report::fmt_commas(r.tps));
         Some(r)
     } else {
         None
