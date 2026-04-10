@@ -49,11 +49,11 @@ pub mod inner {
     const REG_TIMEOUT: Duration = Duration::from_secs(5);
     // Window size: tuned per backend.
     // InMemory: 2048 — saturates the pipeline at ~1M TPS.
-    // Real TigerBeetle (VSR, 3-node): 256 — TB batch RTT ~5-20ms, so
-    //   2048 in-flight would flood the ring buffer before TB can drain it.
-    //   256 keeps ~1 full TB batch (MAX_TB_BATCH_SIZE=8190) in transit.
+    // Real TigerBeetle (VSR, 3-node): 1024 — keeps multiple TB batches
+    //   in-flight simultaneously. With RTT ~5-20ms and batch size up to 8190,
+    //   a larger window ensures the TB pipeline stays full between round trips.
     const WINDOW_SIZE_INMEM: usize = 2048;
-    const WINDOW_SIZE_TB: usize = 256;
+    const WINDOW_SIZE_TB: usize = 1024;
     // 2000 events: enough to prime Aeron's flow-control and IPC log buffer.
     const WARMUP_EVENTS: u64 = 2000;
     // Larger ring buffer: 128K slots prevents any pipeline backpressure.

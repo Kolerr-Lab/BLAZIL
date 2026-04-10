@@ -37,7 +37,7 @@
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -74,8 +74,10 @@ pub const REQ_STREAM_ID: i32 = 1001;
 /// Stream ID for outbound server→client transaction responses.
 pub const RSP_STREAM_ID: i32 = 1002;
 
-/// How long to spin-wait for a pipeline result before returning a timeout response.
-const RESULT_TIMEOUT: Duration = Duration::from_millis(100);
+/// Pre-allocated capacity of the in-flight sliding window.
+/// Must be ≥ WINDOW_SIZE_TB in the bench client. The Vec grows beyond this
+/// only if TB is exceptionally slow — not on the hot path.
+const PIPELINE_DEPTH: usize = 2048;
 
 /// Timeout waiting for publication / subscription async registration.
 const REGISTRATION_TIMEOUT: Duration = Duration::from_secs(5);
@@ -170,6 +172,20 @@ fn aeron_serve_blocking(
     let driver = EmbeddedAeronDriver::new(Some(&aeron_dir));
     driver.start()?;
 
+    // ── 1b. Core affinity — pin serve thread to core 0 (Linux only) ─────────
+    // Core 0 is the network-transport core on DO nodes. Pipeline workers start
+    // at core 1+. Pinning prevents the OS scheduler from migrating this tight
+    // spin loop between cores, which would flush L1/L2 caches and add ~µs jitter.
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(core_ids) = core_affinity::get_core_ids() {
+            if let Some(id) = core_ids.first() {
+                core_affinity::set_for_current(*id);
+                info!(core = id.id, "Aeron serve thread pinned to core");
+            }
+        }
+    }
+
     // ── 2. Aeron client context ───────────────────────────────────────────────
     let ctx = AeronContext::new(&aeron_dir)?;
 
@@ -187,62 +203,104 @@ fn aeron_serve_blocking(
         "Aeron UDP transport active (embedded C driver)"
     );
 
-    // ── 5. Poll loop (batched) ────────────────────────────────────────────────
+    // ── 5. Poll loop (async-pipeline) ────────────────────────────────────────
     //
-    // Phase A — publish: deserialize every fragment in the poll batch and
-    //           call publish_event immediately. Collect (seq, request_id) for
-    //           events that entered the ring buffer; collect immediate error
-    //           responses for events that were rejected before entering.
+    // Every iteration runs two non-blocking phases:
     //
-    // Phase B — wait: spin-poll the results map until every seq has a result
-    //           (or the per-batch deadline elapses).
+    // Phase 1 — Drain: scan the in-flight window for completed TB results;
+    //   reply immediately for each one found. Uses O(1) swap_remove so that
+    //   replies are sent in completion order, not submission order (fine —
+    //   each TransactionResponse carries its own request_id).
     //
-    // Phase C — reply: serialize and offer all responses in one go.
+    // Phase 2 — Pump: poll Aeron for new fragments (up to FRAGMENT_LIMIT)
+    //   and publish each to the ring buffer. If the ring buffer is full,
+    //   busy-spin while continuing Phase 1 — this drains results and frees
+    //   ring-buffer slots without ever yielding to the OS scheduler.
     //
-    // This keeps the ring buffer filled with a full window of events so that
-    // LedgerHandler can assemble maximum-size TigerBeetle batches, reducing
-    // TB round trips from O(N) to O(N / batch_size).
+    // The critical difference from the previous design: there is no blocking
+    // Phase B.  The serve thread never stalls waiting for TB. LedgerHandler
+    // accumulates a full batch per TB round trip independently on the pipeline
+    // runner thread; the serve thread keeps pumping new events in parallel,
+    // keeping the ring buffer and the TB batch pipeline continuously full.
+    //
+    // Pre-allocate all hot-path buffers once outside the loop.
+    // The outer Vec<Vec<u8>> is reused every iteration (clear() does not
+    // free the outer allocation). Inner Vec<u8> per fragment are allocated
+    // by the C trampoline in AeronSubscription; unavoidable with current ABI.
     let mut frags: Vec<Vec<u8>> = Vec::with_capacity(FRAGMENT_LIMIT);
-    // (seq, request_id) for events that entered the pipeline.
-    let mut pending: Vec<(i64, String)> = Vec::with_capacity(FRAGMENT_LIMIT);
-    // Immediate error responses (bad parse / ring-buffer full).
-    let mut immediate: Vec<TransactionResponse> = Vec::with_capacity(FRAGMENT_LIMIT);
+    // Sliding window: (ring-buffer seq, request_id as u64) per in-flight event.
+    // u64 is 8 bytes — Copy, stack-sized, zero heap allocation for the window.
+    // swap_remove gives O(1) removal; reply order does not matter since every
+    // TransactionResponse carries its own request_id.
+    let mut pending: Vec<(i64, u64)> = Vec::with_capacity(PIPELINE_DEPTH);
 
     while !shutdown.load(Ordering::Acquire) {
-        frags.clear();
-        pending.clear();
-        immediate.clear();
+        // ── Phase 1: drain completed results (non-blocking) ───────────────
+        drain_ready_results(&mut pending, pipeline.results(), &pub_);
 
+        // ── Phase 2: poll Aeron → publish to ring buffer ──────────────────
+        frags.clear();
         let count = sub.poll_fragments(&mut frags, FRAGMENT_LIMIT);
 
-        // ── Phase A: publish all fragments ────────────────────────────────
         for payload in &frags {
-            match try_publish_fragment(payload, &pipeline) {
-                PublishOutcome::Pending { seq, request_id } => {
-                    pending.push((seq, request_id));
+            let request = match deserialize_request(payload) {
+                Ok(r) => r,
+                Err(e) => {
+                    warn!(error = %e, "Aeron: malformed fragment");
+                    let resp = error_response("", &BlazerError::Transport(e.to_string()));
+                    if let Ok(bytes) = serialize_response(&resp) {
+                        let _ = pub_.offer(&bytes);
+                    }
+                    continue;
                 }
-                PublishOutcome::Immediate(resp) => {
-                    immediate.push(resp);
+            };
+
+            // Parse request_id to stack-allocated u64 — no heap.
+            // TransactionId wraps u64 and is Copy. The String from the wire
+            // is consumed here; nothing is cloned or heap-retained.
+            let req_id_u64: u64 = TransactionId::from_str(&request.request_id)
+                .unwrap_or_else(|_| TransactionId::new())
+                .as_u64();
+
+            let event = match build_event(request) {
+                Ok(e) => e,
+                Err(e) => {
+                    // Reconstruct string only at error-reply time, not in the
+                    // hot path.
+                    let req_id_str = TransactionId::from_u64(req_id_u64).to_string();
+                    warn!(request_id = %req_id_str, error = %e, "Aeron: event build failed");
+                    let resp = error_response(&req_id_str, &e);
+                    if let Ok(bytes) = serialize_response(&resp) {
+                        let _ = pub_.offer(&bytes);
+                    }
+                    continue;
                 }
+            };
+
+            // Busy-spin on ring-buffer backpressure — never yield to OS.
+            // Drain Phase 1 inside the spin: frees ring-buffer slots as TB
+            // batches complete, so we unblock as fast as physically possible.
+            while !pipeline.ring_buffer().has_available_capacity() {
+                drain_ready_results(&mut pending, pipeline.results(), &pub_);
+                std::hint::spin_loop();
             }
-        }
 
-        // ── Phase B: wait for all pending results ─────────────────────────
-        let batch_responses = wait_for_results_batch(pipeline.results(), &pending, RESULT_TIMEOUT);
-
-        // ── Phase C: reply ────────────────────────────────────────────────
-        for response in immediate.iter().chain(batch_responses.iter()) {
-            match serialize_response(response) {
-                Ok(bytes) => {
-                    if let Err(e) = pub_.offer(&bytes) {
-                        warn!(error = %e, "Aeron offer failed");
+            // Single producer guarantee: capacity verified above — cannot
+            // return RingBufferFull here.
+            match pipeline.publish_event(event) {
+                Ok(seq) => pending.push((seq, req_id_u64)),
+                Err(e) => {
+                    let req_id_str = TransactionId::from_u64(req_id_u64).to_string();
+                    error!(request_id = %req_id_str, error = %e, "Aeron: publish_event failed");
+                    let resp = error_response(&req_id_str, &e);
+                    if let Ok(bytes) = serialize_response(&resp) {
+                        let _ = pub_.offer(&bytes);
                     }
                 }
-                Err(e) => error!(error = %e, "response serialisation failed"),
             }
         }
 
-        if count == 0 {
+        if count == 0 && pending.is_empty() {
             std::hint::spin_loop();
         }
     }
@@ -259,104 +317,43 @@ fn aeron_serve_blocking(
     Ok(())
 }
 
-// ── Per-fragment request processing ──────────────────────────────────────────
-
-/// Outcome of attempting to publish one fragment into the pipeline.
-enum PublishOutcome {
-    /// Successfully entered the ring buffer — caller must wait for `seq`.
-    Pending { seq: i64, request_id: String },
-    /// Could not enter pipeline (bad parse / ring-buffer full) — send immediately.
-    Immediate(TransactionResponse),
-}
-
-/// Deserialises one fragment and publishes it to the pipeline ring buffer.
-///
-/// Returns [`PublishOutcome::Pending`] on success so the caller can batch-wait
-/// for the result, or [`PublishOutcome::Immediate`] for errors that can be
-/// returned without waiting (malformed request, ring buffer full, etc.).
-fn try_publish_fragment(payload: &[u8], pipeline: &Arc<Pipeline>) -> PublishOutcome {
-    let request = match deserialize_request(payload) {
-        Ok(r) => r,
-        Err(e) => {
-            warn!(error = %e, "Aeron: malformed fragment — rejected");
-            return PublishOutcome::Immediate(error_response(
-                "",
-                &BlazerError::Transport(e.to_string()),
-            ));
-        }
-    };
-
-    let request_id = request.request_id.clone();
-
-    let event = match build_event(request) {
-        Ok(e) => e,
-        Err(e) => {
-            warn!(%request_id, error = %e, "Aeron: event build failed");
-            return PublishOutcome::Immediate(error_response(&request_id, &e));
-        }
-    };
-
-    match pipeline.publish_event(event) {
-        Ok(seq) => PublishOutcome::Pending { seq, request_id },
-        Err(e) => {
-            error!(%request_id, error = %e, "Aeron: publish_event failed");
-            PublishOutcome::Immediate(error_response(&request_id, &e))
-        }
-    }
-}
-
-/// Spin-waits for every `(seq, request_id)` pair to produce a result.
-///
-/// All `seq` values were published in the same poll iteration, so
-/// LedgerHandler can batch them into a single TigerBeetle round trip.
-/// Returns one [`TransactionResponse`] per input entry (timeout if deadline
-/// elapses before a result appears).
-fn wait_for_results_batch(
-    results: &Arc<DashMap<i64, TransactionResult>>,
-    pending: &[(i64, String)],
-    timeout: Duration,
-) -> Vec<TransactionResponse> {
-    if pending.is_empty() {
-        return Vec::new();
-    }
-
-    let deadline = Instant::now() + timeout;
-    let mut responses: Vec<Option<TransactionResponse>> = vec![None; pending.len()];
-    let mut remaining = pending.len();
-
-    while remaining > 0 {
-        for (i, (seq, request_id)) in pending.iter().enumerate() {
-            if responses[i].is_none() {
-                if let Some((_, result)) = results.remove(seq) {
-                    responses[i] = Some(build_response(request_id, result));
-                    remaining -= 1;
-                }
-            }
-        }
-        if remaining > 0 {
-            if Instant::now() >= deadline {
-                break;
-            }
-            std::hint::spin_loop();
-        }
-    }
-
-    pending
-        .iter()
-        .enumerate()
-        .map(|(i, (_, request_id))| {
-            responses[i].take().unwrap_or_else(|| TransactionResponse {
-                request_id: request_id.clone(),
-                committed: false,
-                transfer_id: None,
-                error: Some("processing timeout".into()),
-                timestamp_ns: Timestamp::now().as_nanos(),
-            })
-        })
-        .collect()
-}
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Drains completed TB results from `pending` and sends replies.
+///
+/// Scans the full `pending` slice each call; uses `swap_remove` for O(1)
+/// removal (last element fills the gap — reply order does not matter since
+/// every response carries its own `request_id`).
+///
+/// Called both in the main serve loop and inside the ring-buffer-full
+/// backpressure spin so that TB batch completions are always forwarded to
+/// the client even when the ring buffer is temporarily saturated.
+#[inline(always)]
+fn drain_ready_results(
+    pending: &mut Vec<(i64, u64)>,
+    results: &Arc<DashMap<i64, TransactionResult>>,
+    pub_: &AeronPublication,
+) {
+    let mut i = 0;
+    while i < pending.len() {
+        let seq = pending[i].0;
+        if let Some((_, result)) = results.remove(&seq) {
+            // O(1): swap last element into slot i, decrement len.
+            let (_, req_id_u64) = pending.swap_remove(i);
+            // String allocation happens only here, at reply time — not during
+            // the in-flight window. The u64 lived entirely on the stack.
+            let req_id_str = TransactionId::from_u64(req_id_u64).to_string();
+            let resp = build_response(&req_id_str, result);
+            if let Ok(bytes) = serialize_response(&resp) {
+                // AeronPublication::offer already spins on back-pressure.
+                let _ = pub_.offer(&bytes);
+            }
+            // Do NOT increment i — the new occupant of slot i needs checking.
+        } else {
+            i += 1;
+        }
+    }
+}
 
 /// Parses a [`TransactionRequest`] into a [`TransactionEvent`].
 fn build_event(req: TransactionRequest) -> BlazerResult<TransactionEvent> {
