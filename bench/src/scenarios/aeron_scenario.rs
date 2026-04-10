@@ -152,6 +152,7 @@ pub mod inner {
         println!("[diag] credit account OK");
 
         // ── pipeline ──────────────────────────────────────────────────────────
+        println!("[diag] building pipeline (capacity={})...", CAPACITY);
         let builder = PipelineBuilder::new().with_capacity(CAPACITY);
         let results = builder.results();
         let (pipeline, runners) = builder
@@ -165,11 +166,14 @@ pub mod inner {
             .add_handler(PublishHandler::new(Arc::clone(&results)))
             .build()
             .expect("pipeline");
+        println!("[diag] pipeline OK, spawning {} runner(s)...", runners.len());
 
         let pipeline = Arc::new(pipeline);
         let _run_handles: Vec<_> = runners.into_iter().map(|r| r.run()).collect();
+        println!("[diag] runner threads started");
 
         // ── server ────────────────────────────────────────────────────────────
+        println!("[diag] starting Aeron transport server...");
         let server = Arc::new(AeronTransportServer::new(
             BENCH_CHANNEL,
             BENCH_AERON_DIR,
@@ -181,7 +185,9 @@ pub mod inner {
         });
 
         // Give the embedded driver + server time to start.
+        println!("[diag] waiting 800ms for Aeron driver + server...");
         tokio::time::sleep(Duration::from_millis(800)).await;
+        println!("[diag] 800ms elapsed, starting client thread...");
 
         // ── client (blocking thread) ──────────────────────────────────────────
         let debit_id_str = debit_id.to_string();
@@ -209,6 +215,7 @@ pub mod inner {
                 client_pub.is_connected(),
                 "Aeron bench: client pub not connected after 3s"
             );
+            println!("[diag] Aeron client connected (pub is_connected=true)");
 
             // ── CPU P-state warmup ─────────────────────────────────────────
             // Spin 2M iterations to push the M4/Linux CPU into its highest
@@ -220,6 +227,7 @@ pub mod inner {
             // ── Aeron warmup ──────────────────────────────────────────────────
             // 2000 events: primes the IPC log buffer, Aeron flow-control,
             // and the ring-buffer shard worker threads.
+            println!("[diag] sending {} warmup events...", WARMUP_EVENTS);
             let mut warmup_resp: Vec<Vec<u8>> = Vec::new();
             for i in 0..WARMUP_EVENTS {
                 let mut bytes = serialize_request(&make_request(i, &debit_id_str, &credit_id_str))
@@ -240,10 +248,13 @@ pub mod inner {
             let warmup_deadline = Instant::now() + Duration::from_secs(8);
             while (warmup_resp.len() as u64) < WARMUP_EVENTS && Instant::now() < warmup_deadline {
                 client_sub.poll_fragments(&mut warmup_resp, 256);
+                std::thread::yield_now(); // let TB callback threads run
             }
+            println!("[diag] warmup done: got {}/{} responses", warmup_resp.len(), WARMUP_EVENTS);
             warmup_resp.clear();
             // Let the pipeline drain and CPU frequency stabilize.
             std::thread::sleep(Duration::from_millis(50));
+            println!("[diag] starting main bench ({} events, window={})...", total, window_size);
 
             // ── benchmark: window-based pipelined send/recv ────────────────
             let mut send_times = Vec::with_capacity(total as usize);
@@ -280,6 +291,7 @@ pub mod inner {
             }
 
             // Drain loop.
+            let mut last_heartbeat = Instant::now();
             while received < total_usize {
                 responses.clear();
                 let count = client_sub.poll_fragments(&mut responses, window_size);
@@ -317,6 +329,18 @@ pub mod inner {
                     }
                 }
                 if count == 0 {
+                    // Heartbeat every 5s: shows if bench is stuck and where.
+                    if last_heartbeat.elapsed().as_secs() >= 5 {
+                        let elapsed = wall_start.elapsed().as_secs_f64();
+                        let tps = if elapsed > 0.0 { received as f64 / elapsed } else { 0.0 };
+                        println!(
+                            "[heartbeat] received={}/{} committed={} rejected={} \
+                             sent={} elapsed={:.1}s tps={:.0}",
+                            received, total_usize, committed, rejected, sent,
+                            elapsed, tps
+                        );
+                        last_heartbeat = Instant::now();
+                    }
                     // 8 × spin_loop keeps the polling thread on a P-core
                     // without an OS context switch during brief idle gaps.
                     for _ in 0..8 {
