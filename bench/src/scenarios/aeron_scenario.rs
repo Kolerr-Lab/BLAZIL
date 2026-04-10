@@ -300,7 +300,7 @@ pub mod inner {
             credit_account_id: credit_id.to_owned(),
             amount: "1.00".to_owned(),
             currency: "USD".to_owned(),
-            ledger_id: 0,
+            ledger_id: 1, // 1 = USD (see ledger_id_to_currency)
             code: 1,
         }
     }
