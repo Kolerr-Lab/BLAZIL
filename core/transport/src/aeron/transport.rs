@@ -34,14 +34,12 @@
 //! The [`aeron_serve_blocking`] function enforces this ordering via explicit
 //! `drop` calls before the driver is dropped.
 
-use std::collections::VecDeque;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use dashmap::DashMap;
 use rust_decimal::Decimal;
 use tracing::{error, info, warn};
 
@@ -74,11 +72,6 @@ pub const REQ_STREAM_ID: i32 = 1001;
 
 /// Stream ID for outbound server→client transaction responses.
 pub const RSP_STREAM_ID: i32 = 1002;
-
-/// Pre-allocated capacity of the in-flight sliding window.
-/// Must be ≥ WINDOW_SIZE_TB in the bench client. The Vec grows beyond this
-/// only if TB is exceptionally slow — not on the hot path.
-const PIPELINE_DEPTH: usize = 2048;
 
 /// After this many consecutive empty Aeron polls, call yield_now() once
 /// to let tokio worker threads (TB async callbacks) and Aeron C driver
@@ -293,37 +286,62 @@ fn aeron_serve_blocking(
     // keeping the ring buffer and the TB batch pipeline continuously full.
     //
     // Pre-allocate all hot-path buffers once outside the loop.
-    // The outer Vec<Vec<u8>> is reused every iteration (clear() does not
-    // free the outer allocation). Inner Vec<u8> per fragment are allocated
-    // by the C trampoline in AeronSubscription; unavoidable with current ABI.
     let mut frags: Vec<Vec<u8>> = Vec::with_capacity(FRAGMENT_LIMIT);
-    // Sliding window: (ring-buffer seq, request_id as u64) per in-flight event.
-    // u64 is 8 bytes — Copy, stack-sized, zero heap allocation per slot.
-    //
-    // VecDeque maintains insertion order (ring-buffer submission order).
-    // When ready_flags is Some, drain checks AtomicBool[seq%cap] instead of
-    // polling the DashMap — O(1) cache-line read, Acquire semantics guarantee
-    // the result is visible. When flags are not provided, falls back to direct
-    // DashMap front-check (fine for in-order TB delivery).
-    let mut pending: VecDeque<(i64, u64)> = VecDeque::with_capacity(PIPELINE_DEPTH);
-    // Borrow the ready-flags slice once for the loop lifetime.
-    let flags_ref: Option<&[AtomicBool]> = ready_flags.as_deref().map(|v| v.as_slice());
-    // Idle spin counter for the adaptive yield strategy.
     let mut idle_spins: u32 = 0;
-    // Periodic serve-thread diagnostics (always visible; bench sets log=ERROR).
     let mut last_diag = Instant::now();
 
+    // ── Slot-based reorder buffer ────────────────────────────────────────────
+    //
+    // Eliminates VecDeque push/pop entirely.
+    //
+    //   req_id_slots[seq % cap] = req_id_u64     (written by serve thread at publish)
+    //   flags[seq % cap].store(true, Release)    (written by LedgerHandler after DashMap insert)
+    //   flags[next_to_drain % cap].load(Acquire) (read by sweeper)
+    //
+    // next_to_drain is a plain i64 owned by the serve thread — no atomic.
+    // The sweeper increments it unconditionally: if the flag is not set the
+    // sweeper breaks immediately (batch not yet complete). When the flag IS
+    // set, both the req_id slot and the DashMap entry are guaranteed visible
+    // (Acquire pairs with Release in LedgerHandler).
+    //
+    // This is a pure O(1) per-slot operation — no scan, no push, no pop.
+    let flags_cap = ready_flags.as_ref().map(|f| f.len()).unwrap_or(1);
+    let flags_mask = flags_cap - 1;
+    // req_id_slots: serve-thread private. Only this thread writes (at publish)
+    // and reads (at drain). No atomics needed.
+    let mut req_id_slots: Vec<u64> = vec![0u64; flags_cap];
+    let mut next_to_drain: i64 = 0;
+    let mut next_to_publish: i64 = 0; // for pending_len metric
+
     while !shutdown.load(Ordering::Acquire) {
-        // ── Phase 1: drain completed results (non-blocking, bounded) ─────
-        drain_ready_results(
-            &mut pending,
-            pipeline.results(),
-            flags_ref,
-            &pub_,
-            MAX_DRAIN_PER_CALL,
-            &offer_failures_metric,
-        );
-        pending_len_metric.store(pending.len(), Ordering::Relaxed);
+        // ── Phase 1: sweeper — drain all consecutive ready results ────────
+        if let Some(ref flags) = ready_flags {
+            let mut drained = 0;
+            while drained < MAX_DRAIN_PER_CALL {
+                let idx = (next_to_drain as usize) & flags_mask;
+                // Acquire: when this loads true, all DashMap::inserts done
+                // before the LedgerHandler Release store are visible here.
+                if !flags[idx].load(Ordering::Acquire) {
+                    break; // next batch not yet complete — stop sweeping
+                }
+                // Clear flag so the slot can be reused next lap.
+                flags[idx].store(false, Ordering::Relaxed);
+                let req_id_u64 = req_id_slots[idx];
+                if let Some((_, result)) = pipeline.results().remove(&next_to_drain) {
+                    let req_id_str = TransactionId::from_u64(req_id_u64).to_string();
+                    let resp = build_response(&req_id_str, result);
+                    if let Ok(bytes) = serialize_response(&resp) {
+                        if pub_.offer(&bytes).is_err() {
+                            offer_failures_metric.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                }
+                next_to_drain += 1;
+                drained += 1;
+            }
+        }
+        let inflight = (next_to_publish - next_to_drain).max(0) as usize;
+        pending_len_metric.store(inflight, Ordering::Relaxed);
 
         // ── Phase 2: poll Aeron → publish to ring buffer ──────────────────
         frags.clear();
@@ -342,9 +360,6 @@ fn aeron_serve_blocking(
                 }
             };
 
-            // Parse request_id to stack-allocated u64 — no heap.
-            // TransactionId wraps u64 and is Copy. The String from the wire
-            // is consumed here; nothing is cloned or heap-retained.
             let req_id_u64: u64 = TransactionId::from_str(&request.request_id)
                 .unwrap_or_else(|_| TransactionId::new())
                 .as_u64();
@@ -352,8 +367,6 @@ fn aeron_serve_blocking(
             let event = match build_event(request) {
                 Ok(e) => e,
                 Err(e) => {
-                    // Reconstruct string only at error-reply time, not in the
-                    // hot path.
                     let req_id_str = TransactionId::from_u64(req_id_u64).to_string();
                     warn!(request_id = %req_id_str, error = %e, "Aeron: event build failed");
                     let resp = error_response(&req_id_str, &e);
@@ -364,30 +377,37 @@ fn aeron_serve_blocking(
                 }
             };
 
-            // Busy-spin on ring-buffer backpressure — never yield to OS.
-            // Drain Phase 1 inside the spin: frees ring-buffer slots as TB
-            // batches complete, so we unblock as fast as physically possible.
-            // Use MAX_DRAIN_PER_CALL per iteration to keep the spin tight;
-            // remaining results are picked up in the next outer-loop Phase 1.
+            // Backpressure spin: ring buffer full.
+            // Keep sweeping while spinning so TB completions free slots fast.
             while !pipeline.ring_buffer().has_available_capacity() {
-                let n = drain_ready_results(
-                    &mut pending,
-                    pipeline.results(),
-                    flags_ref,
-                    &pub_,
-                    MAX_DRAIN_PER_CALL,
-                    &offer_failures_metric,
-                );
-                if n == 0 {
-                    // Nothing drained — TB batch not yet complete. Spin lightly.
+                if let Some(ref flags) = ready_flags {
+                    let idx = (next_to_drain as usize) & flags_mask;
+                    if flags[idx].load(Ordering::Acquire) {
+                        flags[idx].store(false, Ordering::Relaxed);
+                        let req_id_u64 = req_id_slots[idx];
+                        if let Some((_, result)) = pipeline.results().remove(&next_to_drain) {
+                            let req_id_str = TransactionId::from_u64(req_id_u64).to_string();
+                            let resp = build_response(&req_id_str, result);
+                            if let Ok(bytes) = serialize_response(&resp) {
+                                if pub_.offer(&bytes).is_err() {
+                                    offer_failures_metric.fetch_add(1, Ordering::Relaxed);
+                                }
+                            }
+                        }
+                        next_to_drain += 1;
+                    } else {
+                        std::hint::spin_loop();
+                    }
+                } else {
                     std::hint::spin_loop();
                 }
             }
 
-            // Single producer guarantee: capacity verified above — cannot
-            // return RingBufferFull here.
             match pipeline.publish_event(event) {
-                Ok(seq) => pending.push_back((seq, req_id_u64)),
+                Ok(seq) => {
+                    req_id_slots[(seq as usize) & flags_mask] = req_id_u64;
+                    next_to_publish = seq + 1;
+                }
                 Err(e) => {
                     let req_id_str = TransactionId::from_u64(req_id_u64).to_string();
                     error!(request_id = %req_id_str, error = %e, "Aeron: publish_event failed");
@@ -400,7 +420,6 @@ fn aeron_serve_blocking(
         }
 
         if count == 0 {
-            // Adaptive idle: spin_loop for SPIN_BEFORE_YIELD iters, then yield.
             idle_spins = idle_spins.wrapping_add(1);
             if idle_spins & (SPIN_BEFORE_YIELD - 1) == 0 {
                 std::thread::yield_now();
@@ -411,16 +430,13 @@ fn aeron_serve_blocking(
             idle_spins = 0;
         }
 
-        // Serve-thread diagnostics every 5 s — always visible regardless of
-        // tracing log level (bench binary sets ERROR, suppressing warn!/info!).
         if last_diag.elapsed().as_secs() >= 5 {
-            let pending_n = pending.len();
             let offer_fail = offer_failures_metric.load(Ordering::Relaxed);
-            println!("[serve-diag] pending={pending_n} offer_fail={offer_fail}");
+            let inflight = (next_to_publish - next_to_drain).max(0);
+            println!("[serve-diag] pending={inflight} drain={next_to_drain} publish={next_to_publish} offer_fail={offer_fail}");
             last_diag = Instant::now();
         }
     }
-
     info!("Aeron poll loop exited cleanly");
 
     // ── 6. Ordered teardown ───────────────────────────────────────────────────
@@ -433,96 +449,13 @@ fn aeron_serve_blocking(
     Ok(())
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Helpers ─────────────────────────────────────────────────────────────────────
 
-/// Maximum results drained per `drain_ready_results` call.
-/// Prevents the serve thread stalling > 512 * reply_overhead per iteration.
+/// Maximum consecutive ready slots drained per sweeper call.
+/// Bounds per-iteration reply time to ~512 * reply_overhead.
+/// Remaining ready slots are swept on the next loop iteration.
 const MAX_DRAIN_PER_CALL: usize = 512;
 
-/// Drains completed results from `pending` and sends Aeron reply messages.
-///
-/// # Two modes
-///
-/// ## Reorder-buffer mode (`ready_flags` = Some)
-///
-/// Uses a VecDeque (insertion-ordered) + AtomicBool flag array.
-///
-/// LedgerHandler stores each result in the DashMap then does:
-///   `flags[seq % cap].store(true, Release)`
-///
-/// Here we check:
-///   `flags[front_seq % cap].load(Acquire)` — O(1), cache-line aligned.
-///
-/// The Acquire/Release pair guarantees the DashMap insert is visible.
-/// If the front is not flagged, we break immediately (head-of-line wait).
-/// When the flag IS set, Result is guaranteed present — no DashMap miss.
-///
-/// ## Fallback mode (`ready_flags` = None)
-///
-/// Plain DashMap front-check on VecDeque front. Correct for real TB
-/// (in-order single-TCP delivery). May stall on out-of-order completions.
-#[inline(always)]
-fn drain_ready_results(
-    pending: &mut VecDeque<(i64, u64)>,
-    results: &Arc<DashMap<i64, TransactionResult>>,
-    ready_flags: Option<&[AtomicBool]>,
-    pub_: &AeronPublication,
-    max_drain: usize,
-    offer_failures: &AtomicU64,
-) -> usize {
-    let mut drained = 0;
-
-    if let Some(flags) = ready_flags {
-        // Reorder-buffer path: O(1) per entry via AtomicBool Acquire check.
-        let mask = flags.len() - 1; // flags.len() is power of 2
-        while drained < max_drain {
-            let &(seq, req_id_u64) = match pending.front() {
-                Some(v) => v,
-                None => break,
-            };
-            let idx = (seq as usize) & mask;
-            // Acquire: all writes done before the Release store are visible.
-            if !flags[idx].load(Ordering::Acquire) {
-                break; // front result not yet written -- head-of-line wait
-            }
-            pending.pop_front();
-            // Clear flag for slot reuse. Relaxed: no subsequent dependent read.
-            flags[idx].store(false, Ordering::Relaxed);
-            if let Some((_, result)) = results.remove(&seq) {
-                let req_id_str = TransactionId::from_u64(req_id_u64).to_string();
-                let resp = build_response(&req_id_str, result);
-                if let Ok(bytes) = serialize_response(&resp) {
-                    if pub_.offer(&bytes).is_err() {
-                        offer_failures.fetch_add(1, Ordering::Relaxed);
-                    }
-                }
-            }
-            drained += 1;
-        }
-    } else {
-        // Fallback: direct DashMap check on front entry.
-        while drained < max_drain {
-            let &(seq, req_id_u64) = match pending.front() {
-                Some(v) => v,
-                None => break,
-            };
-            if let Some((_, result)) = results.remove(&seq) {
-                pending.pop_front();
-                let req_id_str = TransactionId::from_u64(req_id_u64).to_string();
-                let resp = build_response(&req_id_str, result);
-                if let Ok(bytes) = serialize_response(&resp) {
-                    if pub_.offer(&bytes).is_err() {
-                        offer_failures.fetch_add(1, Ordering::Relaxed);
-                    }
-                }
-                drained += 1;
-            } else {
-                break;
-            }
-        }
-    }
-    drained
-}
 /// Parses a [`TransactionRequest`] into a [`TransactionEvent`].
 fn build_event(req: TransactionRequest) -> BlazerResult<TransactionEvent> {
     let debit_account_id = AccountId::from_str(&req.debit_account_id).map_err(|_| {
