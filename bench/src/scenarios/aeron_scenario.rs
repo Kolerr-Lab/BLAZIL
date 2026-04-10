@@ -84,15 +84,18 @@ pub mod inner {
             println!("Window size : {} (TB mode)", WINDOW_SIZE_TB);
             #[cfg(feature = "tigerbeetle-client")]
             {
+                println!("[diag] calling TigerBeetleClient::connect...");
+                let tb_client = TigerBeetleClient::connect(addr, 0)
+                    .await
+                    .expect("TigerBeetle connect");
+                println!("[diag] connect OK — calling run_with_ledger...");
                 return run_with_ledger(
                     events,
                     payload_size,
                     WINDOW_SIZE_TB,
                     usd,
                     ledger_rt,
-                    TigerBeetleClient::connect(addr, 0)
-                        .await
-                        .expect("TigerBeetle connect"),
+                    tb_client,
                 )
                 .await;
             }
@@ -124,6 +127,7 @@ pub mod inner {
         let ledger_client = Arc::new(ledger_client);
 
         // ── accounts ──────────────────────────────────────────────────────────
+        println!("[diag] creating debit account...");
         let debit_id = ledger_client
             .create_account(Account::new(
                 AccountId::new(),
@@ -134,6 +138,7 @@ pub mod inner {
             ))
             .await
             .expect("debit account");
+        println!("[diag] debit account OK");
         let credit_id = ledger_client
             .create_account(Account::new(
                 AccountId::new(),
