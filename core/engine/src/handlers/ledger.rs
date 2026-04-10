@@ -84,8 +84,8 @@ const BATCH_FLUSH_TIMEOUT_US: u64 = 500;
 ///
 /// With no cap: 100 concurrent tasks × ~865 KB/task = ~85 MB heap pressure
 /// + DashMap with 819,000 entries → severe cache thrashing → each drain
-/// call takes longer → serve thread stalls longer → less time polling Aeron
-/// → fewer new events/sec → TPS decay. Positive feedback loop.
+///   call takes longer → serve thread stalls longer → less time polling Aeron
+///   → fewer new events/sec → TPS decay. Positive feedback loop.
 ///
 /// With cap=8: max 8 × 8,190 = 65,520 DashMap entries and ~6.8 MB heap for
 /// in-flight task data. Bounded at all TB RTT values. TPS stays flat.
