@@ -87,7 +87,7 @@ const BATCH_FLUSH_TIMEOUT_US: u64 = 500;
 ///   call takes longer → serve thread stalls longer → less time polling Aeron
 ///   → fewer new events/sec → TPS decay. Positive feedback loop.
 ///
-/// With cap=8: max 8 × 8,190 = 65,520 DashMap entries and ~6.8 MB heap for
+/// With cap=16: max 16 × 8,190 = 131,040 DashMap entries and ~13.6 MB heap for
 /// in-flight task data. Bounded at all TB RTT values. TPS stays flat.
 ///
 /// When the cap is reached, the runner thread spin-waits (yielding every
@@ -99,7 +99,7 @@ const BATCH_FLUSH_TIMEOUT_US: u64 = 500;
 ///
 /// The runner thread is a dedicated pinned OS thread — blocking it briefly is
 /// intentional and correct.
-const MAX_CONCURRENT_BATCHES: usize = 8;
+const MAX_CONCURRENT_BATCHES: usize = 16;
 
 /// Spin iterations before yielding in the concurrent-batch backpressure wait.
 /// ~512 spins ≈ ~1 µs at 3 GHz — minimises OS context switch overhead while
