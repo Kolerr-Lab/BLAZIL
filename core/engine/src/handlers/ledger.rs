@@ -365,46 +365,56 @@ impl<C: LedgerClient + Send + Sync + 'static> EventHandler for LedgerHandler<C> 
             let tb_results = client.create_transfers_batch(all_transfers).await;
             let tb_elapsed_ms = tb_t0.elapsed().as_millis();
 
-            // Write deferred sequences’ results to the shared map.
+            // Write deferred results.
+            // Committed -> ResultRing (AtomicU8, 256 KB fits in L2 cache).
+            // Rejected  -> DashMap fallback (rare; serve thread covers via or_else).
             for (i, seq) in prev_sequences.iter().enumerate() {
-                let tr = match &tb_results[i] {
+                match &tb_results[i] {
                     Ok(transfer_id) => {
                         debug!(sequence = seq, %transfer_id, "LedgerHandler: deferred committed");
-                        TransactionResult::Committed {
-                            transfer_id: *transfer_id,
-                            timestamp: Timestamp::now(),
+                        if let Some(ring) = &result_ring_opt {
+                            ring.insert(*seq, *transfer_id);
+                        } else {
+                            results_map.insert(
+                                *seq,
+                                TransactionResult::Committed {
+                                    transfer_id: *transfer_id,
+                                    timestamp: Timestamp::now(),
+                                },
+                            );
                         }
                     }
                     Err(e) => {
                         debug!(sequence = seq, error = %e, "LedgerHandler: deferred rejected");
-                        TransactionResult::Rejected { reason: e.clone() }
+                        results_map
+                            .insert(*seq, TransactionResult::Rejected { reason: e.clone() });
                     }
-                };
-                if let Some(ring) = &result_ring_opt {
-                    ring.insert(*seq, tr);
-                } else {
-                    results_map.insert(*seq, tr);
                 }
             }
 
-            // Write current event’s result.
-            let tr = match &tb_results[prev_n] {
+            // Write current event result.
+            match &tb_results[prev_n] {
                 Ok(transfer_id) => {
                     debug!(sequence = current_seq, %transfer_id, "LedgerHandler: current committed");
-                    TransactionResult::Committed {
-                        transfer_id: *transfer_id,
-                        timestamp: Timestamp::now(),
+                    if let Some(ring) = &result_ring_opt {
+                        ring.insert(current_seq, *transfer_id);
+                    } else {
+                        results_map.insert(
+                            current_seq,
+                            TransactionResult::Committed {
+                                transfer_id: *transfer_id,
+                                timestamp: Timestamp::now(),
+                            },
+                        );
                     }
                 }
                 Err(e) => {
                     debug!(sequence = current_seq, error = %e, "LedgerHandler: current rejected");
-                    TransactionResult::Rejected { reason: e.clone() }
+                    results_map.insert(
+                        current_seq,
+                        TransactionResult::Rejected { reason: e.clone() },
+                    );
                 }
-            };
-            if let Some(ring) = &result_ring_opt {
-                ring.insert(current_seq, tr);
-            } else {
-                results_map.insert(current_seq, tr);
             }
 
             // Decrement AFTER all DashMap inserts so the runner’s Acquire load

@@ -1,138 +1,151 @@
-//! Zero-contention SPSC result ring — replaces `DashMap` on the hot path.
+//! Zero-contention SPSC result ring for the pipeline hot path.
 //!
-//! # Problem
+//! # Design v2 — AtomicU8 status + raw TransferId storage
 //!
-//! The original design stored async TigerBeetle results in a
-//! `DashMap<i64, TransactionResult>`. At large window sizes (≥ 65 536 entries)
-//! the map grows beyond L3 cache capacity (~8 MB on typical DO nodes), causing
-//! every `remove()` in the serve thread's drain loop to suffer an L3 miss.
-//! Measured impact: TPS dropped from **66 K** (window 32 768) to **35 K**
-//! (window 131 072) — the opposite of what we wanted.
+//! ## Problem with v1 (AtomicBool + MaybeUninit<TransactionResult>)
 //!
-//! # Solution: per-slot AtomicBool + UnsafeCell
+//! v1 stored the full `TransactionResult` enum (~48 bytes) per slot:
+//! 262 144 slots × 48 bytes ≈ **12 MB** — spills out of per-core L2 cache
+//! (typically 256 KB – 1 MB) and into shared L3.  Every drain loop iteration
+//! that checks an unready slot still brings a 48-byte cache line into L2, even
+//! though the useful information is just 1 bit.
 //!
-//! Pre-allocate a fixed-size ring of `(UnsafeCell<MaybeUninit<T>>, AtomicBool)` pairs.
-//! Each sequence number maps to `slot[seq % cap]` with O(1) constant-time
-//! access and sequential (prefetch-friendly) memory layout.
+//! Measured: `stall_ms` 128 ms; TPS 35 K with v1 at window=131 072.
+//!
+//! ## Solution
+//!
+//! Two separate arrays:
+//!
+//! | Array | Element | Count | Size |
+//! |-------|---------|-------|------|
+//! | `status` | `AtomicU8` | 262 144 | **256 KB** — fits in L2 |
+//! | `transfer_ids` | `UnsafeCell<MaybeUninit<[u8; 16]>>` | 262 144 | 4 MB — L3 |
+//!
+//! The drain loop's hot check only touches `status[]` (256 KB, one byte per
+//! slot).  Once a slot is ready (`status[idx] == COMMITTED`), the 16-byte
+//! transfer-ID is read from `transfer_ids[idx]` — a cold path that fires at
+//! most once per event.
+//!
+//! Rejected results (rare at high load — from validation / risk / TB errors)
+//! bypass the ring entirely and go to the `DashMap` fallback so no rejection
+//! storage is needed here.
 //!
 //! ## Protocol (SPSC per slot)
 //!
 //! | Side | Action |
 //! |------|--------|
-//! | Writer | `slots[idx].write(result)`, then `ready[idx].store(true, Release)` |
-//! | Reader | if `ready[idx].load(Acquire)`, read slot, `ready[idx].store(false, Release)` |
-//!
-//! The Release/Acquire pair is a full happens-before edge: the reader never
-//! observes stale slot data.
+//! | Writer | write `transfer_ids[idx]`, then `status[idx].store(COMMITTED, Release)` |
+//! | Reader | `if status[idx].load(Acquire) == COMMITTED { read id; status.store(PENDING, Release) }` |
 //!
 //! ## Alias-freedom invariant
 //!
-//! No two live (in-flight) sequence numbers may alias to the same slot.
-//! Guaranteed by `cap ≥ 2 × max_inflight` (checked at construction):
-//! if `|seq_A - seq_B| < cap` then `seq_A % cap ≠ seq_B % cap`.
-//! With `cap = 262 144` and `window = 131 072`, the gap between the slowest
-//! in-flight sequence and the fastest is at most 131 072 < 262 144 = cap. ✓
+//! `cap ≥ pipeline_capacity` (262 144 ≥ ring-buffer capacity) ensures no two
+//! in-flight sequence numbers alias the same slot.
 
 use std::cell::UnsafeCell;
 use std::mem::MaybeUninit;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 
-use crate::event::TransactionResult;
+use blazil_common::ids::TransferId;
+
+// ── Status constants ──────────────────────────────────────────────────────────
+
+/// Slot is empty / has been consumed by the serve thread.
+const PENDING: u8 = 0;
+/// Slot contains a committed TransferId written by an async TB task.
+const COMMITTED: u8 = 1;
 
 // ── ResultRing ────────────────────────────────────────────────────────────────
 
-/// Lock-free O(1) result store for the pipeline hot path.
+/// Lock-free O(1) committed-result store for the pipeline hot path.
 ///
-/// Replaces `DashMap<i64, TransactionResult>` for async (TigerBeetle) results.
-/// Synchronous rejection results (from `ValidationHandler` / `RiskHandler`)
-/// still use the DashMap; this ring is for the high-volume committed path.
+/// Replaces `DashMap<i64, TransactionResult>` for the TB-committed code path.
+/// Rejected results continue to use the small `DashMap` fallback.
+///
+/// # Memory layout
+///
+/// ```text
+/// status[]        : [AtomicU8; 262_144] = 256 KB  ← drain hot-check (L2)
+/// transfer_ids[]  : [[u8;16]; 262_144]  =   4 MB  ← cold read on hit (L3)
+/// ```
 pub struct ResultRing {
-    slots: Vec<UnsafeCell<MaybeUninit<TransactionResult>>>,
-    ready: Vec<AtomicBool>,
+    /// One byte per slot: `PENDING` (0) or `COMMITTED` (1).
+    status: Vec<AtomicU8>,
+    /// Raw UUID bytes for the committed TransferId.
+    /// Protected by `status`: writer stores bytes then sets status=COMMITTED
+    /// with Release; reader loads status with Acquire before reading bytes.
+    transfer_ids: Vec<UnsafeCell<MaybeUninit<[u8; 16]>>>,
     mask: usize,
 }
 
-// SAFETY: Each slot is protected by its paired `AtomicBool`:
-// - only one writer per slot (while ready=false)
-// - only one reader per slot (while ready=true, served by the single serve thread)
-// Release/Acquire fencing guarantees the slot write is visible before the read.
+// SAFETY: Each slot has a single writer (one async task) and a single reader
+// (the serve thread).  The Release/Acquire on `status` provides the required
+// happens-before edge.  No two threads access the same slot concurrently.
 unsafe impl Send for ResultRing {}
 unsafe impl Sync for ResultRing {}
 
 impl ResultRing {
-    /// Create a new ring with `cap` slots. `cap` must be a power of two and
-    /// must be at least twice the maximum number of in-flight sequences to
-    /// prevent slot aliasing.
+    /// Create a new ring with `cap` slots.
+    ///
+    /// `cap` must be a power of two and `≥ pipeline_capacity`.
     pub fn new(cap: usize) -> Self {
         assert!(
             cap.is_power_of_two(),
             "ResultRing cap must be a power of two"
         );
         Self {
-            slots: (0..cap)
+            status: (0..cap).map(|_| AtomicU8::new(PENDING)).collect(),
+            transfer_ids: (0..cap)
                 .map(|_| UnsafeCell::new(MaybeUninit::uninit()))
                 .collect(),
-            ready: (0..cap).map(|_| AtomicBool::new(false)).collect(),
             mask: cap - 1,
         }
     }
 
-    /// Write `result` for `seq`. The slot at `seq % cap` must be free
-    /// (i.e. not yet consumed by `try_remove`).
+    /// Record a committed result for `seq`.
     ///
-    /// Called from async TigerBeetle task threads (multiple writers, but
-    /// each slot has exactly one writer at a time).
+    /// Only called for committed outcomes — rejections go to the `DashMap`.
+    /// Called from async TigerBeetle task threads.
     #[inline(always)]
-    pub fn insert(&self, seq: i64, result: TransactionResult) {
+    pub fn insert(&self, seq: i64, transfer_id: TransferId) {
         let idx = (seq as usize) & self.mask;
-        // SAFETY: slot is free (ready=false) — guaranteed by alias-freedom invariant.
+        // Write bytes BEFORE the Release store.
+        // SAFETY: slot is empty (status=PENDING) — alias-freedom invariant.
         unsafe {
-            (*self.slots[idx].get()).write(result);
+            (*self.transfer_ids[idx].get()).write(*transfer_id.as_uuid().as_bytes());
         }
-        // Release: slot write must be globally visible before reader sees ready=true.
-        self.ready[idx].store(true, Ordering::Release);
+        self.status[idx].store(COMMITTED, Ordering::Release);
     }
 
-    /// Take the result for `seq` if it has been written, or `None` if not yet
-    /// available. Consumes the slot (marks it free for reuse).
+    /// Consume and return the `TransferId` for `seq` if committed, or `None`.
     ///
     /// Called only from the single serve thread.
     #[inline(always)]
-    pub fn try_remove(&self, seq: i64) -> Option<TransactionResult> {
+    pub fn try_remove(&self, seq: i64) -> Option<TransferId> {
         let idx = (seq as usize) & self.mask;
-        // Acquire: pairs with insert()'s Release — ensures slot data is visible.
-        if self.ready[idx].load(Ordering::Acquire) {
-            // SAFETY: ready=true means insert() completed with Release semantics.
-            // We are the only reader (single serve thread), so no concurrent read.
-            let result = unsafe { (*self.slots[idx].get()).assume_init_read() };
-            // Release: mark slot free so the next writer for seq+cap can claim it.
-            self.ready[idx].store(false, Ordering::Release);
-            Some(result)
+        if self.status[idx].load(Ordering::Acquire) == COMMITTED {
+            // SAFETY: Acquire pairs with insert's Release; bytes are visible.
+            let bytes = unsafe { (*self.transfer_ids[idx].get()).assume_init_read() };
+            self.status[idx].store(PENDING, Ordering::Release);
+            Some(TransferId::from_bytes(bytes))
         } else {
             None
         }
     }
-    /// Returns `true` if a result for `seq` has been written and not yet consumed.
-    ///
-    /// Non-destructive — safe to use for diagnostics without consuming the slot.
+
+    /// Returns `true` if a committed result for `seq` is ready.
+    /// Non-destructive — safe for diagnostics.
     #[inline(always)]
     pub fn contains(&self, seq: i64) -> bool {
         let idx = (seq as usize) & self.mask;
-        self.ready[idx].load(Ordering::Acquire)
+        self.status[idx].load(Ordering::Acquire) == COMMITTED
     }
 }
 
 impl Drop for ResultRing {
     fn drop(&mut self) {
-        // Drop any results that were inserted but never consumed (e.g. on shutdown).
-        for (slot, ready) in self.slots.iter().zip(self.ready.iter()) {
-            if ready.load(Ordering::Acquire) {
-                // SAFETY: ready=true guarantees the slot was written.
-                unsafe {
-                    (*slot.get()).assume_init_drop();
-                }
-            }
-        }
+        // AtomicU8 and [u8;16] have no destructors.
+        // Vec handles the heap allocations.
     }
 }
 
@@ -140,23 +153,15 @@ impl Drop for ResultRing {
 
 #[cfg(test)]
 mod tests {
-    use blazil_common::timestamp::Timestamp;
-
     use super::*;
-    use crate::event::TransactionResult;
-
-    fn committed() -> TransactionResult {
-        TransactionResult::Committed {
-            transfer_id: blazil_common::ids::TransferId::new(),
-            timestamp: Timestamp::now(),
-        }
-    }
 
     #[test]
-    fn insert_then_try_remove_returns_result() {
+    fn insert_then_try_remove_returns_transfer_id() {
         let ring = ResultRing::new(64);
-        ring.insert(0, committed());
-        assert!(ring.try_remove(0).is_some());
+        let tid = TransferId::new();
+        ring.insert(0, tid);
+        let got = ring.try_remove(0).expect("should be ready");
+        assert_eq!(got.as_uuid(), tid.as_uuid());
     }
 
     #[test]
@@ -168,21 +173,35 @@ mod tests {
     #[test]
     fn slot_is_reusable_after_remove() {
         let ring = ResultRing::new(64);
-        ring.insert(0, committed());
+        let tid = TransferId::new();
+        ring.insert(0, tid);
         ring.try_remove(0);
-        // Same slot, next cycle (seq = cap = 64)
-        ring.insert(64, committed());
-        assert!(ring.try_remove(64).is_some());
+        let tid2 = TransferId::new();
+        ring.insert(64, tid2);
+        let got = ring.try_remove(64).expect("should be ready after reuse");
+        assert_eq!(got.as_uuid(), tid2.as_uuid());
     }
 
     #[test]
-    fn sequential_sequences_all_drain_in_order() {
+    fn contains_reflects_insert_state() {
+        let ring = ResultRing::new(64);
+        assert!(!ring.contains(0));
+        ring.insert(0, TransferId::new());
+        assert!(ring.contains(0));
+        ring.try_remove(0);
+        assert!(!ring.contains(0));
+    }
+
+    #[test]
+    fn sequential_sequences_all_drain() {
         let ring = ResultRing::new(128);
-        for seq in 0..64_i64 {
-            ring.insert(seq, committed());
+        let tids: Vec<_> = (0..64).map(|_| TransferId::new()).collect();
+        for (seq, tid) in tids.iter().enumerate() {
+            ring.insert(seq as i64, *tid);
         }
-        for seq in 0..64_i64 {
-            assert!(ring.try_remove(seq).is_some(), "seq {seq} should be ready");
+        for (seq, tid) in tids.iter().enumerate() {
+            let got = ring.try_remove(seq as i64).expect("should be ready");
+            assert_eq!(got.as_uuid(), tid.as_uuid());
         }
     }
 

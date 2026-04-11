@@ -294,6 +294,10 @@ fn aeron_serve_blocking(
                 let result = pipeline
                     .result_ring()
                     .try_remove(next_to_drain)
+                    .map(|tid| TransactionResult::Committed {
+                        transfer_id: tid,
+                        timestamp: Timestamp::now(),
+                    })
                     .or_else(|| pipeline.results().remove(&next_to_drain).map(|(_, v)| v));
                 if let Some(result) = result {
                     let idx = (next_to_drain as usize) & REQ_SLOTS_MASK;
@@ -356,6 +360,10 @@ fn aeron_serve_blocking(
                 let result = pipeline
                     .result_ring()
                     .try_remove(next_to_drain)
+                    .map(|tid| TransactionResult::Committed {
+                        transfer_id: tid,
+                        timestamp: Timestamp::now(),
+                    })
                     .or_else(|| pipeline.results().remove(&next_to_drain).map(|(_, v)| v));
                 if let Some(result) = result {
                     let idx = (next_to_drain as usize) & REQ_SLOTS_MASK;
