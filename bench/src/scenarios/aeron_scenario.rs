@@ -545,6 +545,7 @@ pub mod inner {
         );
 
         BenchmarkResult::new("Aeron IPC E2E", events, duration, &mut latencies)
+            .with_counts(committed, rejected)
     }
 
     /// Returns current process RSS in MB.

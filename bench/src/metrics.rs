@@ -17,6 +17,10 @@ pub struct BenchmarkResult {
     pub p95_ns: u64,
     pub p99_ns: u64,
     pub p99_9_ns: u64,
+    /// Committed transaction count (0 = not tracked by this scenario).
+    pub committed: u64,
+    /// Rejected transaction count (0 = not tracked by this scenario).
+    pub rejected: u64,
 }
 
 impl BenchmarkResult {
@@ -58,7 +62,16 @@ impl BenchmarkResult {
             p95_ns,
             p99_ns,
             p99_9_ns,
+            committed: 0,
+            rejected: 0,
         }
+    }
+
+    /// Set the committed/rejected counts (call after `new()` for E2E scenarios).
+    pub fn with_counts(mut self, committed: u64, rejected: u64) -> Self {
+        self.committed = committed;
+        self.rejected = rejected;
+        self
     }
 }
 

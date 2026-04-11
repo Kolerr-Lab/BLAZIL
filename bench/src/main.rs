@@ -169,5 +169,12 @@ async fn main() {
         println!("Speedup: {:.2}x", io_uring_speedup);
     }
 
+    // Save run log for any aeron result (the primary E2E metric with TB).
+    #[cfg(feature = "aeron")]
+    if let Some(ref ar) = aeron_result {
+        let tb_addr = std::env::var("BLAZIL_TB_ADDRESS").ok();
+        blazil_bench::report::save_run(ar, tb_addr.as_deref());
+    }
+
     println!("\nAll tests passed! OK");
 }
