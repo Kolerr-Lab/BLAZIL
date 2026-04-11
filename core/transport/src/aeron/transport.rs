@@ -291,7 +291,9 @@ fn aeron_serve_blocking(
             while drained < MAX_DRAIN_PER_CALL {
                 // Try ResultRing first (async TB results — O(1), cache-friendly).
                 // Fall back to DashMap for sync rejections (ValidationHandler / RiskHandler).
-                let result = pipeline.result_ring().try_remove(next_to_drain)
+                let result = pipeline
+                    .result_ring()
+                    .try_remove(next_to_drain)
                     .or_else(|| pipeline.results().remove(&next_to_drain).map(|(_, v)| v));
                 if let Some(result) = result {
                     let idx = (next_to_drain as usize) & REQ_SLOTS_MASK;
@@ -351,7 +353,9 @@ fn aeron_serve_blocking(
             // Backpressure spin: ring buffer full -- drain while waiting.
             while !pipeline.ring_buffer().has_available_capacity() {
                 // Same ResultRing-first, DashMap-fallback drain in the backpressure path.
-                let result = pipeline.result_ring().try_remove(next_to_drain)
+                let result = pipeline
+                    .result_ring()
+                    .try_remove(next_to_drain)
                     .or_else(|| pipeline.results().remove(&next_to_drain).map(|(_, v)| v));
                 if let Some(result) = result {
                     let idx = (next_to_drain as usize) & REQ_SLOTS_MASK;

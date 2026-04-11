@@ -64,7 +64,10 @@ impl ResultRing {
     /// must be at least twice the maximum number of in-flight sequences to
     /// prevent slot aliasing.
     pub fn new(cap: usize) -> Self {
-        assert!(cap.is_power_of_two(), "ResultRing cap must be a power of two");
+        assert!(
+            cap.is_power_of_two(),
+            "ResultRing cap must be a power of two"
+        );
         Self {
             slots: (0..cap)
                 .map(|_| UnsafeCell::new(MaybeUninit::uninit()))
@@ -116,7 +119,8 @@ impl ResultRing {
     pub fn contains(&self, seq: i64) -> bool {
         let idx = (seq as usize) & self.mask;
         self.ready[idx].load(Ordering::Acquire)
-    }}
+    }
+}
 
 impl Drop for ResultRing {
     fn drop(&mut self) {
