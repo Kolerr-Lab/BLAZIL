@@ -18,7 +18,7 @@
 
 #[cfg(feature = "aeron")]
 pub mod inner {
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
@@ -273,17 +273,6 @@ pub mod inner {
             LedgerHandler::new(Arc::clone(&ledger_client), ledger_rt, Arc::clone(&results));
         let active_tb_tasks = Arc::clone(ledger_handler.active_tasks());
 
-        // Reorder buffer: one AtomicBool per ring-buffer slot (power-of-2).
-        // LedgerHandler sets flags[seq % CAPACITY] = true (Release) after writing
-        // results. The serve-thread drain checks these flags (Acquire) instead
-        // of polling DashMap -- O(1) cache-line read, zero wasted hash lookups.
-        let ready_flags: Arc<Vec<AtomicBool>> = Arc::new(
-            std::iter::repeat_with(|| AtomicBool::new(false))
-                .take(CAPACITY)
-                .collect(),
-        );
-        let ledger_handler = ledger_handler.with_reorder_flags(Arc::clone(&ready_flags));
-
         let (pipeline, runners) = builder
             .add_handler(ValidationHandler::new(Arc::clone(&results)))
             .add_handler(RiskHandler::new(100_000_000_000, Arc::clone(&results)))
@@ -302,10 +291,11 @@ pub mod inner {
 
         // ── server ────────────────────────────────────────────────────────────
         println!("[diag] starting Aeron transport server...");
-        let server = Arc::new(
-            AeronTransportServer::new(BENCH_CHANNEL, BENCH_AERON_DIR, Arc::clone(&pipeline))
-                .with_reorder_flags(Arc::clone(&ready_flags)),
-        );
+        let server = Arc::new(AeronTransportServer::new(
+            BENCH_CHANNEL,
+            BENCH_AERON_DIR,
+            Arc::clone(&pipeline),
+        ));
         let s = Arc::clone(&server);
         tokio::task::spawn(async move {
             let _ = s.serve().await;

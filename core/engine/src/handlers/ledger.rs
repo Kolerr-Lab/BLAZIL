@@ -41,7 +41,7 @@
 //! to 8,190 transfers).  Values > 5 ms emit a `WARN`.
 
 use std::mem;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -130,17 +130,6 @@ pub struct LedgerHandler<C: LedgerClient> {
     /// it completes. Exposed via `active_tasks()` for external monitoring.
     /// A persistently growing value means TB is building backpressure on disk.
     active_tasks: Arc<AtomicUsize>,
-    /// Sequence-based reorder buffer flags.
-    ///
-    /// When set, the spawned async task calls
-    /// `flags[seq % cap].store(true, Release)` after writing each result to
-    /// the DashMap. The serve thread's drain checks these flags with Acquire
-    /// ordering instead of polling the DashMap directly, giving O(1)
-    /// cache-friendly ready detection with correct memory visibility.
-    ///
-    /// Must be the same `Arc<Vec<AtomicBool>>` given to `AeronTransportServer::
-    /// with_reorder_flags`. Size must be a power of 2 >= ring buffer capacity.
-    ready_flags: Option<Arc<Vec<AtomicBool>>>,
 }
 
 impl<C: LedgerClient> Clone for LedgerHandler<C> {
@@ -155,7 +144,6 @@ impl<C: LedgerClient> Clone for LedgerHandler<C> {
             deferred_sequences: Vec::new(),
             // Share the same counter — all shards feed into one number.
             active_tasks: Arc::clone(&self.active_tasks),
-            ready_flags: self.ready_flags.clone(),
         }
     }
 }
@@ -180,19 +168,7 @@ impl<C: LedgerClient> LedgerHandler<C> {
             deferred_transfers: Vec::with_capacity(MAX_TB_BATCH_SIZE),
             deferred_sequences: Vec::with_capacity(MAX_TB_BATCH_SIZE),
             active_tasks: Arc::new(AtomicUsize::new(0)),
-            ready_flags: None,
         }
-    }
-
-    /// Attach a sequence reorder buffer.
-    ///
-    /// The same `Arc<Vec<AtomicBool>>` must be given to both this handler and
-    /// `AeronTransportServer::with_reorder_flags`. After each batch completes,
-    /// the spawned task sets `flags[seq % cap] = true` (Release ordering) so
-    /// the drain thread can detect readiness in O(1) without polling DashMap.
-    pub fn with_reorder_flags(mut self, flags: Arc<Vec<AtomicBool>>) -> Self {
-        self.ready_flags = Some(flags);
-        self
     }
 
     /// Returns a reference to the shared active-task counter.
@@ -335,7 +311,6 @@ impl<C: LedgerClient + Send + Sync + 'static> EventHandler for LedgerHandler<C> 
         // order — batch 0 results always arrive before batch 1 results.
         let results_map = Arc::clone(&self.results);
         let current_seq = sequence;
-        let ready_flags = self.ready_flags.clone();
 
         // ── Backpressure: cap concurrent in-flight TB tasks ───────────────────
         //
@@ -371,17 +346,6 @@ impl<C: LedgerClient + Send + Sync + 'static> EventHandler for LedgerHandler<C> 
             let tb_t0 = Instant::now();
             let tb_results = client.create_transfers_batch(all_transfers).await;
             let tb_elapsed_ms = tb_t0.elapsed().as_millis();
-            // Decrement after TB response arrives.
-            active_tasks.fetch_sub(1, Ordering::Relaxed);
-
-            if tb_elapsed_ms > 5 {
-                warn!(
-                    batch_size,
-                    tb_elapsed_ms, "LedgerHandler: SLOW batch write (>5 ms)"
-                );
-            } else {
-                info!(batch_size, tb_elapsed_ms, "LedgerHandler: batch committed");
-            }
 
             // Write deferred sequences’ results to the shared map.
             for (i, seq) in prev_sequences.iter().enumerate() {
@@ -416,16 +380,21 @@ impl<C: LedgerClient + Send + Sync + 'static> EventHandler for LedgerHandler<C> 
                 }
             };
             results_map.insert(current_seq, tr);
-            // Signal reorder buffer: set ready flag for every seq after all
-            // DashMap inserts. Release ordering guarantees all inserts above
-            // are visible to the drain thread when it sees the flag.
-            if let Some(ref flags) = ready_flags {
-                let mask = flags.len() - 1;
-                for seq in &prev_sequences {
-                    flags[(*seq as usize) & mask].store(true, Ordering::Release);
-                }
-                flags[(current_seq as usize) & mask].store(true, Ordering::Release);
-            }        });
+
+            // Decrement AFTER all DashMap inserts so the runner’s Acquire load
+            // of active_tasks < MAX_CONCURRENT_BATCHES implies all results are
+            // visible via DashMap’s internal AcqRel shard locking.
+            active_tasks.fetch_sub(1, Ordering::Release);
+
+            if tb_elapsed_ms > 5 {
+                warn!(
+                    batch_size,
+                    tb_elapsed_ms, "LedgerHandler: SLOW batch write (>5 ms)"
+                );
+            } else {
+                info!(batch_size, tb_elapsed_ms, "LedgerHandler: batch committed");
+            }
+        });
     }
 
     fn clone_handler(&self) -> Box<dyn EventHandler> {
