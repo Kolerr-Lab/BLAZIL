@@ -273,7 +273,7 @@ fn aeron_serve_blocking(
     // req_id_slots: serve-thread private ring of req_ids keyed by seq % cap.
     // Size matches the bench ring buffer capacity; the in-flight window is at
     // most WINDOW_SIZE_TB << cap, so there are no slot collisions.
-    const REQ_SLOTS_CAP: usize = 131_072;
+    const REQ_SLOTS_CAP: usize = 262_144;
     const REQ_SLOTS_MASK: usize = REQ_SLOTS_CAP - 1;
     let mut req_id_slots: Vec<u64> = vec![0u64; REQ_SLOTS_CAP];
     let mut next_to_drain: i64 = 0;

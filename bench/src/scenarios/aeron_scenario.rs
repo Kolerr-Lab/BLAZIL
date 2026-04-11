@@ -67,11 +67,11 @@ pub mod inner {
     //   same RTT window, keeping TPS flat regardless of individual batch
     //   latency. Formula: TPS = N_batches_in_flight * 8190 / TB_RTT.
     const WINDOW_SIZE_INMEM: usize = 2048;
-    const WINDOW_SIZE_TB: usize = 32_768;
+    const WINDOW_SIZE_TB: usize = 131_072;
     // 2000 events: enough to prime Aeron's flow-control and IPC log buffer.
     const WARMUP_EVENTS: u64 = 2000;
     // Larger ring buffer: 128K slots prevents any pipeline backpressure.
-    const CAPACITY: usize = 131_072;
+    const CAPACITY: usize = 262_144;
     // Max spin retries on Aeron offer backpressure before yielding.
     const OFFER_SPIN_RETRIES: usize = 64;
 
