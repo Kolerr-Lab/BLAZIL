@@ -289,7 +289,11 @@ fn aeron_serve_blocking(
         {
             let mut drained = 0;
             while drained < MAX_DRAIN_PER_CALL {
-                if let Some((_, result)) = pipeline.results().remove(&next_to_drain) {
+                // Try ResultRing first (async TB results — O(1), cache-friendly).
+                // Fall back to DashMap for sync rejections (ValidationHandler / RiskHandler).
+                let result = pipeline.result_ring().try_remove(next_to_drain)
+                    .or_else(|| pipeline.results().remove(&next_to_drain).map(|e| e.into_inner()));
+                if let Some(result) = result {
                     let idx = (next_to_drain as usize) & REQ_SLOTS_MASK;
                     let req_id_u64 = req_id_slots[idx];
                     let req_id_str = TransactionId::from_u64(req_id_u64).to_string();
@@ -346,7 +350,10 @@ fn aeron_serve_blocking(
 
             // Backpressure spin: ring buffer full -- drain while waiting.
             while !pipeline.ring_buffer().has_available_capacity() {
-                if let Some((_, result)) = pipeline.results().remove(&next_to_drain) {
+                // Same ResultRing-first, DashMap-fallback drain in the backpressure path.
+                let result = pipeline.result_ring().try_remove(next_to_drain)
+                    .or_else(|| pipeline.results().remove(&next_to_drain).map(|e| e.into_inner()));
+                if let Some(result) = result {
                     let idx = (next_to_drain as usize) & REQ_SLOTS_MASK;
                     let req_id_u64_bp = req_id_slots[idx];
                     let req_id_str = TransactionId::from_u64(req_id_u64_bp).to_string();
@@ -394,7 +401,9 @@ fn aeron_serve_blocking(
             let offer_fail = offer_failures_metric.load(Ordering::Relaxed);
             let inflight = (next_to_publish - next_to_drain).max(0);
             let stall_ms = last_drain_progress.elapsed().as_millis();
-            let in_map = inflight > 0 && pipeline.results().contains_key(&next_to_drain);
+            let in_map = inflight > 0
+                && (pipeline.result_ring().contains(next_to_drain)
+                    || pipeline.results().contains_key(&next_to_drain));
             println!(
                 "[serve-diag] pending={inflight} drain={next_to_drain} \
                  publish={next_to_publish} offer_fail={offer_fail} \

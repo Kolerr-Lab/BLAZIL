@@ -55,6 +55,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::event::{TransactionEvent, TransactionResult};
 use crate::handler::EventHandler;
+use crate::result_ring::ResultRing;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -117,6 +118,9 @@ pub struct LedgerHandler<C: LedgerClient> {
     client: Arc<C>,
     runtime: Arc<tokio::runtime::Runtime>,
     results: Arc<DashMap<i64, TransactionResult>>,
+    /// When set, async TB task results are written here instead of `results`.
+    /// Provides O(1) sequential-access cache-friendly lookups vs DashMap hash.
+    result_ring: Option<Arc<ResultRing>>,
     /// Timestamp when the first transfer was added to the current batch.
     /// Used for time-based flush trigger.
     batch_started_at: Option<Instant>,
@@ -138,6 +142,7 @@ impl<C: LedgerClient> Clone for LedgerHandler<C> {
             client: Arc::clone(&self.client),
             runtime: Arc::clone(&self.runtime),
             results: Arc::clone(&self.results),
+            result_ring: self.result_ring.clone(),
             // Reset worker-local state for new worker thread
             batch_started_at: None,
             deferred_transfers: Vec::new(),
@@ -165,10 +170,22 @@ impl<C: LedgerClient> LedgerHandler<C> {
             batch_started_at: None,
             runtime,
             results,
+            result_ring: None,
             deferred_transfers: Vec::with_capacity(MAX_TB_BATCH_SIZE),
             deferred_sequences: Vec::with_capacity(MAX_TB_BATCH_SIZE),
             active_tasks: Arc::new(AtomicUsize::new(0)),
         }
+    }
+
+    /// Configures the handler to write async TB results to `ring` instead of
+    /// the `DashMap`. The ring and the pipeline's `result_ring` must share the
+    /// same `Arc` so the serve thread can drain them without a map lookup.
+    ///
+    /// Call this immediately after [`new`][LedgerHandler::new] and before
+    /// passing the handler to `PipelineBuilder::add_handler`.
+    pub fn with_result_ring(mut self, ring: Arc<ResultRing>) -> Self {
+        self.result_ring = Some(ring);
+        self
     }
 
     /// Returns a reference to the shared active-task counter.
@@ -310,6 +327,7 @@ impl<C: LedgerClient + Send + Sync + 'static> EventHandler for LedgerHandler<C> 
         // Zig TB client processes requests for a single connection in submission
         // order — batch 0 results always arrive before batch 1 results.
         let results_map = Arc::clone(&self.results);
+        let result_ring_opt = self.result_ring.as_ref().map(Arc::clone);
         let current_seq = sequence;
 
         // ── Backpressure: cap concurrent in-flight TB tasks ───────────────────
@@ -362,7 +380,11 @@ impl<C: LedgerClient + Send + Sync + 'static> EventHandler for LedgerHandler<C> 
                         TransactionResult::Rejected { reason: e.clone() }
                     }
                 };
-                results_map.insert(*seq, tr);
+                if let Some(ring) = &result_ring_opt {
+                    ring.insert(*seq, tr);
+                } else {
+                    results_map.insert(*seq, tr);
+                }
             }
 
             // Write current event’s result.
@@ -379,7 +401,11 @@ impl<C: LedgerClient + Send + Sync + 'static> EventHandler for LedgerHandler<C> 
                     TransactionResult::Rejected { reason: e.clone() }
                 }
             };
-            results_map.insert(current_seq, tr);
+            if let Some(ring) = &result_ring_opt {
+                ring.insert(current_seq, tr);
+            } else {
+                results_map.insert(current_seq, tr);
+            }
 
             // Decrement AFTER all DashMap inserts so the runner’s Acquire load
             // of active_tasks < MAX_CONCURRENT_BATCHES implies all results are

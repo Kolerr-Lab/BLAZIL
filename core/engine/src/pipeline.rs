@@ -56,6 +56,7 @@ use tracing::instrument;
 
 use crate::event::{TransactionEvent, TransactionResult};
 use crate::handler::EventHandler;
+use crate::result_ring::ResultRing;
 use crate::ring_buffer::RingBuffer;
 use crate::sequence::Sequence;
 
@@ -91,6 +92,7 @@ pub struct PipelineBuilder {
     /// Override shard_id used for core-affinity pinning when this pipeline is
     /// one shard of many in a `ShardedPipeline`.
     global_shard_id: Option<usize>,
+    result_ring: Arc<ResultRing>,
 }
 
 impl PipelineBuilder {
@@ -102,6 +104,7 @@ impl PipelineBuilder {
             handlers: Vec::new(),
             results: Arc::new(DashMap::new()),
             global_shard_id: None,
+            result_ring: Arc::new(ResultRing::new(65_536)),
         }
     }
 
@@ -119,6 +122,11 @@ impl PipelineBuilder {
     /// Sets the ring buffer capacity (must be a power of two).
     pub fn with_capacity(mut self, capacity: usize) -> Self {
         self.capacity = capacity;
+        // Rebuild result_ring if capacity changes and is a power of two.
+        // Non-power-of-two values are rejected later in build() by RingBuffer::new.
+        if capacity.is_power_of_two() {
+            self.result_ring = Arc::new(ResultRing::new(capacity));
+        }
         self
     }
 
@@ -150,6 +158,14 @@ impl PipelineBuilder {
     /// before calling `build`.
     pub fn results(&self) -> Arc<DashMap<i64, TransactionResult>> {
         Arc::clone(&self.results)
+    }
+
+    /// Returns a clone of the shared `ResultRing` `Arc` stored in the builder.
+    ///
+    /// Pass this to [`handlers::ledger::LedgerHandler::new`] so async TB tasks
+    /// write results into the ring instead of the DashMap hot path.
+    pub fn result_ring(&self) -> Arc<ResultRing> {
+        Arc::clone(&self.result_ring)
     }
 
     /// Appends an [`EventHandler`] to the pipeline.
@@ -198,10 +214,12 @@ impl PipelineBuilder {
 
         let ring_buffer = Arc::new(ring_buffer);
 
+        let result_ring = self.result_ring;
         let pipeline = Pipeline {
             ring_buffer: Arc::clone(&ring_buffer),
             shutdown: Arc::clone(&shutdown),
             results: Arc::clone(&results),
+            result_ring: Arc::clone(&result_ring),
         };
 
         // Create multiple runners for parallel processing
@@ -252,6 +270,7 @@ pub struct Pipeline {
     ring_buffer: Arc<RingBuffer>,
     shutdown: Arc<AtomicBool>,
     results: Arc<DashMap<i64, TransactionResult>>,
+    result_ring: Arc<ResultRing>,
 }
 
 impl Pipeline {
@@ -265,11 +284,18 @@ impl Pipeline {
 
     /// Returns a reference to the results map.
     ///
-    /// Transaction results are stored here by LedgerHandler, indexed by
-    /// sequence number. Handlers and consumers can look up results after
-    /// processing completes.
+    /// Synchronous rejection results (from `ValidationHandler` / `RiskHandler`)
+    /// are stored here. Async TB results live in `result_ring` instead.
     pub fn results(&self) -> &Arc<DashMap<i64, TransactionResult>> {
         &self.results
+    }
+
+    /// Returns a reference to the `ResultRing` for async TigerBeetle results.
+    ///
+    /// The serve thread checks this first (O(1), cache-friendly sequential access)
+    /// then falls back to `results()` for the rare synchronous rejection path.
+    pub fn result_ring(&self) -> &Arc<ResultRing> {
+        &self.result_ring
     }
 
     /// Signals the runner to exit after finishing its current batch.

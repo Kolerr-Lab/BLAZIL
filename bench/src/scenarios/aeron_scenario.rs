@@ -67,10 +67,16 @@ pub mod inner {
     //   same RTT window, keeping TPS flat regardless of individual batch
     //   latency. Formula: TPS = N_batches_in_flight * 8190 / TB_RTT.
     const WINDOW_SIZE_INMEM: usize = 2048;
+    // ResultRing replaces DashMap on the hot path: sequential array access means
+    // no cache thrashing at large window sizes. 131_072 window × 16 concurrent
+    // batches × 8190 transfers/batch → theoretical TPS ceiling limited by TB VSR
+    // RTT rather than cache capacity. Confirmed: DashMap thrashed at this size
+    // (35K TPS), ResultRing should recover to 66K+ TPS.
     const WINDOW_SIZE_TB: usize = 131_072;
     // 2000 events: enough to prime Aeron's flow-control and IPC log buffer.
     const WARMUP_EVENTS: u64 = 2000;
-    // Larger ring buffer: 128K slots prevents any pipeline backpressure.
+    // ResultRing cap = CAPACITY (must be power-of-two, ≥ 2×WINDOW_SIZE_TB).
+    // 262_144 = 2 × 131_072 — satisfies alias-freedom invariant.
     const CAPACITY: usize = 262_144;
     // Max spin retries on Aeron offer backpressure before yielding.
     const OFFER_SPIN_RETRIES: usize = 64;
@@ -267,10 +273,12 @@ pub mod inner {
         println!("[diag] building pipeline (capacity={})...", CAPACITY);
         let builder = PipelineBuilder::new().with_capacity(CAPACITY);
         let results = builder.results();
+        let result_ring = builder.result_ring();
         // Build LedgerHandler separately so we can extract the active-task
         // counter BEFORE moving the handler into PipelineBuilder::add_handler.
         let ledger_handler =
-            LedgerHandler::new(Arc::clone(&ledger_client), ledger_rt, Arc::clone(&results));
+            LedgerHandler::new(Arc::clone(&ledger_client), ledger_rt, Arc::clone(&results))
+                .with_result_ring(Arc::clone(&result_ring));
         let active_tb_tasks = Arc::clone(ledger_handler.active_tasks());
 
         let (pipeline, runners) = builder

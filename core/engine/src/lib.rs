@@ -50,6 +50,7 @@ pub mod handler;
 pub mod handlers;
 pub mod metrics;
 pub mod pipeline;
+pub mod result_ring;
 pub mod ring_buffer;
 pub mod sequence;
 pub mod sharded_pipeline;
