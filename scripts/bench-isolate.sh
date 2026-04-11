@@ -147,9 +147,9 @@ sysctl -qw net.core.busy_read=50         # µs to spin on recv() before sleeping
 sysctl -qw net.ipv4.tcp_slow_start_after_idle=0
 sysctl -qw net.ipv4.tcp_nodelay_val=1 2>/dev/null || true  # best-effort
 
-# Avoid kernel stealing CPU from bench for timer interrupts
-sysctl -qw kernel.sched_min_granularity_ns=10000000   # 10 ms
-sysctl -qw kernel.sched_wakeup_granularity_ns=15000000 # 15 ms
+# Avoid kernel stealing CPU from bench for timer interrupts (not available on all kernels)
+sysctl -qw kernel.sched_min_granularity_ns=10000000   2>/dev/null || true
+sysctl -qw kernel.sched_wakeup_granularity_ns=15000000 2>/dev/null || true
 
 # Disable transparent huge pages defrag (causes latency spikes)
 echo never > /sys/kernel/mm/transparent_hugepage/defrag 2>/dev/null || true
