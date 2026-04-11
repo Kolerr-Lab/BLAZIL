@@ -131,9 +131,11 @@ impl RingBuffer {
         let mask = capacity - 1;
         let claim = Sequence::new(Sequence::INITIAL_VALUE);
         let cursor = Arc::new(Sequence::new(Sequence::INITIAL_VALUE));
-        // Start with one default gating sequence for backward compatibility
-        let default_gating = Arc::new(Sequence::new(Sequence::INITIAL_VALUE));
-        let gating_sequences = vec![default_gating];
+        // No default gate: only gates registered by real consumers via
+        // add_gating_sequence() participate in has_available_capacity().
+        // A phantom gate stuck at INITIAL_VALUE (-1) would cause the producer
+        // to see the ring as full after exactly `capacity` publishes.
+        let gating_sequences = vec![];
 
         // Pre-allocate all slots. Use `with_capacity` + extend to avoid
         // excess reallocation. Each slot contains a default TransactionEvent.
@@ -260,12 +262,15 @@ impl RingBuffer {
     /// use blazil_engine::ring_buffer::RingBuffer;
     /// use blazil_engine::sequence::Sequence;
     ///
-    /// let rb = RingBuffer::new(64).unwrap();
+    /// let mut rb = RingBuffer::new(64).unwrap();
+    /// let gate = rb.add_gating_sequence();
     /// assert_eq!(rb.gating_sequence().get(), Sequence::INITIAL_VALUE);
     /// ```
     #[inline]
     pub fn gating_sequence(&self) -> &Arc<Sequence> {
-        &self.gating_sequences[0]
+        self.gating_sequences
+            .first()
+            .expect("gating_sequence() called before add_gating_sequence()")
     }
 
     /// Adds a new gating sequence for a consumer (worker thread).
@@ -281,7 +286,7 @@ impl RingBuffer {
     /// let mut rb = RingBuffer::new(64).unwrap();
     /// let worker1_gate = rb.add_gating_sequence();
     /// let worker2_gate = rb.add_gating_sequence();
-    /// // Now rb has 3 gating sequences (1 default + 2 added)
+    /// // Now rb has 2 gating sequences (one per consumer)
     /// ```
     pub fn add_gating_sequence(&mut self) -> Arc<Sequence> {
         let new_gate = Arc::new(Sequence::new(Sequence::INITIAL_VALUE));
@@ -301,18 +306,24 @@ impl RingBuffer {
     /// use blazil_engine::ring_buffer::RingBuffer;
     ///
     /// let rb = RingBuffer::new(64).unwrap();
-    /// assert!(rb.has_available_capacity()); // empty buffer has capacity
+    /// assert!(rb.has_available_capacity()); // no consumers yet → always has capacity
     /// ```
     #[inline]
     pub fn has_available_capacity(&self) -> bool {
+        // No registered consumers → producer can always write (no backpressure).
+        if self.gating_sequences.is_empty() {
+            return true;
+        }
         let next_claim = self.claim.get() + 1;
-        // Compute minimum gating sequence across all consumers (slowest consumer)
+        // MIN across all REAL consumer gates (each registered via add_gating_sequence).
+        // A gate stuck at INITIAL_VALUE (-1) would permanently block the producer after
+        // exactly `capacity` publishes, so we never add a phantom default gate.
         let min_gate = self
             .gating_sequences
             .iter()
             .map(|seq| seq.get())
             .min()
-            .unwrap_or(Sequence::INITIAL_VALUE);
+            .unwrap();
         (next_claim - min_gate) < self.capacity as i64
     }
 
