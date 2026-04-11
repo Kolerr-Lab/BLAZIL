@@ -292,7 +292,7 @@ fn aeron_serve_blocking(
                 // Try ResultRing first (async TB results — O(1), cache-friendly).
                 // Fall back to DashMap for sync rejections (ValidationHandler / RiskHandler).
                 let result = pipeline.result_ring().try_remove(next_to_drain)
-                    .or_else(|| pipeline.results().remove(&next_to_drain).map(|e| e.into_inner()));
+                    .or_else(|| pipeline.results().remove(&next_to_drain).map(|(_, v)| v));
                 if let Some(result) = result {
                     let idx = (next_to_drain as usize) & REQ_SLOTS_MASK;
                     let req_id_u64 = req_id_slots[idx];
@@ -352,7 +352,7 @@ fn aeron_serve_blocking(
             while !pipeline.ring_buffer().has_available_capacity() {
                 // Same ResultRing-first, DashMap-fallback drain in the backpressure path.
                 let result = pipeline.result_ring().try_remove(next_to_drain)
-                    .or_else(|| pipeline.results().remove(&next_to_drain).map(|e| e.into_inner()));
+                    .or_else(|| pipeline.results().remove(&next_to_drain).map(|(_, v)| v));
                 if let Some(result) = result {
                     let idx = (next_to_drain as usize) & REQ_SLOTS_MASK;
                     let req_id_u64_bp = req_id_slots[idx];
