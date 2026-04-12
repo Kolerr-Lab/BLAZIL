@@ -30,7 +30,8 @@ fi
 # ── System packages ───────────────────────────────────────────────────────────
 echo "▶ Installing system packages..."
 apt-get update -qq
-apt-get install -y -qq git curl wget htop iotop sysstat net-tools
+apt-get install -y -qq git curl wget htop iotop sysstat net-tools \
+  build-essential pkg-config libssl-dev clang libclang-dev
 
 # ── Kernel tuning for high TPS ────────────────────────────────────────────────
 echo "▶ Tuning kernel parameters..."
