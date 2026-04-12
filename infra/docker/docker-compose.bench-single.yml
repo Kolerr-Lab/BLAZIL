@@ -1,0 +1,45 @@
+name: blazil-bench-single
+
+# Single-node TigerBeetle for benchmark isolation.
+#
+# Each DO node runs its own independent TB instance — no VSR cross-node
+# replication.  Bench processes connect to 127.0.0.1:3000 (local only).
+#
+# Usage (on each node independently):
+#   docker compose -f infra/docker/docker-compose.bench-single.yml up -d
+#
+# Then run bench pointing to local TB:
+#   BLAZIL_TB_ADDRESS=127.0.0.1:3000 ./blazil-bench --scenario sharded-tb --shards 2
+
+networks:
+  blazil-bench:
+    driver: bridge
+
+volumes:
+  tb-bench-data:
+
+services:
+
+  tigerbeetle:
+    image: ghcr.io/tigerbeetle/tigerbeetle:0.16.78
+    container_name: blazil-tb-bench
+    entrypoint: ["/entrypoint.sh"]
+    environment:
+      TB_REPLICA: "0"
+      TB_REPLICA_COUNT: "1"
+      TB_ADDRESSES: "0.0.0.0:3000"
+    volumes:
+      - tb-bench-data:/data
+      - ./tigerbeetle-entrypoint.sh:/entrypoint.sh:ro
+    ports:
+      - "3000:3000"
+    networks:
+      - blazil-bench
+    security_opt:
+      - seccomp:unconfined
+    healthcheck:
+      test: ["CMD-SHELL", "netstat -tln | grep -q ':3000 '"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
