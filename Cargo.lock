@@ -206,6 +206,7 @@ dependencies = [
  "blazil-transport",
  "core_affinity",
  "criterion",
+ "dashmap",
  "rmp-serde",
  "rust_decimal",
  "tokio",

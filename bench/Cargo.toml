@@ -25,6 +25,7 @@ blazil-ledger    = { path = "../core/ledger" }
 blazil-transport = { path = "../core/transport" }
 async-trait      = "0.1"
 core_affinity    = "0.8"
+dashmap          = "6.1"
 rmp-serde        = "1"
 tokio            = { workspace = true }
 tracing          = { workspace = true }

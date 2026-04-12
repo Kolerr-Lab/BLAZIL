@@ -11,6 +11,8 @@ use std::mem::size_of;
 
 #[cfg(feature = "aeron")]
 use blazil_bench::scenarios::aeron_scenario;
+#[cfg(feature = "tigerbeetle-client")]
+use blazil_bench::scenarios::sharded_tb_scenario;
 use blazil_bench::scenarios::{sharded_pipeline_scenario, tcp_scenario, udp_scenario};
 use blazil_common::amount::Amount;
 use blazil_common::ids::{AccountId, LedgerId, TransactionId};
@@ -36,6 +38,28 @@ async fn main() {
         .windows(2)
         .find(|w| w[0] == "--scenario")
         .map(|w| w[1].clone());
+
+    // --shards N  (for --scenario sharded-tb, default 2)
+    #[cfg(feature = "tigerbeetle-client")]
+    let shard_count: usize = args
+        .windows(2)
+        .find(|w| w[0] == "--shards")
+        .and_then(|w| w[1].parse().ok())
+        .unwrap_or(2);
+
+    // ── sharded-tb: direct pipeline + TigerBeetle, N shards ─────────────────
+    #[cfg(feature = "tigerbeetle-client")]
+    if scenario_filter.as_deref() == Some("sharded-tb") {
+        println!("[sharded-tb] shards={shard_count} events={events}");
+        let result = sharded_tb_scenario::run(events, shard_count).await;
+        println!(
+            "      → {} TPS",
+            blazil_bench::report::fmt_commas(result.tps)
+        );
+        let tb_addr = std::env::var("BLAZIL_TB_ADDRESS").ok();
+        blazil_bench::report::save_run(&result, tb_addr.as_deref());
+        return;
+    }
 
     #[cfg(feature = "aeron")]
     let payload_size: usize = {
