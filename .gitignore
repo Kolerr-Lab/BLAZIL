@@ -58,6 +58,9 @@ Thumbs.db
 # Environment
 .env
 .env.local
+
+# Ansible inventory with real IPs — never commit to public repo
+infra/ansible/inventory/production.local
 .env.*.local
 
 # Logs
