@@ -1,8 +1,10 @@
 [blazil_nodes]
-# Replace with real IPs from: terraform output node_public_ips
-node-1 ansible_host=<NODE_1_PUBLIC_IP> blazil_node_id=node-1 blazil_shard_id=0
-node-2 ansible_host=<NODE_2_PUBLIC_IP> blazil_node_id=node-2 blazil_shard_id=1
-node-3 ansible_host=<NODE_3_PUBLIC_IP> blazil_node_id=node-3 blazil_shard_id=2
+# Blaizl-v0.3 NVMe nodes — SGP1 — provisioned 2026-04-13
+# Public IPs (SSH):  node-1=157.245.157.243  node-2=188.166.184.58  node-3=165.22.100.245
+# Private IPs (VSR): node-1=10.104.0.2:3000  node-2=10.104.0.4:3001  node-3=10.104.0.3:3002
+node-1 ansible_host=157.245.157.243 blazil_node_id=node-1 blazil_shard_id=0
+node-2 ansible_host=188.166.184.58  blazil_node_id=node-2 blazil_shard_id=1
+node-3 ansible_host=165.22.100.245  blazil_node_id=node-3 blazil_shard_id=2
 
 [blazil_nodes:vars]
 ansible_user=root
