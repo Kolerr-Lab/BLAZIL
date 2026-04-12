@@ -53,8 +53,11 @@ async fn main() {
         println!("[sharded-tb] shards={shard_count} events={events}");
         let result = sharded_tb_scenario::run(events, shard_count).await;
         println!(
-            "      → {} TPS",
-            blazil_bench::report::fmt_commas(result.tps)
+            "      → {} TPS  (p50={} µs  p99={} µs  p99.9={} µs)",
+            blazil_bench::report::fmt_commas(result.tps),
+            blazil_bench::report::fmt_commas(result.p50_ns / 1_000),
+            blazil_bench::report::fmt_commas(result.p99_ns / 1_000),
+            blazil_bench::report::fmt_commas(result.p99_9_ns / 1_000),
         );
         let tb_addr = std::env::var("BLAZIL_TB_ADDRESS").ok();
         blazil_bench::report::save_run(&result, tb_addr.as_deref());
