@@ -29,6 +29,8 @@ pub mod inner {
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
+    use tokio::sync::broadcast;
+
     use blazil_common::currency::parse_currency;
     use blazil_common::ids::{AccountId, LedgerId, TransactionId};
     use blazil_engine::event::{TransactionEvent, TransactionResult};
@@ -77,14 +79,17 @@ pub mod inner {
 
     /// Run the sharded TigerBeetle E2E benchmark.
     ///
-    /// * `events`      — total events across all shards (divided equally)
-    /// * `shard_count` — number of independent pipeline shards (power of 2)
+    /// * `events`        — total events (divided equally across shards)
+    /// * `shard_count`   — number of independent pipeline shards (power of 2)
+    /// * `duration_secs` — if Some(N), run for N seconds instead of fixed events
+    /// * `metrics_tx`    — optional broadcast channel for live dashboard metrics
     ///
     /// Panics if `BLAZIL_TB_ADDRESS` is not set or TB connection fails.
     pub async fn run(
         events: u64,
         shard_count: usize,
         duration_secs: Option<u64>,
+        metrics_tx: Option<broadcast::Sender<String>>,
     ) -> BenchmarkResult {
         assert!(
             shard_count.is_power_of_two() && shard_count >= 1,
@@ -111,6 +116,21 @@ pub mod inner {
         println!("Ledger        : TigerBeetle @ {tb_addr}");
         println!("Capacity/shard: {CAPACITY_PER_SHARD}");
         println!("Window/shard  : {WINDOW_PER_SHARD}");
+
+        // ── Live dashboard metrics config ─────────────────────────────────────
+        let dur_json = duration_secs
+            .map(|d| d.to_string())
+            .unwrap_or_else(|| "null".to_string());
+        let rt_workers_hint = (shard_count / 2).clamp(2, 16);
+        if let Some(ref tx) = metrics_tx {
+            let msg = format!(
+                "{{\"type\":\"config\",\"shards\":{shard_count},\
+\"duration_secs\":{dur_json},\"rt_workers\":{rt_workers_hint},\
+\"tb_addr\":\"{tb_addr}\",\"capacity_per_shard\":{CAPACITY_PER_SHARD},\
+\"window_per_shard\":{WINDOW_PER_SHARD}}}"
+            );
+            tx.send(msg).ok();
+        }
 
         // ── Shared ledger runtime ─────────────────────────────────────────────
         // VSR is I/O-bound: 2 workers per 4 shards is sufficient.
@@ -217,6 +237,16 @@ pub mod inner {
         tokio::time::sleep(Duration::from_millis(2_000)).await;
         println!("[diag] warmup done — starting timed bench");
 
+        // Broadcast bench_start event to dashboard.
+        if let Some(ref tx) = metrics_tx {
+            tx.send(
+                "{\"type\":\"event\",\"t\":0,\"kind\":\"bench_start\",\
+\"message\":\"Warmup complete — timed bench running\"}"
+                    .to_string(),
+            )
+            .ok();
+        }
+
         // ── Timed bench ───────────────────────────────────────────────────────
         // One producer OS thread per shard for maximum parallelism.
         // Each thread's VecDeque<(seq, Instant)> holds in-flight (seq, send_time)
@@ -253,6 +283,7 @@ pub mod inner {
             let committed_total = Arc::clone(&committed_total);
             let rejected_total = Arc::clone(&rejected_total);
             let stop_flag = Arc::clone(&stop_flag);
+            let metrics_tx_shard = metrics_tx.clone();
 
             let handle = std::thread::Builder::new()
                 .name(format!("bench-shard-{shard_id}"))
@@ -275,6 +306,10 @@ pub mod inner {
                     let mut per_second_tps: Vec<(u64, u64)> = Vec::new();
                     let mut last_window_time = Instant::now();
                     let mut last_window_received = 0u64;
+
+                    // Rolling latency window — 512 samples sorted each second
+                    // for live p50/p99 estimates in the dashboard.
+                    let mut rolling_lat: VecDeque<u64> = VecDeque::with_capacity(512);
 
                     // Pre-compute label once to avoid temp-borrow in format string.
                     let total_label: String = if duration_mode {
@@ -316,14 +351,24 @@ pub mod inner {
                         if let Some(&(seq, t0)) = in_flight.front() {
                             // Hot path: committed result in ResultRing.
                             if result_ring.try_remove(seq).is_some() {
-                                latencies.push(t0.elapsed().as_nanos() as u64);
+                                let lat = t0.elapsed().as_nanos() as u64;
+                                latencies.push(lat);
+                                if rolling_lat.len() >= 512 {
+                                    rolling_lat.pop_front();
+                                }
+                                rolling_lat.push_back(lat);
                                 committed += 1;
                                 in_flight.pop_front();
                                 received += 1;
                                 drained = true;
                             // Cold path: rejected result in DashMap.
                             } else if results.remove(&seq).is_some() {
-                                latencies.push(t0.elapsed().as_nanos() as u64);
+                                let lat = t0.elapsed().as_nanos() as u64;
+                                latencies.push(lat);
+                                if rolling_lat.len() >= 512 {
+                                    rolling_lat.pop_front();
+                                }
+                                rolling_lat.push_back(lat);
                                 rejected += 1;
                                 in_flight.pop_front();
                                 received += 1;
@@ -352,6 +397,28 @@ pub mod inner {
                             per_second_tps.push((current_second, delta_received));
                             last_window_time = Instant::now();
                             last_window_received = received;
+
+                            // Live p50/p99 from rolling window (512-sample sort ~3µs).
+                            let (p50_us, p99_us) = if rolling_lat.len() >= 4 {
+                                let mut s: Vec<u64> = rolling_lat.iter().copied().collect();
+                                s.sort_unstable();
+                                (s[s.len() / 2] / 1_000, s[(s.len() * 99) / 100] / 1_000)
+                            } else {
+                                (0u64, 0u64)
+                            };
+
+                            // Broadcast per-shard tick to live dashboard.
+                            if let Some(ref tx) = metrics_tx_shard {
+                                let fl = in_flight.len();
+                                let msg = format!(
+                                    "{{\"type\":\"tick\",\"t\":{current_second},\
+\"shard_id\":{shard_id},\"tps\":{delta_received},\
+\"committed_total\":{committed},\"rejected_total\":{rejected},\
+\"inflight\":{fl},\"sent_total\":{sent},\
+\"p50_us\":{p50_us},\"p99_us\":{p99_us}}}"
+                                );
+                                tx.send(msg).ok();
+                            }
                         }
 
                         if !drained {
@@ -451,13 +518,49 @@ pub mod inner {
         } else {
             total_events
         };
-        BenchmarkResult::new(
+        let result = BenchmarkResult::new(
             &format!("Sharded TB E2E ({shard_count} shards)"),
             total_for_result,
             wall_duration,
             &mut all_latencies,
         )
-        .with_counts(committed, rejected)
+        .with_counts(committed, rejected);
+
+        // Broadcast final summary to dashboard.
+        if let Some(ref tx) = metrics_tx {
+            let survival_rate = if actual_total > 0 {
+                committed as f64 / actual_total as f64 * 100.0
+            } else {
+                100.0
+            };
+            let tps_vals: Vec<u64> = windowed_tps.values().copied().collect();
+            let avg_tps = if !tps_vals.is_empty() {
+                tps_vals.iter().sum::<u64>() / tps_vals.len() as u64
+            } else {
+                result.tps
+            };
+            let max_tps = tps_vals.iter().max().copied().unwrap_or(result.tps);
+            let min_tps = tps_vals.iter().min().copied().unwrap_or(0);
+            let consistency = if max_tps > 0 {
+                min_tps as f64 / max_tps as f64 * 100.0
+            } else {
+                0.0
+            };
+            let wall_secs = wall_duration.as_secs_f64();
+            let msg = format!(
+                "{{\"type\":\"summary\",\
+\"total_committed\":{committed},\"total_rejected\":{rejected},\
+\"error_rate\":{error_rate:.4},\"survival_rate\":{survival_rate:.4},\
+\"tps\":{},\"avg_tps\":{avg_tps},\"max_tps\":{max_tps},\"min_tps\":{min_tps},\
+\"consistency\":{consistency:.2},\
+\"p50_ns\":{},\"p99_ns\":{},\"p999_ns\":{},\
+\"mean_ns\":{},\"wall_secs\":{wall_secs:.3},\"shards\":{shard_count}}}",
+                result.tps, result.p50_ns, result.p99_ns, result.p99_9_ns, result.mean_ns,
+            );
+            tx.send(msg).ok();
+        }
+
+        result
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

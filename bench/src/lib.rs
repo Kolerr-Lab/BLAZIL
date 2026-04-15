@@ -4,3 +4,4 @@
 pub mod metrics;
 pub mod report;
 pub mod scenarios;
+pub mod ws_server;
