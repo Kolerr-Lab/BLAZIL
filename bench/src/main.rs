@@ -54,6 +54,20 @@ async fn main() {
         .find(|w| w[0] == "--duration")
         .and_then(|w| w[1].parse().ok());
 
+    // --metrics-port N  (start live dashboard WebSocket server on port N)
+    #[cfg(feature = "metrics-ws")]
+    let metrics_port: Option<u16> = args
+        .windows(2)
+        .find(|w| w[0] == "--metrics-port")
+        .and_then(|w| w[1].parse().ok());
+
+    // Start WS server if requested; gives back a broadcast::Sender<String>.
+    #[cfg(feature = "metrics-ws")]
+    let metrics_tx = metrics_port.map(blazil_bench::ws_server::start);
+    #[cfg(not(feature = "metrics-ws"))]
+    let metrics_tx: Option<tokio::sync::broadcast::Sender<String>> = None;
+    let _ = &metrics_tx; // suppress unused warning when tigerbeetle-client is off
+
     // ── sharded-tb: direct pipeline + TigerBeetle, N shards ─────────────────
     #[cfg(feature = "tigerbeetle-client")]
     if scenario_filter.as_deref() == Some("sharded-tb") {
@@ -62,7 +76,7 @@ async fn main() {
         } else {
             println!("[sharded-tb] shards={shard_count} events={events}");
         }
-        let result = sharded_tb_scenario::run(events, shard_count, duration_secs).await;
+        let result = sharded_tb_scenario::run(events, shard_count, duration_secs, metrics_tx).await;
         println!(
             "      → {} TPS  (p50={} µs  p99={} µs  p99.9={} µs)",
             blazil_bench::report::fmt_commas(result.tps),
