@@ -108,9 +108,7 @@ async fn main() {
 
         // Helper: find the first value for a flag like --kill-cmd-1 "cmd"
         let arg_val = |flag: &str| -> Option<String> {
-            args.windows(2)
-                .find(|w| w[0] == flag)
-                .map(|w| w[1].clone())
+            args.windows(2).find(|w| w[0] == flag).map(|w| w[1].clone())
         };
 
         let node_cmds = NodeCommands {
@@ -143,7 +141,9 @@ async fn main() {
 
         let (out_tx, in_rx) = match (metrics_tx, cmd_rx) {
             (Some(tx), Some(rx)) => (tx, rx),
-            _ => panic!("--scenario vsr-failover requires --metrics-port (and --features metrics-ws)"),
+            _ => panic!(
+                "--scenario vsr-failover requires --metrics-port (and --features metrics-ws)"
+            ),
         };
 
         let cfg = FailoverConfig {

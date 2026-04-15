@@ -669,7 +669,9 @@ pub mod inner {
                 }
             }
         } else {
-            println!("[failover] no kill command configured for Node {node_label} — emit event only");
+            println!(
+                "[failover] no kill command configured for Node {node_label} — emit event only"
+            );
             emit_event(
                 metrics_tx,
                 elapsed_t,
@@ -686,9 +688,7 @@ pub mod inner {
             metrics_tx,
             elapsed_t,
             "info",
-            &format!(
-                "VSR 2-of-3 quorum active — Node {node_label} rejoining in {recovery_secs}s"
-            ),
+            &format!("VSR 2-of-3 quorum active — Node {node_label} rejoining in {recovery_secs}s"),
         );
         tokio::time::sleep(Duration::from_secs(recovery_secs)).await;
 
@@ -768,12 +768,7 @@ pub mod inner {
         tx.send(msg.to_string()).ok();
     }
 
-    fn emit_event(
-        tx: &broadcast::Sender<String>,
-        t: u64,
-        kind: &str,
-        message: &str,
-    ) {
+    fn emit_event(tx: &broadcast::Sender<String>, t: u64, kind: &str, message: &str) {
         // Escape message for JSON (no external deps).
         let escaped = message.replace('\\', "\\\\").replace('"', "\\\"");
         tx.send(format!(
@@ -785,13 +780,12 @@ pub mod inner {
     // ── Event helpers (re-exported for sharded_tb_scenario compat) ────────────
 
     fn make_event(debit_id: AccountId, credit_id: AccountId) -> TransactionEvent {
-        use std::str::FromStr;
         use blazil_common::amount::Amount;
         use blazil_common::currency::parse_currency;
         use rust_decimal::Decimal;
+        use std::str::FromStr;
         let usd = parse_currency("USD").unwrap();
-        let amount =
-            Amount::new(Decimal::from_str("1.00").unwrap(), usd).unwrap();
+        let amount = Amount::new(Decimal::from_str("1.00").unwrap(), usd).unwrap();
         use blazil_ledger::convert::amount_to_minor_units;
         let units = amount_to_minor_units(&amount).unwrap() as u64;
         TransactionEvent::new(
