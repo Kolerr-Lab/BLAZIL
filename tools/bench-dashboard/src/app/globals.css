@@ -13,9 +13,9 @@
   --accent-amber: #f59e0b;
   --accent-red: #ef4444;
   --accent-purple: #a855f7;
-  --text: #e2e8f0;
-  --text-muted: #64748b;
-  --text-dim: #334155;
+  --text: #f1f5f9;
+  --text-muted: #94a3b8;
+  --text-dim: #64748b;
 }
 
 * {
