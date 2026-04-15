@@ -6,6 +6,7 @@ import { Header } from "@/components/Header";
 import { HeroMetrics } from "@/components/HeroMetrics";
 import { TPSChart } from "@/components/TPSChart";
 import { LatencyPanel } from "@/components/LatencyPanel";
+import { FailoverPanel } from "@/components/FailoverPanel";
 import type { EventMessage } from "@/types/metrics";
 
 const DEFAULT_WS_URL = "ws://localhost:9090/ws";
@@ -164,6 +165,14 @@ export default function DashboardPage() {
             </div>
           </div>
         )}
+
+        {/* VSR Failover Panel */}
+        <div className="mt-5">
+          <div className="text-xs font-semibold uppercase tracking-widest mb-3" style={{ color: "var(--text-muted)" }}>
+            Fault Tolerance
+          </div>
+          <FailoverPanel state={state} />
+        </div>
 
         {/* Event log */}
         <div className="mt-5">
