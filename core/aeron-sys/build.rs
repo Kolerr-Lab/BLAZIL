@@ -129,7 +129,7 @@ fn build_aeron_static(aeron_src: &PathBuf) {
 }
 
 #[cfg(feature = "regenerate-bindings")]
-fn regenerate_bindings(aeron_src: &PathBuf, manifest_dir: &PathBuf) {
+fn regenerate_bindings(aeron_src: &std::path::Path, manifest_dir: &std::path::Path) {
     let headers = aeron_src.join("aeron-client/src/main/c");
     let out = manifest_dir.join("src/bindings.rs");
 
