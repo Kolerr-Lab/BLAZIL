@@ -407,41 +407,53 @@ export function FailoverPanel({ state, sendCommand }: Props) {
                     </div>
                   </div>
 
-                  {/* Kill / Restart buttons — only when bench is connected */}
-                  {isConnected && (
-                    <div className="flex gap-1 mt-0.5">
-                      {!isDown && (
-                        <button
-                          onClick={() => killNode(node.id)}
-                          title={`Send kill_node command to bench — runs your configured --kill-cmd-${node.id + 1}`}
-                          className="flex-1 text-[9px] font-bold py-0.5 rounded"
-                          style={{
-                            background: "color-mix(in srgb, var(--accent-red) 12%, transparent)",
-                            color: "var(--accent-red)",
-                            border: "1px solid color-mix(in srgb, var(--accent-red) 22%, transparent)",
-                            cursor: "pointer",
-                          }}
-                        >
-                          KILL
-                        </button>
-                      )}
-                      {isDown && (
-                        <button
-                          onClick={() => restartNode(node.id)}
-                          title={`Send restart_node command to bench — runs your configured --restart-cmd-${node.id + 1}`}
-                          className="flex-1 text-[9px] font-bold py-0.5 rounded"
-                          style={{
-                            background: "color-mix(in srgb, var(--accent-green) 12%, transparent)",
-                            color: "var(--accent-green)",
-                            border: "1px solid color-mix(in srgb, var(--accent-green) 22%, transparent)",
-                            cursor: "pointer",
-                          }}
-                        >
-                          RESTART
-                        </button>
-                      )}
-                    </div>
-                  )}
+                  {/* Kill / Restart buttons — always visible, disabled when not connected */}
+                  <div className="flex gap-1 mt-0.5">
+                    {!isDown && (
+                      <button
+                        onClick={() => isConnected && killNode(node.id)}
+                        title={
+                          isConnected
+                            ? `Send kill_node command to bench — runs your configured --kill-cmd-${node.id + 1}`
+                            : "Connect to a running --scenario vsr-failover bench first"
+                        }
+                        className="flex-1 text-[9px] font-bold py-0.5 rounded"
+                        style={{
+                          background: isConnected
+                            ? "color-mix(in srgb, var(--accent-red) 12%, transparent)"
+                            : "color-mix(in srgb, var(--border) 40%, transparent)",
+                          color: isConnected ? "var(--accent-red)" : "var(--text-dim)",
+                          border: `1px solid ${isConnected ? "color-mix(in srgb, var(--accent-red) 22%, transparent)" : "var(--border)"}`,
+                          cursor: isConnected ? "pointer" : "not-allowed",
+                          opacity: isConnected ? 1 : 0.45,
+                        }}
+                      >
+                        KILL
+                      </button>
+                    )}
+                    {isDown && (
+                      <button
+                        onClick={() => isConnected && restartNode(node.id)}
+                        title={
+                          isConnected
+                            ? `Send restart_node command to bench — runs your configured --restart-cmd-${node.id + 1}`
+                            : "Connect to a running --scenario vsr-failover bench first"
+                        }
+                        className="flex-1 text-[9px] font-bold py-0.5 rounded"
+                        style={{
+                          background: isConnected
+                            ? "color-mix(in srgb, var(--accent-green) 12%, transparent)"
+                            : "color-mix(in srgb, var(--border) 40%, transparent)",
+                          color: isConnected ? "var(--accent-green)" : "var(--text-dim)",
+                          border: `1px solid ${isConnected ? "color-mix(in srgb, var(--accent-green) 22%, transparent)" : "var(--border)"}`,
+                          cursor: isConnected ? "pointer" : "not-allowed",
+                          opacity: isConnected ? 1 : 0.45,
+                        }}
+                      >
+                        RESTART
+                      </button>
+                    )}
+                  </div>
                 </div>
               );
             })}
