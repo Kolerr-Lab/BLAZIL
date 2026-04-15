@@ -81,7 +81,11 @@ pub mod inner {
     /// * `shard_count` — number of independent pipeline shards (power of 2)
     ///
     /// Panics if `BLAZIL_TB_ADDRESS` is not set or TB connection fails.
-    pub async fn run(events: u64, shard_count: usize, duration_secs: Option<u64>) -> BenchmarkResult {
+    pub async fn run(
+        events: u64,
+        shard_count: usize,
+        duration_secs: Option<u64>,
+    ) -> BenchmarkResult {
         assert!(
             shard_count.is_power_of_two() && shard_count >= 1,
             "shard_count must be a power of 2, got {shard_count}"
@@ -269,7 +273,7 @@ pub mod inner {
 
                     // Pre-compute label once to avoid temp-borrow in format string.
                     let total_label: String = if duration_mode {
-                        "\u221e".to_string()
+                        "\u{221e}".to_string()
                     } else {
                         n.to_string()
                     };
@@ -368,7 +372,11 @@ pub mod inner {
         }
 
         // Wait for all producer threads to finish.
-        let latency_cap = if duration_mode { 0 } else { total_events as usize };
+        let latency_cap = if duration_mode {
+            0
+        } else {
+            total_events as usize
+        };
         let mut all_latencies: Vec<u64> = Vec::with_capacity(latency_cap);
         for handle in producer_handles {
             let lats = handle.join().expect("producer thread panicked");
@@ -390,7 +398,11 @@ pub mod inner {
 
         // In duration-mode the pre-computed total_events may differ from what
         // was actually processed; use the real count for the result record.
-        let total_for_result = if duration_mode { actual_total } else { total_events };
+        let total_for_result = if duration_mode {
+            actual_total
+        } else {
+            total_events
+        };
         BenchmarkResult::new(
             &format!("Sharded TB E2E ({shard_count} shards)"),
             total_for_result,
