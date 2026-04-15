@@ -246,7 +246,8 @@ ssh root@<node-1> './stresstest-linux -target=<private-ip>:50051 -duration=120s'
 |---------|--------|--------------|----------|
 | **v0.1** | ✅ Done | 62,770 TPS (DO, gRPC) | Core engine, VSR consensus, gRPC streaming |
 | **v0.2** | ✅ Done | 1.2M TPS local · **436K TPS DO (sharded)** · **131K TPS DO (VSR)** | Aeron IPC, io_uring, sharded-tb E2E, TigerBeetle VSR, 0% error |
-| **v0.3** | 📅 Planned | est. 1M+ TPS (VSR, DO) | Bare-metal NVMe, XDP ingress, larger ring buffer, multi-region |
+| **v0.3** | 📅 Planned | est. 1M+ TPS (DO, 8-shard) | 8-shard sustained bench, per-second TPS window, VSR failover recovery test, `rt_workers` 16 |
+| **v0.4** | 🔭 Future | est. 5-10M TPS | Bare-metal NVMe Gen4, XDP ingress, larger ring buffer, multi-region |
 
 ---
 
