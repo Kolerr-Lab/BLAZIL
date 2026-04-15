@@ -1,14 +1,16 @@
 //! Embedded WebSocket metrics server for the Blazil bench dashboard.
 //!
 //! When the bench binary is invoked with `--metrics-port PORT`, this module
-//! starts a lightweight Axum WebSocket server that broadcasts real-time
-//! per-second metrics to all connected dashboard clients.
+//! starts a lightweight Axum WebSocket server that:
+//!   - Broadcasts real-time per-second metrics to all connected dashboard clients.
+//!   - Receives control commands (e.g. `kill_node`, `restart_node`) sent by the
+//!     dashboard back to the bench process.
 //!
 //! # Usage
 //!
 //! ```bash
 //! BLAZIL_TB_ADDRESS=... ./blazil-bench \
-//!   --scenario sharded-tb \
+//!   --scenario vsr-failover \
 //!   --shards 8 \
 //!   --duration 600 \
 //!   --metrics-port 9090
@@ -37,12 +39,18 @@ mod inner {
 
     /// Start the WS metrics server on `port`.
     ///
-    /// Returns a `broadcast::Sender<String>` that the bench threads use to
-    /// publish JSON metric lines. Every connected WebSocket subscriber
-    /// receives all messages in real-time.
-    pub fn start(port: u16) -> broadcast::Sender<String> {
-        let (tx, _) = broadcast::channel::<String>(8192);
-        let tx_srv = tx.clone();
+    /// Returns:
+    /// - `broadcast::Sender<String>`: bench threads publish JSON metric lines here;
+    ///   every connected WS client receives all messages.
+    /// - `broadcast::Receiver<String>`: bench code subscribes here to receive
+    ///   control commands sent by the dashboard (e.g. `kill_node:1`).
+    pub fn start(port: u16) -> (broadcast::Sender<String>, broadcast::Receiver<String>) {
+        // outgoing: bench → dashboard
+        let (out_tx, _) = broadcast::channel::<String>(8192);
+        // incoming: dashboard → bench
+        let (in_tx, in_rx) = broadcast::channel::<String>(256);
+
+        let out_tx_srv = out_tx.clone();
 
         tokio::spawn(async move {
             let cors = CorsLayer::new()
@@ -53,7 +61,7 @@ mod inner {
             let app = Router::new()
                 .route("/ws", get(ws_handler))
                 .route("/health", get(|| async { "ok" }))
-                .with_state(tx_srv)
+                .with_state((out_tx_srv, in_tx))
                 .layer(cors);
 
             let addr = format!("0.0.0.0:{port}");
@@ -64,29 +72,49 @@ mod inner {
             axum::serve(listener, app).await.expect("metrics WS serve");
         });
 
-        tx
+        (out_tx, in_rx)
     }
 
     async fn ws_handler(
         ws: WebSocketUpgrade,
-        State(tx): State<broadcast::Sender<String>>,
+        State((out_tx, in_tx)): State<(broadcast::Sender<String>, broadcast::Sender<String>)>,
     ) -> impl IntoResponse {
-        ws.on_upgrade(move |socket| handle_socket(socket, tx))
+        ws.on_upgrade(move |socket| handle_socket(socket, out_tx, in_tx))
     }
 
-    async fn handle_socket(mut socket: WebSocket, tx: broadcast::Sender<String>) {
-        let mut rx = tx.subscribe();
+    async fn handle_socket(
+        mut socket: WebSocket,
+        out_tx: broadcast::Sender<String>,
+        in_tx: broadcast::Sender<String>,
+    ) {
+        let mut out_rx = out_tx.subscribe();
         loop {
-            match rx.recv().await {
-                Ok(msg) => {
-                    if socket.send(Message::Text(msg.into())).await.is_err() {
-                        break;
+            tokio::select! {
+                // Bench → dashboard
+                result = out_rx.recv() => {
+                    match result {
+                        Ok(msg) => {
+                            if socket.send(Message::Text(msg.into())).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(broadcast::error::RecvError::Closed) => break,
+                        Err(broadcast::error::RecvError::Lagged(_)) => {}
                     }
                 }
-                Err(broadcast::error::RecvError::Closed) => break,
-                // Slow client: skip dropped frames rather than disconnect.
-                Err(broadcast::error::RecvError::Lagged(_)) => {}
+                // Dashboard → bench
+                result = socket.recv() => {
+                    match result {
+                        Some(Ok(Message::Text(cmd))) => {
+                            // Broadcast to all bench subscribers; ignore if no one is listening.
+                            in_tx.send(cmd.to_string()).ok();
+                        }
+                        Some(Ok(Message::Close(_))) | None => break,
+                        _ => {}
+                    }
+                }
             }
         }
     }
 }
+

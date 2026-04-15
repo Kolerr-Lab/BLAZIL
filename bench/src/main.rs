@@ -13,6 +13,8 @@ use std::mem::size_of;
 use blazil_bench::scenarios::aeron_scenario;
 #[cfg(feature = "tigerbeetle-client")]
 use blazil_bench::scenarios::sharded_tb_scenario;
+#[cfg(all(feature = "tigerbeetle-client", feature = "metrics-ws"))]
+use blazil_bench::scenarios::vsr_failover_scenario;
 use blazil_bench::scenarios::{sharded_pipeline_scenario, tcp_scenario, udp_scenario};
 use blazil_common::amount::Amount;
 use blazil_common::ids::{AccountId, LedgerId, TransactionId};
@@ -61,12 +63,22 @@ async fn main() {
         .find(|w| w[0] == "--metrics-port")
         .and_then(|w| w[1].parse().ok());
 
-    // Start WS server if requested; gives back a broadcast::Sender<String>.
+    // Start WS server if requested.
+    // Returns (out_tx, cmd_rx): bench→dashboard broadcaster + dashboard→bench receiver.
     #[cfg(feature = "metrics-ws")]
-    let metrics_tx = metrics_port.map(blazil_bench::ws_server::start);
+    let (metrics_tx, cmd_rx) = {
+        if let Some(port) = metrics_port {
+            let (tx, rx) = blazil_bench::ws_server::start(port);
+            (Some(tx), Some(rx))
+        } else {
+            (None, None)
+        }
+    };
     #[cfg(not(feature = "metrics-ws"))]
     let metrics_tx: Option<tokio::sync::broadcast::Sender<String>> = None;
-    let _ = &metrics_tx; // suppress unused warning when tigerbeetle-client is off
+    #[cfg(not(feature = "metrics-ws"))]
+    let cmd_rx: Option<tokio::sync::broadcast::Receiver<String>> = None;
+    let _ = (&metrics_tx, &cmd_rx); // suppress unused warning
 
     // ── sharded-tb: direct pipeline + TigerBeetle, N shards ─────────────────
     #[cfg(feature = "tigerbeetle-client")]
@@ -77,6 +89,76 @@ async fn main() {
             println!("[sharded-tb] shards={shard_count} events={events}");
         }
         let result = sharded_tb_scenario::run(events, shard_count, duration_secs, metrics_tx).await;
+        println!(
+            "      → {} TPS  (p50={} µs  p99={} µs  p99.9={} µs)",
+            blazil_bench::report::fmt_commas(result.tps),
+            blazil_bench::report::fmt_commas(result.p50_ns / 1_000),
+            blazil_bench::report::fmt_commas(result.p99_ns / 1_000),
+            blazil_bench::report::fmt_commas(result.p99_9_ns / 1_000),
+        );
+        let tb_addr = std::env::var("BLAZIL_TB_ADDRESS").ok();
+        blazil_bench::report::save_run(&result, tb_addr.as_deref());
+        return;
+    }
+
+    // ── vsr-failover: sharded-tb + real node kill/restart via WS command ─────
+    #[cfg(all(feature = "tigerbeetle-client", feature = "metrics-ws"))]
+    if scenario_filter.as_deref() == Some("vsr-failover") {
+        use blazil_bench::scenarios::vsr_failover_scenario::inner::{FailoverConfig, NodeCommands};
+
+        // Helper: find the first value for a flag like --kill-cmd-1 "cmd"
+        let arg_val = |flag: &str| -> Option<String> {
+            args.windows(2)
+                .find(|w| w[0] == flag)
+                .map(|w| w[1].clone())
+        };
+
+        let node_cmds = NodeCommands {
+            kill: [
+                arg_val("--kill-cmd-1"),
+                arg_val("--kill-cmd-2"),
+                arg_val("--kill-cmd-3"),
+            ],
+            restart: [
+                arg_val("--restart-cmd-1"),
+                arg_val("--restart-cmd-2"),
+                arg_val("--restart-cmd-3"),
+            ],
+        };
+
+        let auto_kill_node: Option<u8> = args
+            .windows(2)
+            .find(|w| w[0] == "--auto-kill-node")
+            .and_then(|w| w[1].parse().ok());
+        let auto_kill_after_secs: u64 = args
+            .windows(2)
+            .find(|w| w[0] == "--auto-kill-after-secs")
+            .and_then(|w| w[1].parse().ok())
+            .unwrap_or(30);
+        let recovery_secs: u64 = args
+            .windows(2)
+            .find(|w| w[0] == "--failover-recovery-secs")
+            .and_then(|w| w[1].parse().ok())
+            .unwrap_or(30);
+
+        let (out_tx, in_rx) = match (metrics_tx, cmd_rx) {
+            (Some(tx), Some(rx)) => (tx, rx),
+            _ => panic!("--scenario vsr-failover requires --metrics-port (and --features metrics-ws)"),
+        };
+
+        let cfg = FailoverConfig {
+            events,
+            shard_count,
+            duration_secs,
+            auto_kill_node,
+            auto_kill_after_secs,
+            recovery_secs,
+            node_cmds,
+            metrics_tx: out_tx,
+            cmd_rx: in_rx,
+        };
+
+        let result = vsr_failover_scenario::inner::run(cfg).await;
         println!(
             "      → {} TPS  (p50={} µs  p99={} µs  p99.9={} µs)",
             blazil_bench::report::fmt_commas(result.tps),

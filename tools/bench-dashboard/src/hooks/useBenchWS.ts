@@ -189,6 +189,14 @@ export function useBenchWS(wsUrl: string) {
     setState((p) => ({ ...p, status: "idle" }));
   }, []);
 
+  /** Send a control command to the bench process via the WS connection.
+   *  The bench WS server forwards it to all scenario subscribers. */
+  const sendCommand = useCallback((cmd: Record<string, unknown>) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify(cmd));
+    }
+  }, []);
+
   useEffect(() => {
     return () => {
       wsRef.current?.close();
@@ -196,5 +204,5 @@ export function useBenchWS(wsUrl: string) {
     };
   }, []);
 
-  return { state, connect, disconnect };
+  return { state, connect, disconnect, sendCommand };
 }

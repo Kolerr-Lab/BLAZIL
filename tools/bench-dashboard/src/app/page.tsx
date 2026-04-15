@@ -13,7 +13,7 @@ const DEFAULT_WS_URL = "ws://localhost:9090/ws";
 
 export default function DashboardPage() {
   const [wsUrl, setWsUrl] = useState(DEFAULT_WS_URL);
-  const { state, connect, disconnect } = useBenchWS(wsUrl);
+  const { state, connect, disconnect, sendCommand } = useBenchWS(wsUrl);
 
   // Auto-scroll event log to bottom.
   const eventsEndRef = useCallback((el: HTMLDivElement | null) => {
@@ -171,7 +171,7 @@ export default function DashboardPage() {
           <div className="text-xs font-semibold uppercase tracking-widest mb-3" style={{ color: "var(--text-muted)" }}>
             Fault Tolerance
           </div>
-          <FailoverPanel state={state} />
+          <FailoverPanel state={state} sendCommand={sendCommand} />
         </div>
 
         {/* Event log */}

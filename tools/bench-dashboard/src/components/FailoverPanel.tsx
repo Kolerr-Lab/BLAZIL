@@ -1,12 +1,11 @@
 "use client";
 
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useEffect, useRef, useMemo } from "react";
 import type { DashboardState } from "@/types/metrics";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 type NodeStatus = "healthy" | "down" | "recovering";
-type SimStep = "idle" | "crashing" | "failover" | "consensus" | "recovery" | "done";
 
 interface ClusterNode {
   id: number;           // 0-indexed
@@ -14,12 +13,6 @@ interface ClusterNode {
   role: "primary" | "replica";
   status: NodeStatus;
   tpsShare: number;     // 0–100, proportion of cluster TPS
-}
-
-interface SimEvent {
-  t: number;
-  msg: string;
-  kind: "down" | "up" | "info";
 }
 
 // ── SVG layout (viewBox 0 0 100 100) ─────────────────────────────────────────
@@ -58,78 +51,20 @@ function fmtTps(tps: number): string {
 
 interface Props {
   state: DashboardState;
+  /** Send a WS control command to the bench process. */
+  sendCommand: (cmd: Record<string, unknown>) => void;
 }
 
-export function FailoverPanel({ state }: Props) {
-  // ── Simulation state ───────────────────────────────────────────────────────
-  const [simStep, setSimStep] = useState<SimStep>("idle");
-  const [simNodeDown, setSimNodeDown] = useState<number | null>(null);
-  const [simLog, setSimLog] = useState<SimEvent[]>([]);
-  const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
-  const startTs = useRef(0);
+export function FailoverPanel({ state, sendCommand }: Props) {
   const logRef = useRef<HTMLDivElement>(null);
-
-  function clearTimers() {
-    timers.current.forEach(clearTimeout);
-    timers.current = [];
-  }
-
-  function addSimEvent(msg: string, kind: SimEvent["kind"]) {
-    const t = Math.round((Date.now() - startTs.current) / 1000);
-    setSimLog((prev) => [...prev, { t, msg, kind }]);
-  }
-
-  function schedule(ms: number, fn: () => void) {
-    timers.current.push(setTimeout(fn, ms));
-  }
-
-  function startSim() {
-    if (simStep !== "idle" && simStep !== "done") return;
-    clearTimers();
-    setSimLog([]);
-    setSimNodeDown(2); // crash Node 3 (bottom-right)
-    startTs.current = Date.now();
-
-    setSimStep("crashing");
-    addSimEvent("💥 Node 3 — connection timeout (packet loss 100%)", "down");
-
-    schedule(1600, () => {
-      setSimStep("failover");
-      addSimEvent("⚡ VSR view change triggered — elect new primary", "info");
-      addSimEvent("⚡ Node 1 + Node 2 broadcasting PREPARE messages…", "info");
-    });
-
-    schedule(3800, () => {
-      setSimStep("consensus");
-      addSimEvent("✅ 2-of-3 quorum reached — VSR consensus RESTORED", "up");
-      addSimEvent("✅ TPS stable: surviving nodes absorb full load", "up");
-    });
-
-    schedule(9000, () => {
-      setSimStep("recovery");
-      addSimEvent("🔄 Node 3 reconnecting — state transfer in progress", "info");
-    });
-
-    schedule(12500, () => {
-      setSimStep("done");
-      addSimEvent("✅ Node 3 RECOVERED — 3-of-3 cluster online", "up");
-    });
-
-    schedule(16000, () => {
-      setSimStep("idle");
-      setSimNodeDown(null);
-    });
-  }
-
-  useEffect(() => () => clearTimers(), []);
 
   // Auto-scroll log
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight, behavior: "smooth" });
-  }, [simLog, state.events]);
+  }, [state.events]);
 
   // ── Derive live cluster nodes from WS events + shard TPS ─────────────────
-  const liveNodes = useMemo<ClusterNode[]>(() => {
+  const nodes = useMemo<ClusterNode[]>(() => {
     const totalShards = state.config?.shards ?? 0;
     const nodeCount = 3;
 
@@ -142,6 +77,9 @@ export function FailoverPanel({ state }: Props) {
       } else if (ev.kind === "node_up") {
         const id = parseNodeId(ev.message);
         if (id !== null) nodeStatus.set(id, "healthy");
+      } else if (ev.kind === "info" && ev.message.toLowerCase().includes("rejoining")) {
+        const id = parseNodeId(ev.message);
+        if (id !== null) nodeStatus.set(id, "recovering");
       }
     }
 
@@ -165,92 +103,69 @@ export function FailoverPanel({ state }: Props) {
     }));
   }, [state.events, state.shards, state.config]);
 
-  // Overlay sim state onto live nodes
-  const nodes: ClusterNode[] = liveNodes.map((n) => {
-    if (simNodeDown !== n.id) return n;
-    if (simStep === "crashing" || simStep === "failover" || simStep === "consensus")
-      return { ...n, status: "down" };
-    if (simStep === "recovery") return { ...n, status: "recovering" };
-    return n;
-  });
-
   // ── Consensus badge ────────────────────────────────────────────────────────
   const downCount = nodes.filter((n) => n.status === "down").length;
+  const recoveringCount = nodes.filter((n) => n.status === "recovering").length;
 
-  let consensusLabel = "3-of-3 QUORUM";
-  let consensusColor = "var(--accent-green)";
-
-  if (simStep === "crashing") {
-    consensusLabel = "NODE FAILURE";
-    consensusColor = "var(--accent-red)";
-  } else if (simStep === "failover") {
-    consensusLabel = "VIEW CHANGE…";
-    consensusColor = "var(--accent-amber)";
-  } else if (simStep === "consensus" || simStep === "recovery") {
-    consensusLabel = "2-of-3 QUORUM";
-    consensusColor = "var(--accent-amber)";
-  } else if (simStep === "done") {
+  let consensusLabel: string;
+  let consensusColor: string;
+  if (downCount === 0 && recoveringCount === 0) {
     consensusLabel = "3-of-3 QUORUM";
     consensusColor = "var(--accent-green)";
+  } else if (downCount === 0 && recoveringCount > 0) {
+    consensusLabel = "REJOINING";
+    consensusColor = "var(--accent-amber)";
   } else if (downCount === 1) {
     consensusLabel = "2-of-3 QUORUM";
     consensusColor = "var(--accent-amber)";
-  } else if (downCount >= 2) {
+  } else {
     consensusLabel = "QUORUM LOST";
     consensusColor = "var(--accent-red)";
   }
 
-  const isSimRunning = simStep !== "idle" && simStep !== "done";
+  // Bench is connected when we have an active WS session
+  const isConnected = state.status === "running" || state.status === "connecting";
 
-  // ── Merged event log entries ───────────────────────────────────────────────
+  // Send kill / restart commands to the bench process
+  const killNode = (nodeId: number) =>
+    sendCommand({ cmd: "kill_node", node_id: nodeId + 1 }); // 1-indexed
+  const restartNode = (nodeId: number) =>
+    sendCommand({ cmd: "restart_node", node_id: nodeId + 1 });
+
+  // Only show failover-relevant events in the log
   const failoverEvents = state.events.filter(
-    (e) => e.kind === "node_down" || e.kind === "node_up"
+    (e) => e.kind === "node_down" || e.kind === "node_up" || e.kind === "info"
   );
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="card p-4">
       {/* ── Header ── */}
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-3">
-          <span
-            className="text-xs font-semibold uppercase tracking-widest"
-            style={{ color: "var(--text-muted)" }}
-          >
-            VSR Cluster
-          </span>
-          <span
-            className="text-[10px] font-bold px-2 py-0.5 rounded-full"
-            style={{
-              background: `color-mix(in srgb, ${consensusColor} 14%, transparent)`,
-              color: consensusColor,
-              border: `1px solid color-mix(in srgb, ${consensusColor} 28%, transparent)`,
-              transition: "all 0.4s",
-            }}
-          >
-            {consensusLabel}
-          </span>
-        </div>
-        <button
-          onClick={startSim}
-          disabled={isSimRunning}
-          className="text-[10px] font-bold px-3 py-1 rounded-full"
+      <div className="flex items-center gap-3 mb-4">
+        <span
+          className="text-xs font-semibold uppercase tracking-widest"
+          style={{ color: "var(--text-muted)" }}
+        >
+          VSR Cluster
+        </span>
+        <span
+          className="text-[10px] font-bold px-2 py-0.5 rounded-full"
           style={{
-            background: isSimRunning
-              ? "var(--border)"
-              : "color-mix(in srgb, var(--accent-red) 14%, transparent)",
-            color: isSimRunning ? "var(--text-dim)" : "var(--accent-red)",
-            border: `1px solid ${
-              isSimRunning
-                ? "var(--border)"
-                : "color-mix(in srgb, var(--accent-red) 28%, transparent)"
-            }`,
-            cursor: isSimRunning ? "not-allowed" : "pointer",
-            transition: "all 0.2s",
+            background: `color-mix(in srgb, ${consensusColor} 14%, transparent)`,
+            color: consensusColor,
+            border: `1px solid color-mix(in srgb, ${consensusColor} 28%, transparent)`,
+            transition: "all 0.4s",
           }}
         >
-          {isSimRunning ? "SIMULATING…" : "▶ SIMULATE FAILOVER"}
-        </button>
+          {consensusLabel}
+        </span>
+        {!isConnected && (
+          <span className="text-[10px] ml-auto" style={{ color: "var(--text-dim)" }}>
+            Connect to a running{" "}
+            <span style={{ color: "var(--accent-amber)" }}>--scenario vsr-failover</span>{" "}
+            bench to enable kill controls
+          </span>
+        )}
       </div>
 
       {/* ── Body: SVG + cards ── */}
@@ -491,6 +406,42 @@ export function FailoverPanel({ state }: Props) {
                       {isDown ? "—" : fmtTps(perNodeTps)}
                     </div>
                   </div>
+
+                  {/* Kill / Restart buttons — only when bench is connected */}
+                  {isConnected && (
+                    <div className="flex gap-1 mt-0.5">
+                      {!isDown && (
+                        <button
+                          onClick={() => killNode(node.id)}
+                          title={`Send kill_node command to bench — runs your configured --kill-cmd-${node.id + 1}`}
+                          className="flex-1 text-[9px] font-bold py-0.5 rounded"
+                          style={{
+                            background: "color-mix(in srgb, var(--accent-red) 12%, transparent)",
+                            color: "var(--accent-red)",
+                            border: "1px solid color-mix(in srgb, var(--accent-red) 22%, transparent)",
+                            cursor: "pointer",
+                          }}
+                        >
+                          KILL
+                        </button>
+                      )}
+                      {isDown && (
+                        <button
+                          onClick={() => restartNode(node.id)}
+                          title={`Send restart_node command to bench — runs your configured --restart-cmd-${node.id + 1}`}
+                          className="flex-1 text-[9px] font-bold py-0.5 rounded"
+                          style={{
+                            background: "color-mix(in srgb, var(--accent-green) 12%, transparent)",
+                            color: "var(--accent-green)",
+                            border: "1px solid color-mix(in srgb, var(--accent-green) 22%, transparent)",
+                            cursor: "pointer",
+                          }}
+                        >
+                          RESTART
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -507,47 +458,33 @@ export function FailoverPanel({ state }: Props) {
               maxHeight: 110,
             }}
           >
-            {failoverEvents.length === 0 && simLog.length === 0 ? (
+            {failoverEvents.length === 0 ? (
               <span style={{ color: "var(--text-dim)" }}>
-                No failover events. Press{" "}
-                <span style={{ color: "var(--accent-red)" }}>▶ SIMULATE FAILOVER</span>{" "}
-                to see VSR resilience in action.
+                No failover events yet.{" "}
+                {isConnected ? (
+                  <>Press <span style={{ color: "var(--accent-red)" }}>KILL</span> on a node to trigger a real VSR failover.</>
+                ) : (
+                  <>Connect to a running <span style={{ color: "var(--accent-amber)" }}>--scenario vsr-failover</span> bench.</>
+                )}
               </span>
             ) : (
-              <>
-                {failoverEvents.map((e, i) => (
-                  <div key={`live-${i}`} className="flex gap-2 py-px">
-                    <span style={{ color: "var(--text-dim)" }}>t+{e.t}s</span>
-                    <span
-                      style={{
-                        color:
-                          e.kind === "node_down"
-                            ? "var(--accent-red)"
-                            : "var(--accent-green)",
-                      }}
-                    >
-                      {e.message}
-                    </span>
-                  </div>
-                ))}
-                {simLog.map((e, i) => (
-                  <div key={`sim-${i}`} className="flex gap-2 py-px">
-                    <span style={{ color: "var(--text-dim)" }}>+{e.t}s</span>
-                    <span
-                      style={{
-                        color:
-                          e.kind === "down"
-                            ? "var(--accent-red)"
-                            : e.kind === "up"
-                            ? "var(--accent-green)"
-                            : "var(--text-muted)",
-                      }}
-                    >
-                      {e.msg}
-                    </span>
-                  </div>
-                ))}
-              </>
+              failoverEvents.slice(-40).map((e, i) => (
+                <div key={i} className="flex gap-2 py-px">
+                  <span style={{ color: "var(--text-dim)" }}>t+{e.t}s</span>
+                  <span
+                    style={{
+                      color:
+                        e.kind === "node_down"
+                          ? "var(--accent-red)"
+                          : e.kind === "node_up"
+                          ? "var(--accent-green)"
+                          : "var(--text-muted)",
+                    }}
+                  >
+                    {e.message}
+                  </span>
+                </div>
+              ))
             )}
           </div>
         </div>
