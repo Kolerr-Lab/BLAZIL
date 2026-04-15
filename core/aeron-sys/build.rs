@@ -47,7 +47,7 @@ fn main() {
     build_aeron_static(&aeron_src);
 }
 
-fn build_aeron_static(aeron_src: &PathBuf) {
+fn build_aeron_static(aeron_src: &std::path::Path) {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let build_dir = out_dir.join("aeron-build");
     std::fs::create_dir_all(&build_dir).expect("create build dir");
