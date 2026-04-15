@@ -24,7 +24,7 @@
 
 #[cfg(feature = "tigerbeetle-client")]
 pub mod inner {
-    use std::collections::VecDeque;
+    use std::collections::{BTreeMap, VecDeque};
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
@@ -271,6 +271,11 @@ pub mod inner {
                     let mut rejected = 0u64;
                     let mut last_hb = Instant::now();
 
+                    // Per-second TPS tracking for failover analysis.
+                    let mut per_second_tps: Vec<(u64, u64)> = Vec::new();
+                    let mut last_window_time = Instant::now();
+                    let mut last_window_received = 0u64;
+
                     // Pre-compute label once to avoid temp-borrow in format string.
                     let total_label: String = if duration_mode {
                         "\u{221e}".to_string()
@@ -339,6 +344,16 @@ pub mod inner {
                             sent += 1;
                         }
 
+                        // Per-second TPS window: capture throughput every 1s.
+                        let elapsed_secs = last_window_time.elapsed().as_secs();
+                        if elapsed_secs >= 1 {
+                            let delta_received = received.saturating_sub(last_window_received);
+                            let current_second = per_second_tps.len() as u64;
+                            per_second_tps.push((current_second, delta_received));
+                            last_window_time = Instant::now();
+                            last_window_received = received;
+                        }
+
                         if !drained {
                             // No result ready yet — hint the CPU.
                             if last_hb.elapsed().as_secs() >= 5 {
@@ -362,9 +377,17 @@ pub mod inner {
                         }
                     }
 
+                    // Capture final partial second if any.
+                    let elapsed_secs = last_window_time.elapsed().as_secs();
+                    if elapsed_secs >= 1 || received > last_window_received {
+                        let delta_received = received.saturating_sub(last_window_received);
+                        let current_second = per_second_tps.len() as u64;
+                        per_second_tps.push((current_second, delta_received));
+                    }
+
                     committed_total.fetch_add(committed, Ordering::Relaxed);
                     rejected_total.fetch_add(rejected, Ordering::Relaxed);
-                    latencies
+                    (latencies, per_second_tps)
                 })
                 .unwrap_or_else(|e| panic!("shard {shard_id} thread spawn: {e}"));
 
@@ -378,9 +401,15 @@ pub mod inner {
             total_events as usize
         };
         let mut all_latencies: Vec<u64> = Vec::with_capacity(latency_cap);
+        let mut windowed_tps: BTreeMap<u64, u64> = BTreeMap::new();
+
         for handle in producer_handles {
-            let lats = handle.join().expect("producer thread panicked");
+            let (lats, per_sec) = handle.join().expect("producer thread panicked");
             all_latencies.extend(lats);
+            // Aggregate per-second TPS across shards.
+            for (sec, tps) in per_sec {
+                *windowed_tps.entry(sec).or_insert(0) += tps;
+            }
         }
 
         let wall_duration = wall_start.elapsed();
@@ -395,6 +424,25 @@ pub mod inner {
         };
 
         println!("Committed : {committed} / Rejected : {rejected} / Error rate : {error_rate:.2}%");
+
+        // Print per-second TPS breakdown for failover analysis.
+        if !windowed_tps.is_empty() {
+            println!("\n[per-second TPS breakdown]");
+            for (sec, tps) in &windowed_tps {
+                println!("  t+{:3}s: {:>9} TPS", sec, tps);
+            }
+            let avg_tps = if !windowed_tps.is_empty() {
+                windowed_tps.values().sum::<u64>() / windowed_tps.len() as u64
+            } else {
+                0
+            };
+            let max_tps = windowed_tps.values().max().copied().unwrap_or(0);
+            let min_tps = windowed_tps.values().min().copied().unwrap_or(0);
+            println!(
+                "  avg: {} TPS | max: {} TPS | min: {} TPS\n",
+                avg_tps, max_tps, min_tps
+            );
+        }
 
         // In duration-mode the pre-computed total_events may differ from what
         // was actually processed; use the real count for the result record.
