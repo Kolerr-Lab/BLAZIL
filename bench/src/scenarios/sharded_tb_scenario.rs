@@ -25,7 +25,7 @@
 #[cfg(feature = "tigerbeetle-client")]
 pub mod inner {
     use std::collections::VecDeque;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
@@ -81,7 +81,7 @@ pub mod inner {
     /// * `shard_count` — number of independent pipeline shards (power of 2)
     ///
     /// Panics if `BLAZIL_TB_ADDRESS` is not set or TB connection fails.
-    pub async fn run(events: u64, shard_count: usize) -> BenchmarkResult {
+    pub async fn run(events: u64, shard_count: usize, duration_secs: Option<u64>) -> BenchmarkResult {
         assert!(
             shard_count.is_power_of_two() && shard_count >= 1,
             "shard_count must be a power of 2, got {shard_count}"
@@ -92,20 +92,26 @@ pub mod inner {
 
         let events_per_shard = events / shard_count as u64;
         let total_events = events_per_shard * shard_count as u64;
+        let duration_mode = duration_secs.is_some();
 
         let usd = parse_currency("USD").expect("USD currency");
 
         println!("Scenario      : sharded-tb");
         println!("Shards        : {shard_count}");
-        println!("Events/shard  : {events_per_shard}");
-        println!("Total events  : {total_events}");
+        if let Some(dur) = duration_secs {
+            println!("Mode          : time-based ({dur}s)");
+        } else {
+            println!("Events/shard  : {events_per_shard}");
+            println!("Total events  : {total_events}");
+        }
         println!("Ledger        : TigerBeetle @ {tb_addr}");
         println!("Capacity/shard: {CAPACITY_PER_SHARD}");
         println!("Window/shard  : {WINDOW_PER_SHARD}");
 
         // ── Shared ledger runtime ─────────────────────────────────────────────
         // VSR is I/O-bound: 2 workers per 4 shards is sufficient.
-        let rt_workers = (shard_count / 2).clamp(2, 8);
+        // Cap raised to 16 for ≥8-shard runs (v0.3 scaling tests).
+        let rt_workers = (shard_count / 2).clamp(2, 16);
         let ledger_rt = Arc::new(
             tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(rt_workers)
@@ -214,6 +220,18 @@ pub mod inner {
         let committed_total = Arc::new(AtomicU64::new(0));
         let rejected_total = Arc::new(AtomicU64::new(0));
 
+        // Duration-mode: a background thread sets stop_flag after `dur` seconds.
+        // Event-mode: stop_flag is never set — threads exit via `received >= n`.
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        if let Some(dur) = duration_secs {
+            let flag = Arc::clone(&stop_flag);
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_secs(dur));
+                flag.store(true, Ordering::Relaxed);
+                println!("[diag] duration elapsed — signalling shard threads to drain and exit");
+            });
+        }
+
         let wall_start = Instant::now();
 
         let mut producer_handles = Vec::with_capacity(shard_count);
@@ -230,11 +248,16 @@ pub mod inner {
             let n = events_per_shard;
             let committed_total = Arc::clone(&committed_total);
             let rejected_total = Arc::clone(&rejected_total);
+            let stop_flag = Arc::clone(&stop_flag);
 
             let handle = std::thread::Builder::new()
                 .name(format!("bench-shard-{shard_id}"))
                 .spawn(move || {
-                    let mut latencies: Vec<u64> = Vec::with_capacity(n as usize);
+                    let mut latencies: Vec<u64> = if duration_mode {
+                        Vec::new() // capacity unknown in time-based mode
+                    } else {
+                        Vec::with_capacity(n as usize)
+                    };
                     // VecDeque of (ring_seq, send_time) for in-flight events.
                     let mut in_flight: VecDeque<(i64, Instant)> =
                         VecDeque::with_capacity(WINDOW_PER_SHARD);
@@ -244,8 +267,20 @@ pub mod inner {
                     let mut rejected = 0u64;
                     let mut last_hb = Instant::now();
 
+                    // Pre-compute label once to avoid temp-borrow in format string.
+                    let total_label: String = if duration_mode {
+                        "\u221e".to_string()
+                    } else {
+                        n.to_string()
+                    };
+
                     // Fill initial window.
-                    let initial = WINDOW_PER_SHARD.min(n as usize);
+                    // Duration-mode always fills the full WINDOW; event-mode caps at n.
+                    let initial = if duration_mode {
+                        WINDOW_PER_SHARD
+                    } else {
+                        WINDOW_PER_SHARD.min(n as usize)
+                    };
                     for _ in 0..initial {
                         let event = make_event(debit_id, credit_id);
                         let seq = publish_with_backpressure(&pipeline, event);
@@ -253,8 +288,22 @@ pub mod inner {
                         sent += 1;
                     }
 
-                    // Drain loop: drain front of queue, refill window.
-                    while received < n {
+                    // Main drain loop.
+                    // Event-mode:    exits when received >= n.
+                    // Duration-mode: stops sending when stop_flag fires, then
+                    //                drains remaining in_flight before exiting.
+                    loop {
+                        let done = if duration_mode {
+                            stop_flag.load(Ordering::Relaxed) && in_flight.is_empty()
+                        } else {
+                            received >= n
+                        };
+                        if done {
+                            break;
+                        }
+
+                        // Try to drain front of in_flight.
+                        let mut drained = false;
                         if let Some(&(seq, t0)) = in_flight.front() {
                             // Hot path: committed result in ResultRing.
                             if result_ring.try_remove(seq).is_some() {
@@ -262,44 +311,50 @@ pub mod inner {
                                 committed += 1;
                                 in_flight.pop_front();
                                 received += 1;
-
-                                if sent < n {
-                                    let event = make_event(debit_id, credit_id);
-                                    let seq = publish_with_backpressure(&pipeline, event);
-                                    in_flight.push_back((seq, Instant::now()));
-                                    sent += 1;
-                                }
-                                continue;
-                            }
-
+                                drained = true;
                             // Cold path: rejected result in DashMap.
-                            if results.remove(&seq).is_some() {
+                            } else if results.remove(&seq).is_some() {
                                 latencies.push(t0.elapsed().as_nanos() as u64);
                                 rejected += 1;
                                 in_flight.pop_front();
                                 received += 1;
-
-                                if sent < n {
-                                    let event = make_event(debit_id, credit_id);
-                                    let seq = publish_with_backpressure(&pipeline, event);
-                                    in_flight.push_back((seq, Instant::now()));
-                                    sent += 1;
-                                }
-                                continue;
+                                drained = true;
                             }
                         }
 
-                        // No result ready — hint the CPU and log a heartbeat.
-                        if last_hb.elapsed().as_secs() >= 5 {
-                            println!(
-                                "[shard {shard_id}] recv={received}/{n} sent={sent} \
-                                 inflight={}",
-                                in_flight.len()
-                            );
-                            last_hb = Instant::now();
+                        // Refill window while still in the send phase.
+                        let can_send = if duration_mode {
+                            !stop_flag.load(Ordering::Relaxed)
+                        } else {
+                            sent < n
+                        };
+                        if drained && can_send && in_flight.len() < WINDOW_PER_SHARD {
+                            let event = make_event(debit_id, credit_id);
+                            let seq = publish_with_backpressure(&pipeline, event);
+                            in_flight.push_back((seq, Instant::now()));
+                            sent += 1;
                         }
-                        for _ in 0..8 {
-                            std::hint::spin_loop();
+
+                        if !drained {
+                            // No result ready yet — hint the CPU.
+                            if last_hb.elapsed().as_secs() >= 5 {
+                                // Periodic DashMap drain: evict entries whose
+                                // sequences predate the current in_flight window.
+                                // Cleans warmup residue + stale failover rejections.
+                                if let Some(&(min_seq, _)) = in_flight.front() {
+                                    results.retain(|&seq, _| seq >= min_seq);
+                                }
+                                println!(
+                                    "[shard {shard_id}] recv={received}/{total_label} \
+                                     sent={sent} inflight={} results_map={}",
+                                    in_flight.len(),
+                                    results.len(),
+                                );
+                                last_hb = Instant::now();
+                            }
+                            for _ in 0..8 {
+                                std::hint::spin_loop();
+                            }
                         }
                     }
 
@@ -313,7 +368,8 @@ pub mod inner {
         }
 
         // Wait for all producer threads to finish.
-        let mut all_latencies: Vec<u64> = Vec::with_capacity(total_events as usize);
+        let latency_cap = if duration_mode { 0 } else { total_events as usize };
+        let mut all_latencies: Vec<u64> = Vec::with_capacity(latency_cap);
         for handle in producer_handles {
             let lats = handle.join().expect("producer thread panicked");
             all_latencies.extend(lats);
@@ -323,17 +379,21 @@ pub mod inner {
 
         let committed = committed_total.load(Ordering::Relaxed);
         let rejected = rejected_total.load(Ordering::Relaxed);
-        let error_rate = if total_events > 0 {
-            rejected as f64 / total_events as f64 * 100.0
+        let actual_total = committed + rejected;
+        let error_rate = if actual_total > 0 {
+            rejected as f64 / actual_total as f64 * 100.0
         } else {
             0.0
         };
 
         println!("Committed : {committed} / Rejected : {rejected} / Error rate : {error_rate:.2}%");
 
+        // In duration-mode the pre-computed total_events may differ from what
+        // was actually processed; use the real count for the result record.
+        let total_for_result = if duration_mode { actual_total } else { total_events };
         BenchmarkResult::new(
             &format!("Sharded TB E2E ({shard_count} shards)"),
-            total_events,
+            total_for_result,
             wall_duration,
             &mut all_latencies,
         )

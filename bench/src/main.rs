@@ -47,11 +47,22 @@ async fn main() {
         .and_then(|w| w[1].parse().ok())
         .unwrap_or(2);
 
+    // --duration N  (seconds; time-based mode; when set --events is ignored)
+    #[cfg(feature = "tigerbeetle-client")]
+    let duration_secs: Option<u64> = args
+        .windows(2)
+        .find(|w| w[0] == "--duration")
+        .and_then(|w| w[1].parse().ok());
+
     // ── sharded-tb: direct pipeline + TigerBeetle, N shards ─────────────────
     #[cfg(feature = "tigerbeetle-client")]
     if scenario_filter.as_deref() == Some("sharded-tb") {
-        println!("[sharded-tb] shards={shard_count} events={events}");
-        let result = sharded_tb_scenario::run(events, shard_count).await;
+        if let Some(dur) = duration_secs {
+            println!("[sharded-tb] shards={shard_count} duration={dur}s");
+        } else {
+            println!("[sharded-tb] shards={shard_count} events={events}");
+        }
+        let result = sharded_tb_scenario::run(events, shard_count, duration_secs).await;
         println!(
             "      → {} TPS  (p50={} µs  p99={} µs  p99.9={} µs)",
             blazil_bench::report::fmt_commas(result.tps),
