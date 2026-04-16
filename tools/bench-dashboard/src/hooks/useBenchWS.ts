@@ -32,6 +32,8 @@ function initialState(): DashboardState {
 export function useBenchWS(wsUrl: string) {
   const [state, setState] = useState<DashboardState>(initialState);
   const wsRef = useRef<WebSocket | null>(null);
+  // Track summary received synchronously so onclose never races with setState.
+  const summaryReceivedRef = useRef(false);
   // Pending ticks buffer: accumulate shard ticks for current second, then
   // flush to history once we detect the second has rolled over or all shards
   // have reported. We flush on a 1.1s timer to handle any straggling shards.
@@ -130,6 +132,7 @@ export function useBenchWS(wsUrl: string) {
       }
 
       if (msg.type === "summary") {
+        summaryReceivedRef.current = true;
         setState((p) => ({
           ...p,
           status: "completed",
@@ -177,11 +180,18 @@ export function useBenchWS(wsUrl: string) {
 
     ws.onopen = () => setState((p) => ({ ...p, status: "connecting" }));
     ws.onmessage = (e) => handleMessage(e.data as string);
-    ws.onerror = () => setState((p) => ({ ...p, status: "error" }));
-    ws.onclose = () =>
-      setState((p) =>
-        p.status === "running" ? { ...p, status: "error" } : p
-      );
+    ws.onerror = () => {
+      if (!summaryReceivedRef.current) {
+        setState((p) => ({ ...p, status: "error" }));
+      }
+    };
+    ws.onclose = () => {
+      if (!summaryReceivedRef.current) {
+        setState((p) =>
+          p.status === "running" ? { ...p, status: "error" } : p
+        );
+      }
+    };
   }, [wsUrl, handleMessage]);
 
   const disconnect = useCallback(() => {

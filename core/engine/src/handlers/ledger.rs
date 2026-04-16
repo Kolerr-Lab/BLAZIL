@@ -66,8 +66,8 @@ const MAX_TB_BATCH_SIZE: usize = 8_190;
 
 /// Flush timeout in microseconds. Batches that haven't reached
 /// `MAX_TB_BATCH_SIZE` are flushed after this interval regardless.
-/// 500 µs ≈ the DO-region RTT between nodes, so the timeout adds
-/// zero extra latency relative to the network round-trip.
+/// 500 µs ≈ the DO intra-region RTT so partial batches are held just
+/// long enough to accumulate more transfers without wasting a VSR round.
 const BATCH_FLUSH_TIMEOUT_US: u64 = 500;
 
 /// Maximum number of concurrent in-flight TigerBeetle async tasks.
@@ -88,19 +88,26 @@ const BATCH_FLUSH_TIMEOUT_US: u64 = 500;
 ///   call takes longer → serve thread stalls longer → less time polling Aeron
 ///   → fewer new events/sec → TPS decay. Positive feedback loop.
 ///
+/// With cap=32: max 32 × 8,190 = 262,080 DashMap entries and ~27 MB heap for
+/// in-flight task data. Still bounded; the DO NVMe I/O bandwidth (~500 MB/s)
+/// is the outer limit, not the DashMap. Increased from 16 → 32 to fill the
+/// pipeline deeper when TB VSR RTT is ~1 ms (8,190 transfers × 1000 µs/ms
+/// / 1,000,000 µs = 8,190,000 / 1M ≈ 8.2 TPS per task → 32 tasks ≈ 262 K
+/// in-flight keeps 8 shards × 32 K window fed continuously).
+///
 /// With cap=16: max 16 × 8,190 = 131,040 DashMap entries and ~13.6 MB heap for
 /// in-flight task data. Bounded at all TB RTT values. TPS stays flat.
 ///
-/// When the cap is reached, the runner thread spin-waits (yielding every
-/// SPIN_BEFORE_BLOCK iterations) until a TB task completes and decrements the
-/// counter. This propagates backpressure through the ring buffer to the serve
-/// thread: runner stops advancing gating_sequence → ring buffer fills up →
-/// serve thread enters backpressure spin → drain speeds up → TB task
-/// completes → runner resumes. Self-regulating.
+/// Maximum number of concurrent in-flight TigerBeetle async tasks **per shard**.
 ///
-/// The runner thread is a dedicated pinned OS thread — blocking it briefly is
-/// intentional and correct.
-const MAX_CONCURRENT_BATCHES: usize = 16;
+/// With the 4-client pool (2 shards per client):
+///   per-client in-flight = 2 shards × 8 = 16 batches
+///   total in-flight       = 4 clients × 16 = 64 batches
+///   max simultaneous transfers = 64 × 8,190 = 524,160
+///
+/// Keeping 16 per shard (old value) would give 32 per client — too many
+/// tasks competing for one io_uring queue, causing scheduling overhead.
+const MAX_CONCURRENT_BATCHES: usize = 8;
 
 /// Spin iterations before yielding in the concurrent-batch backpressure wait.
 /// ~512 spins ≈ ~1 µs at 3 GHz — minimises OS context switch overhead while

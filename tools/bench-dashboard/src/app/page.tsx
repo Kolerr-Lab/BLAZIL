@@ -10,7 +10,7 @@ import { FailoverPanel } from "@/components/FailoverPanel";
 import { ClusterInfo } from "@/components/ClusterInfo";
 import type { EventMessage } from "@/types/metrics";
 
-const DEFAULT_WS_URL = "ws://localhost:9090/ws";
+const DEFAULT_WS_URL = "ws://157.245.62.49:9090/ws";
 
 export default function DashboardPage() {
   const [wsUrl, setWsUrl] = useState(DEFAULT_WS_URL);
@@ -99,7 +99,7 @@ export default function DashboardPage() {
                         className="w-1.5 h-1.5 rounded-full"
                         style={{
                           background:
-                            Date.now() / 1000 - s.last_tick_t < 3
+                            state.elapsed_secs - s.last_tick_t < 3
                               ? "var(--accent-green)"
                               : "var(--text-muted)",
                         }}
@@ -158,9 +158,11 @@ export default function DashboardPage() {
                         <span style={{ color: "var(--text-muted)" }}>p99</span>
                         <span className="font-mono" style={{ color: "var(--accent-amber)" }}>
                           {s.p99_us > 0
-                            ? s.p99_us >= 1000
-                              ? `${(s.p99_us / 1000).toFixed(1)}s`
-                              : `${s.p99_us}ms`
+                            ? s.p99_us >= 1_000_000
+                              ? `${(s.p99_us / 1_000_000).toFixed(2)}s`
+                              : s.p99_us >= 1_000
+                              ? `${(s.p99_us / 1_000).toFixed(1)}ms`
+                              : `${s.p99_us}µs`
                             : "—"}
                         </span>
                       </div>

@@ -14,8 +14,9 @@ function fmtNum(n: number): string {
 
 function fmtLatency(us: number): string {
   if (us === 0) return "—";
-  if (us >= 1_000) return (us / 1_000).toFixed(1) + " s";
-  return us.toLocaleString() + " ms";
+  if (us >= 1_000_000) return (us / 1_000_000).toFixed(2) + " s";
+  if (us >= 1_000) return (us / 1_000).toFixed(1) + " ms";
+  return us.toLocaleString() + " µs";
 }
 
 interface BigCardProps {

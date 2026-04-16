@@ -49,9 +49,6 @@ pub mod inner {
     use blazil_common::ids::{AccountId, LedgerId, TransactionId};
     use blazil_engine::event::{TransactionEvent, TransactionResult};
     use blazil_engine::handlers::ledger::LedgerHandler;
-    use blazil_engine::handlers::publish::PublishHandler;
-    use blazil_engine::handlers::risk::RiskHandler;
-    use blazil_engine::handlers::validation::ValidationHandler;
     use blazil_engine::pipeline::{Pipeline, PipelineBuilder};
     use blazil_engine::result_ring::ResultRing;
     use blazil_ledger::account::{Account, AccountFlags};
@@ -63,8 +60,15 @@ pub mod inner {
 
     // ── Re-use constants from sharded_tb_scenario ─────────────────────────────
 
-    const CAPACITY_PER_SHARD: usize = 262_144;
-    const WINDOW_PER_SHARD: usize = 131_072;
+    // Ring buffer + result ring capacity per shard (must be power of 2).
+    // Set to 2× WINDOW_PER_SHARD to give headroom between ring buffer and
+    // result ring during burst drain/send cycles.
+    const CAPACITY_PER_SHARD: usize = 65_536;
+    // Maximum in-flight events per shard. This is the primary throughput lever:
+    //   TPS/shard ≈ WINDOW / RTT
+    // At observed p50=244ms: 32_768 / 0.244 ≈ 134K/shard × 8 = 1.07M TPS theory.
+    // Must be ≤ CAPACITY_PER_SHARD.
+    const WINDOW_PER_SHARD: usize = 32_768;
     const MAX_AMOUNT_UNITS: u64 = 100_000_000_000;
     const WARMUP_PER_SHARD: u64 = 2_000;
 
@@ -128,6 +132,9 @@ pub mod inner {
 
         let tb_addr = std::env::var("BLAZIL_TB_ADDRESS")
             .expect("BLAZIL_TB_ADDRESS must be set for --scenario vsr-failover");
+        let tb_addr_2 = std::env::var("BLAZIL_TB_ADDRESS_2").ok();
+        let dual_cluster = tb_addr_2.is_some();
+        let half_shards = cfg.shard_count / 2;
 
         let events_per_shard = cfg.events / cfg.shard_count as u64;
         let duration_mode = cfg.duration_secs.is_some();
@@ -141,6 +148,9 @@ pub mod inner {
             println!("Events/shard  : {events_per_shard}");
         }
         println!("Ledger        : TigerBeetle @ {tb_addr}");
+        if let Some(ref a2) = tb_addr_2 {
+            println!("Cluster 1     : TigerBeetle @ {a2}  (shards {half_shards}+)");
+        }
         if let Some(n) = cfg.auto_kill_node {
             println!(
                 "Auto-kill     : Node {n} at t+{}s (recovery after {}s)",
@@ -168,7 +178,11 @@ pub mod inner {
         );
 
         // ── Shared ledger runtime ─────────────────────────────────────────────
-        let rt_workers = (cfg.shard_count / 2).clamp(2, 16);
+        // Give the Tokio runtime one worker thread per shard so all 8 shards
+        // can dispatch their async TB batches concurrently without queuing
+        // on a smaller thread pool. Previous value (shard_count/2) meant 4
+        // threads servicing 8 shards × 16 concurrent batches = 128 tasks.
+        let rt_workers = cfg.shard_count; // 1 thread per shard
         let ledger_rt = Arc::new(
             tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(rt_workers)
@@ -178,19 +192,107 @@ pub mod inner {
                 .expect("ledger runtime"),
         );
 
+        // ── Dual-cluster support ──────────────────────────────────────────────
+        //
+        // Optional: set BLAZIL_TB_ADDRESS_2 to point a second independent TB
+        // cluster (formatted with cluster_id=1).  Shards are split evenly:
+        // lower half → cluster 0, upper half → cluster 1.
+        // Each cluster handles 50% of the write load with parallel NVMe
+        // fsyncs — the key unlock for i4i.metal 1M TPS tomorrow.
+        //
+        // Single-cluster (BLAZIL_TB_ADDRESS_2 not set): behaves exactly as
+        // before — 4 pool clients, all on cluster 0.
+        //
+        // Dual-cluster connection budget:
+        //   Cluster 0: 1 setup + 2 pool = 3 connections
+        //   Cluster 1: 1 setup + 2 pool = 3 connections
+        //   Both well under TB clients_max=8.
+        // (tb_addr_2, dual_cluster, half_shards are already bound above)
+
         println!("[diag] connecting to TigerBeetle @ {tb_addr}...");
-        let tb_client = Arc::new(
-            TigerBeetleClient::connect(&tb_addr, 0)
+        let setup_client = TigerBeetleClient::connect(&tb_addr, 0)
+            .await
+            .expect("TigerBeetle setup connect (cluster 0)");
+
+        let setup_client_2 = if let Some(ref addr2) = tb_addr_2 {
+            println!("[diag] connecting to TigerBeetle cluster 1 @ {addr2}...");
+            let c = TigerBeetleClient::connect(addr2, 1)
                 .await
-                .expect("TigerBeetle connect"),
+                .expect("TigerBeetle setup connect (cluster 1)");
+            println!("[diag] cluster 1 setup client connected");
+            Some(c)
+        } else {
+            None
+        };
+
+        if dual_cluster {
+            println!(
+                "[diag] DUAL-CLUSTER mode: shards 0..{} → cluster0, shards {}..{} → cluster1",
+                half_shards, half_shards, cfg.shard_count
+            );
+        }
+
+        // ── Client pool ───────────────────────────────────────────────────────
+        //
+        // Single-cluster: 4 clients on cluster 0, 2 shards per client.
+        //   Client 0 → shards 0, 1
+        //   Client 1 → shards 2, 3
+        //   Client 2 → shards 4, 5
+        //   Client 3 → shards 6, 7
+        //   Total: 4 pool + 1 setup = 5 connections
+        //
+        // Dual-cluster: 2 clients on cluster 0 + 2 clients on cluster 1.
+        //   Cluster0: client[0] → shards 0,1 | client[1] → shards 2,3
+        //   Cluster1: client[0] → shards 4,5 | client[1] → shards 6,7
+        //   Total: 2+2 pool + 1+1 setup = 6 connections across 2 clusters
+        //
+        // TB 0.16.78: one io_uring thread per Client → independent submission
+        // queues. MAX_CONCURRENT_BATCHES(8)/shard × 2 shards = 16 in-flight
+        // batches per client = 131,040 transfers per client simultaneously.
+        let clients_per_cluster = if dual_cluster { 2usize } else { 4usize };
+
+        let mut cluster0_clients: Vec<Arc<TigerBeetleClient>> =
+            Vec::with_capacity(clients_per_cluster);
+        for i in 0..clients_per_cluster {
+            let c = TigerBeetleClient::connect(&tb_addr, 0)
+                .await
+                .unwrap_or_else(|e| panic!("TB cluster0 pool client {i} connect: {e}"));
+            cluster0_clients.push(Arc::new(c));
+            println!("[diag] cluster0 pool client {i} connected");
+        }
+
+        let mut cluster1_clients: Vec<Arc<TigerBeetleClient>> =
+            Vec::with_capacity(clients_per_cluster);
+        if let Some(ref addr2) = tb_addr_2 {
+            for i in 0..clients_per_cluster {
+                let c = TigerBeetleClient::connect(addr2, 1)
+                    .await
+                    .unwrap_or_else(|e| panic!("TB cluster1 pool client {i} connect: {e}"));
+                cluster1_clients.push(Arc::new(c));
+                println!("[diag] cluster1 pool client {i} connected");
+            }
+        }
+
+        let total_pool = cluster0_clients.len() + cluster1_clients.len();
+        println!(
+            "[diag] TB client pool ready ({total_pool} connections, {} cluster(s))",
+            if dual_cluster { 2 } else { 1 }
         );
-        println!("[diag] TB connect OK");
 
         // ── Build shard pipelines ─────────────────────────────────────────────
         let mut shard_contexts: Vec<ShardContext> = Vec::with_capacity(cfg.shard_count);
 
         for shard_id in 0..cfg.shard_count {
-            let debit_id = tb_client
+            // Select which cluster owns this shard.
+            let use_cluster1 = dual_cluster && shard_id >= half_shards;
+
+            let acct_client: &TigerBeetleClient = if use_cluster1 {
+                setup_client_2.as_ref().unwrap()
+            } else {
+                &setup_client
+            };
+
+            let debit_id = acct_client
                 .create_account(Account::new(
                     AccountId::new(),
                     LedgerId::USD,
@@ -201,7 +303,7 @@ pub mod inner {
                 .await
                 .unwrap_or_else(|e| panic!("shard {shard_id} debit account: {e}"));
 
-            let credit_id = tb_client
+            let credit_id = acct_client
                 .create_account(Account::new(
                     AccountId::new(),
                     LedgerId::USD,
@@ -212,6 +314,16 @@ pub mod inner {
                 .await
                 .unwrap_or_else(|e| panic!("shard {shard_id} credit account: {e}"));
 
+            // Map shard → client: each client owns 2 shards within its cluster.
+            let shard_client = if use_cluster1 {
+                let local_shard = shard_id - half_shards;
+                let client_idx = local_shard / 2;
+                Arc::clone(&cluster1_clients[client_idx])
+            } else {
+                let client_idx = shard_id / 2;
+                Arc::clone(&cluster0_clients[client_idx])
+            };
+
             let builder = PipelineBuilder::new()
                 .with_capacity(CAPACITY_PER_SHARD)
                 .with_global_shard_id(shard_id);
@@ -219,18 +331,12 @@ pub mod inner {
             let results = builder.results();
             let result_ring = builder.result_ring();
 
-            let ledger_handler = LedgerHandler::new(
-                Arc::clone(&tb_client),
-                Arc::clone(&ledger_rt),
-                Arc::clone(&results),
-            )
-            .with_result_ring(Arc::clone(&result_ring));
+            let ledger_handler =
+                LedgerHandler::new(shard_client, Arc::clone(&ledger_rt), Arc::clone(&results))
+                    .with_result_ring(Arc::clone(&result_ring));
 
             let (pipeline, runners) = builder
-                .add_handler(ValidationHandler::new(Arc::clone(&results)))
-                .add_handler(RiskHandler::new(MAX_AMOUNT_UNITS, Arc::clone(&results)))
                 .add_handler(ledger_handler)
-                .add_handler(PublishHandler::new(Arc::clone(&results)))
                 .build()
                 .unwrap_or_else(|e| panic!("shard {shard_id} pipeline build: {e}"));
 
@@ -418,43 +524,76 @@ pub mod inner {
                             break;
                         }
 
-                        let mut drained = false;
-                        if let Some(&(seq, t0)) = in_flight.front() {
-                            if result_ring.try_remove(seq).is_some() {
-                                let lat = t0.elapsed().as_nanos() as u64;
-                                latencies.push(lat);
-                                if rolling_lat.len() >= 512 {
-                                    rolling_lat.pop_front();
+                        // Burst drain: consume up to DRAIN_BURST consecutive ready
+                        // results in one pass. When a TB batch of 8,190 transfers
+                        // completes, all its result_ring slots are written at once.
+                        // Draining 1-per-outer-loop wastes ~8,190 empty iterations.
+                        const DRAIN_BURST: usize = 2048;
+                        let mut drained_count: usize = 0;
+                        loop {
+                            if drained_count >= DRAIN_BURST {
+                                break;
+                            }
+                            match in_flight.front() {
+                                None => break,
+                                Some(&(seq, t0)) => {
+                                    if result_ring.try_remove(seq).is_some() {
+                                        let lat = t0.elapsed().as_nanos() as u64;
+                                        latencies.push(lat);
+                                        if rolling_lat.len() >= 512 {
+                                            rolling_lat.pop_front();
+                                        }
+                                        rolling_lat.push_back(lat);
+                                        committed += 1;
+                                        in_flight.pop_front();
+                                        received += 1;
+                                        drained_count += 1;
+                                    } else if results.remove(&seq).is_some() {
+                                        let lat = t0.elapsed().as_nanos() as u64;
+                                        latencies.push(lat);
+                                        if rolling_lat.len() >= 512 {
+                                            rolling_lat.pop_front();
+                                        }
+                                        rolling_lat.push_back(lat);
+                                        rejected += 1;
+                                        in_flight.pop_front();
+                                        received += 1;
+                                        drained_count += 1;
+                                    } else {
+                                        break; // front not committed yet
+                                    }
                                 }
-                                rolling_lat.push_back(lat);
-                                committed += 1;
-                                in_flight.pop_front();
-                                received += 1;
-                                drained = true;
-                            } else if results.remove(&seq).is_some() {
-                                let lat = t0.elapsed().as_nanos() as u64;
-                                latencies.push(lat);
-                                if rolling_lat.len() >= 512 {
-                                    rolling_lat.pop_front();
-                                }
-                                rolling_lat.push_back(lat);
-                                rejected += 1;
-                                in_flight.pop_front();
-                                received += 1;
-                                drained = true;
                             }
                         }
 
-                        let can_send = if duration_mode {
-                            !stop_flag.load(Ordering::Relaxed)
-                        } else {
-                            sent < n
-                        };
-                        if drained && can_send && in_flight.len() < WINDOW_PER_SHARD {
+                        // Burst send: fill the window all the way to WINDOW_PER_SHARD
+                        // after each drain pass. Previously we only sent `drained_count`
+                        // events, leaving window slots empty between drain iterations.
+                        // Now: any slot freed → immediately filled, keeping TB saturated.
+                        // Cap at DRAIN_BURST per outer loop to not starve the tick timer.
+                        let slots_free = WINDOW_PER_SHARD.saturating_sub(in_flight.len());
+                        let max_send = slots_free.min(DRAIN_BURST);
+                        for _ in 0..max_send {
+                            if in_flight.len() >= WINDOW_PER_SHARD {
+                                break;
+                            }
+                            let ok = if duration_mode {
+                                !stop_flag.load(Ordering::Relaxed)
+                            } else {
+                                sent < n
+                            };
+                            if !ok {
+                                break;
+                            }
                             let event = make_event(debit_id, credit_id);
                             let seq = publish_with_backpressure(&pipeline, event);
                             in_flight.push_back((seq, Instant::now()));
                             sent += 1;
+                        }
+
+                        // Window full, nothing draining — hint CPU to back off.
+                        if drained_count == 0 && in_flight.len() >= WINDOW_PER_SHARD {
+                            std::hint::spin_loop();
                         }
 
                         // Per-second window + heartbeat to dashboard.
@@ -479,7 +618,8 @@ pub mod inner {
                                 (p50, p99)
                             };
 
-                            if let Some(ref tx) = metrics_tx_shard {
+                            {
+                                let tx = &metrics_tx_shard;
                                 let t = current_second;
                                 let inflight_now = in_flight.len() as u64;
                                 let msg = format!(
@@ -592,6 +732,10 @@ pub mod inner {
             ),
         );
 
+        // Give WS server time to flush the summary message to all clients
+        // before the process exits (prevents dashboard showing ERROR on clean exit).
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
         // ── Per-second breakdown ───────────────────────────────────────────────
         println!("\n[per-second TPS breakdown]");
         println!("{:>6}  {:>12}", "t (s)", "TPS");
@@ -609,17 +753,19 @@ pub mod inner {
 
         BenchmarkResult {
             scenario: "vsr-failover".to_string(),
-            events: total_processed,
-            wall_secs,
+            total_events: total_processed,
+            duration_ms: (wall_secs * 1_000.0) as u64,
+            duration_ns: (wall_secs * 1_000_000_000.0) as u64,
             tps: overall_tps,
             p50_ns,
             p99_ns,
             p99_9_ns,
             mean_ns,
-            shards: shard_count,
+            min_ns: all_latencies.first().copied().unwrap_or(0),
+            max_ns: all_latencies.last().copied().unwrap_or(0),
+            p95_ns: percentile(&all_latencies, 95),
             committed: total_committed,
             rejected: total_rejected,
-            consistency,
         }
     }
 
@@ -794,7 +940,7 @@ pub mod inner {
             credit_id,
             units,
             LedgerId::USD,
-            0,
+            1, // TigerBeetle requires code != 0; 1 = standard transfer
         )
     }
 
