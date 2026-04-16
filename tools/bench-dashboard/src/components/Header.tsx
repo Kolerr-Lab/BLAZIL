@@ -15,7 +15,7 @@ interface Props {
 }
 
 const STATUS_LABEL: Record<BenchStatus, string> = {
-  idle: "IDLE",
+  idle: '"Why beetle when you can Blazil"',
   connecting: "CONNECTING",
   running: "RUNNING",
   completed: "COMPLETED",
