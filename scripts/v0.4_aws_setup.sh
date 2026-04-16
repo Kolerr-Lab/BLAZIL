@@ -302,89 +302,186 @@ for dev in $(ls /sys/block/ | grep nvme 2>/dev/null); do
 done
 
 # =============================================================================
-# 6. HUGE PAGES — TigerBeetle maps its data file with mmap
+# 6. HUGE PAGES — TigerBeetle maps its data file with mmap;
+#                 AF_XDP UMEM benefits from huge pages to cut TLB pressure
 # =============================================================================
 hdr "6. Huge Pages"
 
-# Transparent huge pages: madvise mode lets TB opt in per-mmap
+# Transparent huge pages: madvise mode lets TB and AF_XDP UMEM opt in per-mmap
 run "echo madvise > /sys/kernel/mm/transparent_hugepage/enabled" || warn "THP madvise not supported"
 run "echo defer+madvise > /sys/kernel/mm/transparent_hugepage/defrag" || true
 
-# Reserve explicit 1G huge pages for direct mapping (1G × 4 = 4GB headroom)
-# Adjust count based on available RAM: i4i.metal has 1.5 TB RAM
+# Reserve 1G huge pages (TigerBeetle data file)
 HUGEPAGE_1G=4
 if [[ -f /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages ]]; then
     run "echo $HUGEPAGE_1G > /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages"
-    log "Reserved ${HUGEPAGE_1G}× 1G huge pages"
+    log "Reserved ${HUGEPAGE_1G}× 1G huge pages (TigerBeetle mmap)"
 fi
 
-# 2MB huge pages as fallback pool
+# Reserve 2MB huge pages for AF_XDP UMEM.
+# UMEM = 64K frames × 2048 B = 128 MiB. Each 2MB page covers 1024 frames.
+# 64K frames / 1024 = 64 huge pages → reserve 2048 for headroom × dual-cluster.
 HUGEPAGE_2M=2048
 if [[ -f /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages ]]; then
     run "echo $HUGEPAGE_2M > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages"
-    log "Reserved ${HUGEPAGE_2M}× 2MB huge pages"
+    log "Reserved ${HUGEPAGE_2M}× 2MB huge pages (AF_XDP UMEM = $(( HUGEPAGE_2M * 2 ))MB)"
 fi
 
 # =============================================================================
 # 7. IRQ AFFINITY — pin NIC IRQs away from bench CPU cores
+#    AF_XDP strategy: cores 0-3 = network (NIC NAPI + AF_XDP RX threads)
+#                     cores 4+  = bench shards (TigerBeetle pipeline)
 # =============================================================================
-hdr "7. IRQ Affinity"
+hdr "7. IRQ Affinity + SoftIRQ / NAPI Tuning"
 
-# Strategy: the bench process (and TB) runs on cores 0..N/2-1.
-# Pin NIC interrupts to the upper half of CPUs so they don't preempt bench threads.
-TOTAL_CPUS=$(nproc)
-UPPER_HALF_START=$((TOTAL_CPUS / 2))
-# Build a CPU affinity mask for the upper half (hex bitmask)
-UPPER_MASK=0
-for i in $(seq $UPPER_HALF_START $((TOTAL_CPUS - 1))); do
-    UPPER_MASK=$((UPPER_MASK | (1 << i)))
-done
-UPPER_MASK_HEX=$(printf '%x' $UPPER_MASK)
+# ── Disable irqbalance — we do manual IRQ pinning ────────────────────────────
+if systemctl is-active --quiet irqbalance 2>/dev/null; then
+    run "systemctl stop irqbalance"
+    run "systemctl disable irqbalance"
+    log "irqbalance stopped and disabled"
+else
+    log "irqbalance not running (good)"
+fi
 
-NIC_IRQ_COUNT=0
+# ── Pin NIC RX queues to cores 0-3 (network cores) ───────────────────────────
+#
+# i4i.metal has ENA NIC with multiple queues.  We want:
+#   Queue 0 → core 0    (AF_XDP shard 0)
+#   Queue 1 → core 1    (AF_XDP shard 1)
+#   Queue 2 → core 2    (AF_XDP shard 2)
+#   Queue 3 → core 3    (AF_XDP shard 3)
+#
+# This means the CPU core that handles NAPI softirq for queue N is the same
+# core that runs the AF_XDP RxCursor for queue N = maximum cache locality.
+#
+# Cores 4+ are completely NAPI-free → dedicated to TB batch processing.
+NETWORK_CORES=4   # cores 0-3 reserved for networking
+log "Pinning NIC queue IRQs to cores 0-$((NETWORK_CORES - 1))"
+
+queue_core=0
 for irq_dir in /proc/irq/*/; do
     irq_num=$(basename "$irq_dir")
-    [[ "$irq_num" == "0" ]] && continue  # skip default
+    [[ "$irq_num" == "0" ]] && continue
     smp_affinity="/proc/irq/$irq_num/smp_affinity"
     [[ -f "$smp_affinity" ]] || continue
-    # Check if this IRQ is associated with a network device
-    actions_file="/proc/irq/$irq_num/actions" 
-    # Note: on newer kernels it may not exist by default; try /proc/irq/N/node
     irq_name=$(cat "/proc/irq/$irq_num/actions" 2>/dev/null || echo "")
     if echo "$irq_name" | grep -qiE 'eth|ens|eno|enp|mlx|ena'; then
-        run "echo $UPPER_MASK_HEX > $smp_affinity" || true
-        NIC_IRQ_COUNT=$((NIC_IRQ_COUNT + 1))
+        # Compute per-core affinity mask for round-robin across 0-3
+        core_mask=$(printf '%x' $((1 << queue_core)))
+        run "echo $core_mask > $smp_affinity" || true
+        log "IRQ $irq_num ($irq_name) → core $queue_core (mask 0x$core_mask)"
+        queue_core=$(( (queue_core + 1) % NETWORK_CORES ))
     fi
 done
-log "Pinned $NIC_IRQ_COUNT NIC IRQ(s) to upper ${TOTAL_CPUS}/${UPPER_HALF_START} CPUs (mask=0x${UPPER_MASK_HEX})"
+
+# ── Isolate bench cores from softirq ─────────────────────────────────────────
+# Tell the kernel that cores 4+ should not run RCU callbacks or softirqs.
+# Requires isolcpus=4-127 in kernel cmdline for full isolation — set that
+# via grub on AL2023:
+#   sudo grubby --update-kernel=ALL --args="isolcpus=4-127 nohz_full=4-127 rcu_nocbs=4-127"
+#   (requires reboot; log instructions only here)
+log "For full core isolation (reboot required):"
+log "  grubby --update-kernel=ALL --args='isolcpus=4-127 nohz_full=4-127 rcu_nocbs=4-127'"
+log "  Then reboot and verify: cat /sys/devices/system/cpu/isolated"
+
+# ── Tune NAPI: busy-poll on the network cores ────────────────────────────────
+# busy_poll: microseconds to busy-spin waiting for packets before sleeping.
+# For AF_XDP, NAPI busy-poll is handled by the xsk_rx/tx functions; setting
+# busy_read here reduces interrupt latency for XDP_COPY fallback mode.
+run "sysctl -w net.core.busy_poll=50"              || true  # 50µs busy-poll
+run "sysctl -w net.core.busy_read=50"              || true
+run "sysctl -w net.core.netdev_budget=600"                  # packets per NAPI cycle
+run "sysctl -w net.core.netdev_budget_usecs=8000"  || true  # max µs per NAPI cycle
+
+# ── XDP-specific: allow unprivileged BPF map creation ────────────────────────
+# AF_XDP zero-copy and XDP programs require CAP_SYS_ADMIN or SYS_BPF.
+# On AL2023/Ubuntu, the bench binary runs as root so this is a no-op,
+# but useful if running under a non-root user with capabilities.
+run "sysctl -w kernel.unprivileged_bpf_disabled=1"  # keep BPF privileged (more secure)
+run "sysctl -w net.core.bpf_jit_enable=1"           # JIT-compile all BPF programs
+run "sysctl -w net.core.bpf_jit_harden=0"           # disable JIT hardening for max perf
 
 # =============================================================================
-# 8. MISC OS TWEAKS
+# 8. MISC OS TWEAKS + AF_XDP PREREQUISITES
 # =============================================================================
-hdr "8. Misc Tweaks"
+hdr "8. Misc Tweaks + AF_XDP Prerequisites"
 
-# Disable swap — TigerBeetle must NEVER page out its mmap'd data file
+# ── memlock unlimited — REQUIRED for AF_XDP UMEM ─────────────────────────────
+#
+# AF_XDP zero-copy requires the UMEM memory region to be mlock'd (pinned in
+# physical RAM, never swapped).  Without CAP_IPC_LOCK + unlimited memlock,
+# `mlock(umem)` fails with ENOMEM and the socket bind returns ENOBUFS.
+#
+# Set both soft and hard to unlimited.  The Rust binary inherits this from
+# the shell that launched it, so the service wrapper / systemd unit must also
+# set LimitMEMLOCK=infinity.
+MEMLOCK_CONF_MARKER="blazil-memlock"
+if ! grep -q "$MEMLOCK_CONF_MARKER" "$LIMITS_CONF" 2>/dev/null; then
+    run "cat >> $LIMITS_CONF <<'EOF'
+# Blazil AF_XDP — unlimited memlock for UMEM mlock
+* soft memlock unlimited
+* hard memlock unlimited
+root soft memlock unlimited
+root hard memlock unlimited
+# $MEMLOCK_CONF_MARKER marker
+EOF"
+    log "memlock unlimited added to limits.conf"
+else
+    log "memlock limits.conf already patched"
+fi
+
+# Apply immediately.
+run "ulimit -l unlimited" || warn "ulimit -l unlimited failed in script context (apply via limits.conf on next login)"
+
+# ── Install AF_XDP build dependencies ────────────────────────────────────────
+log "Installing AF_XDP + eBPF build dependencies..."
+if command -v apt-get &>/dev/null; then
+    # Ubuntu / Debian
+    run "apt-get install -y clang llvm libbpf-dev linux-headers-\$(uname -r) 2>/dev/null || apt-get install -y clang llvm libbpf-dev"
+elif command -v dnf &>/dev/null; then
+    # Amazon Linux 2023 / Fedora / RHEL 9
+    run "dnf install -y clang llvm libbpf-devel kernel-devel bpftool"
+elif command -v yum &>/dev/null; then
+    run "yum install -y clang llvm libbpf-devel kernel-devel"
+else
+    warn "Unknown package manager — install clang + libbpf-dev manually"
+fi
+
+# Verify clang BPF target is available.
+if clang -target bpf --print-targets 2>/dev/null | grep -q bpf; then
+    log "clang BPF target: OK"
+else
+    warn "clang BPF target not found — 'cargo build --features af-xdp' will fail"
+    warn "Try: clang -target bpf -o /dev/null /dev/null 2>&1"
+fi
+
+# ── Enable BPF JIT (mandatory for XDP_DRV performance) ───────────────────────
+run "sysctl -w net.core.bpf_jit_enable=1"
+
+# ── Verify XDP support on the NIC ────────────────────────────────────────────
+log "Checking XDP support on network interfaces..."
+for NIC in $(ls /sys/class/net/ | grep -vE 'lo|docker|br-|virbr'); do
+    xdp_info=$(ethtool -i "$NIC" 2>/dev/null | grep driver || echo "unknown")
+    log "  $NIC: $xdp_info"
+done
+log "Note: ENA driver on AWS i4i.metal supports XDP_DRV with kernel ≥ 5.10"
+log "      Verify: ethtool -i eth0 | grep driver  (should be 'ena')"
+
+# ── Disable swap ─────────────────────────────────────────────────────────────
 run "swapoff -a" || warn "swapoff failed (no swap or permission issue)"
 
-# Set vm.dirty_* for write-heavy workloads (let kernel buffer more before writeback)
+# ── VM dirty settings ─────────────────────────────────────────────────────────
 run "sysctl -w vm.dirty_ratio=80"
 run "sysctl -w vm.dirty_background_ratio=5"
 run "sysctl -w vm.dirty_expire_centisecs=12000"
 run "sysctl -w vm.dirty_writeback_centisecs=100"
 
-# Disable NUMA balancing (TB process should stay on its NUMA node)
-run "sysctl -w kernel.numa_balancing=0" || true
-
-# Set kernel to full preemption (lower syscall latency)
-# Note: requires PREEMPT=y kernel; most AWS AL2023/Ubuntu kernels have this
+# ── NUMA + scheduler ──────────────────────────────────────────────────────────
+run "sysctl -w kernel.numa_balancing=0"              || true
 run "sysctl -w kernel.sched_min_granularity_ns=500000"    || true
 run "sysctl -w kernel.sched_wakeup_granularity_ns=1000000" || true
 
-# Disable address space layout randomisation for bench process (deterministic perf)
-# Keep enabled system-wide for security; TB disables it internally via personality()
-log "ASLR kept system-wide (TB manages its own via personality)"
-
-log "Misc OS tweaks applied"
+log "Misc OS + AF_XDP prerequisites configured"
 
 # =============================================================================
 # 9. ENSURE DATA DIRECTORY EXISTS
@@ -402,9 +499,13 @@ echo ""
 echo "  CPUs           : $(nproc) cores"
 echo "  Governor       : $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo 'N/A')"
 echo "  Open files max : $(cat /proc/sys/fs/file-max)"
+echo "  Memlock        : $(ulimit -l 2>/dev/null || echo 'check /etc/security/limits.conf')"
 echo "  TCP rmem_max   : $(cat /proc/sys/net/core/rmem_max)"
 echo "  TCP wmem_max   : $(cat /proc/sys/net/core/wmem_max)"
 echo "  THP            : $(cat /sys/kernel/mm/transparent_hugepage/enabled 2>/dev/null || echo 'N/A')"
+echo "  Huge 2MB pages : $(cat /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages 2>/dev/null || echo 'N/A') (AF_XDP UMEM)"
+echo "  BPF JIT        : $(cat /proc/sys/net/core/bpf_jit_enable 2>/dev/null || echo 'N/A')"
+echo "  irqbalance     : $(systemctl is-active irqbalance 2>/dev/null || echo 'N/A')"
 echo "  Swap           : $(free -h | awk '/^Swap:/{print $2}')"
 echo "  TB data dir    : $TB_DATA_DIR"
 if [[ -n "$NVME_DEV" ]]; then

@@ -53,6 +53,12 @@ pub mod aeron_transport;
 #[cfg(all(target_os = "linux", feature = "io-uring"))]
 pub mod io_uring_transport;
 
+#[cfg(all(target_os = "linux", feature = "af-xdp"))]
+pub mod afxdp;
+
+#[cfg(all(target_os = "linux", feature = "af-xdp"))]
+pub mod ebpf;
+
 pub use protocol::{TransactionRequest, TransactionResponse};
 pub use server::TransportServer;
 pub use tcp::TcpTransportServer;
@@ -65,3 +71,9 @@ pub use io_uring_transport::IoUringTransportServer;
 
 #[cfg(all(target_os = "linux", feature = "io-uring"))]
 pub use io_uring_transport::IoUringUdpTransport;
+
+#[cfg(all(target_os = "linux", feature = "af-xdp"))]
+pub use afxdp::AfXdpTransportServer;
+
+#[cfg(all(target_os = "linux", feature = "af-xdp"))]
+pub use afxdp::AfXdpConfig;
