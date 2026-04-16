@@ -7,6 +7,7 @@ import { HeroMetrics } from "@/components/HeroMetrics";
 import { TPSChart } from "@/components/TPSChart";
 import { LatencyPanel } from "@/components/LatencyPanel";
 import { FailoverPanel } from "@/components/FailoverPanel";
+import { ClusterInfo } from "@/components/ClusterInfo";
 import type { EventMessage } from "@/types/metrics";
 
 const DEFAULT_WS_URL = "ws://localhost:9090/ws";
@@ -50,6 +51,11 @@ export default function DashboardPage() {
       <main className="flex-1 px-4 md:px-6 pb-8 pt-5 max-w-[1600px] mx-auto w-full">
         {/* Hero metrics row */}
         <HeroMetrics state={state} />
+
+        {/* Infra spec strip */}
+        <div className="mt-3">
+          <ClusterInfo />
+        </div>
 
         {/* TPS Chart + Latency side-by-side */}
         <div className="mt-5 grid grid-cols-1 xl:grid-cols-3 gap-4">
