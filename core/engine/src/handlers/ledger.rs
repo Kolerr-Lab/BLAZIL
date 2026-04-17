@@ -404,13 +404,10 @@ impl<C: LedgerClient + Send + Sync + 'static> EventHandler for LedgerHandler<C> 
             let mut attempt = 0u32;
             loop {
                 // Clone the batch for this attempt (Transfer: Clone).
-                // On the last allowed attempt we skip the clone — using the
-                // owned vec directly saves one allocation on the hot path.
-                let batch = if attempt < MAX_TRANSIENT_RETRIES {
-                    all_transfers.clone()
-                } else {
-                    all_transfers.clone() // final attempt — same path keeps borrow checker happy
-                };
+                // We always clone so `all_transfers` remains owned for the next
+                // iteration; the final successful call pays one extra clone which
+                // is negligible compared to the TB round-trip.
+                let batch = all_transfers.clone();
                 let results = client.create_transfers_batch(batch).await;
 
                 // A wholesale transient failure means ALL slots are LedgerTransient.
