@@ -602,11 +602,11 @@ mod tests {
 #[cfg(test)]
 mod fault_inject_tests {
     use super::*;
-    use blazil_common::ids::{AccountId, LedgerId, TransferId};
-    use blazil_common::currency::parse_currency;
-    use blazil_common::amount::Amount;
     use crate::account::{Account, AccountFlags};
     use crate::transfer::Transfer;
+    use blazil_common::amount::Amount;
+    use blazil_common::currency::parse_currency;
+    use blazil_common::ids::{AccountId, LedgerId, TransferId};
     use rust_decimal::Decimal;
     use std::sync::Arc;
 
@@ -658,9 +658,8 @@ mod fault_inject_tests {
         let (d, c) = two_accounts(&inner).await;
         let client = FaultInjectingLedgerClient::new(Arc::clone(&inner), 2);
 
-        let make_transfer = || {
-            Transfer::new(TransferId::new(), d, c, usd_amount(100), LedgerId::USD, 1).unwrap()
-        };
+        let make_transfer =
+            || Transfer::new(TransferId::new(), d, c, usd_amount(100), LedgerId::USD, 1).unwrap();
 
         // First two calls: transient error.
         for _ in 0..2 {
