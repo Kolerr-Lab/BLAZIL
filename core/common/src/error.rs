@@ -117,6 +117,23 @@ pub enum BlazerError {
     #[error("Ledger error: {0}")]
     Ledger(String),
 
+    /// A **transient** TigerBeetle transport error that the caller may safely
+    /// retry.  This is distinct from [`Ledger`] (which covers permanent
+    /// per-transfer errors such as duplicate IDs or constraint violations).
+    ///
+    /// [`LedgerTransient`] is emitted when the TB Zig client returns a
+    /// wholesale session/connection/timeout error — typically during a VSR
+    /// view-change triggered by a node failure.  Because TigerBeetle transfers
+    /// carry unique IDs, retrying the same batch is idempotent: any transfer
+    /// that was committed before the interruption returns
+    /// `CreateTransfersError::Api(DuplicateTransferId)`, which
+    /// [`TigerBeetleClient`] normalises back to `Ok(transfer_id)`.
+    ///
+    /// [`Ledger`]: BlazerError::Ledger
+    /// [`TigerBeetleClient`]: blazil_ledger::tigerbeetle::TigerBeetleClient
+    #[error("Ledger transient error (retryable): {0}")]
+    LedgerTransient(String),
+
     // ── Resource lifecycle ───────────────────────────────────────────────────
     /// The requested resource does not exist.
     ///
@@ -157,6 +174,30 @@ pub enum BlazerError {
 /// ```
 pub type BlazerResult<T> = std::result::Result<T, BlazerError>;
 
+impl BlazerError {
+    /// Returns `true` if the error represents a transient condition that the
+    /// caller may safely retry (e.g. TB view-change, connection drop during
+    /// node failover).
+    ///
+    /// Only [`BlazerError::LedgerTransient`] is considered transient.  All
+    /// other variants represent permanent failures (validation, data errors,
+    /// resource-not-found) that would produce the same result on retry.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use blazil_common::error::BlazerError;
+    ///
+    /// assert!(BlazerError::LedgerTransient("view change".into()).is_transient());
+    /// assert!(!BlazerError::Ledger("duplicate id".into()).is_transient());
+    /// assert!(!BlazerError::ValidationError("bad input".into()).is_transient());
+    /// ```
+    #[inline]
+    pub fn is_transient(&self) -> bool {
+        matches!(self, BlazerError::LedgerTransient(_))
+    }
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -183,6 +224,7 @@ mod tests {
             BlazerError::Internal("oops".into()),
             BlazerError::Transport("connection refused".into()),
             BlazerError::Ledger("write failed".into()),
+            BlazerError::LedgerTransient("view change in progress".into()),
             BlazerError::NotFound {
                 resource: "Account".into(),
                 id: "abc".into(),
@@ -235,5 +277,29 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("50.00"), "missing available in: {msg}");
         assert!(msg.contains("100.00"), "missing required in: {msg}");
+    }
+
+    #[test]
+    fn ledger_transient_is_transient() {
+        assert!(BlazerError::LedgerTransient("view change".into()).is_transient());
+    }
+
+    #[test]
+    fn ledger_permanent_is_not_transient() {
+        assert!(!BlazerError::Ledger("duplicate id".into()).is_transient());
+    }
+
+    #[test]
+    fn non_ledger_errors_are_not_transient() {
+        let not_transient: &[BlazerError] = &[
+            BlazerError::ValidationError("bad input".into()),
+            BlazerError::Internal("unexpected".into()),
+            BlazerError::Transport("connection refused".into()),
+            BlazerError::AmountOverflow,
+            BlazerError::NegativeAmount,
+        ];
+        for err in not_transient {
+            assert!(!err.is_transient(), "expected non-transient: {:?}", err);
+        }
     }
 }

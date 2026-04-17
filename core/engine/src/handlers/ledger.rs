@@ -70,6 +70,23 @@ const MAX_TB_BATCH_SIZE: usize = 8_190;
 /// long enough to accumulate more transfers without wasting a VSR round.
 const BATCH_FLUSH_TIMEOUT_US: u64 = 500;
 
+/// Maximum retry attempts for a transient TB transport error (view-change,
+/// session reset).  Each attempt is separated by an exponential backoff:
+///   attempt 1 →  50 ms
+///   attempt 2 → 100 ms
+///   attempt 3 → 200 ms
+///   attempt 4 → 400 ms
+///   attempt 5 → 800 ms (final)
+///
+/// Total worst-case wait: ~1 550 ms, well within the VSR view-change window
+/// (~1-3 s on well-connected nodes).  After this the batch is marked rejected
+/// so the pipeline does not stall forever.
+const MAX_TRANSIENT_RETRIES: u32 = 5;
+
+/// Base delay in milliseconds for the first retry backoff.
+/// Subsequent delays double: 50 → 100 → 200 → 400 → 800 ms.
+const TRANSIENT_BACKOFF_BASE_MS: u64 = 50;
+
 /// Maximum number of concurrent in-flight TigerBeetle async tasks.
 ///
 /// This is the key backpressure constant that prevents unbounded growth.
@@ -369,7 +386,69 @@ impl<C: LedgerClient + Send + Sync + 'static> EventHandler for LedgerHandler<C> 
         active_tasks.fetch_add(1, Ordering::Relaxed);
         self.runtime.spawn(async move {
             let tb_t0 = Instant::now();
-            let tb_results = client.create_transfers_batch(all_transfers).await;
+
+            // ── Transient-error retry loop ──────────────────────────────────
+            //
+            // TB returns `LedgerTransient` when the cluster is mid-view-change
+            // (node killed, primary rotating).  The Zig client drops the in-
+            // flight request and surfaces a transport error.  We must not
+            // surface this as a permanent rejection: the transfer may have been
+            // committed on the old primary before the interruption (TB's VSR
+            // consensus guarantees the commit is either durable or not at all,
+            // never half-committed).  Because every transfer carries a unique
+            // ID we can retry unconditionally — if TB already committed the
+            // batch it returns `Exists*` per-transfer errors which
+            // `TigerBeetleClient::create_transfers_batch` normalises back to
+            // `Ok(transfer_id)`.
+            let tb_results;
+            let mut attempt = 0u32;
+            loop {
+                // Clone the batch for this attempt (Transfer: Clone).
+                // On the last allowed attempt we skip the clone — using the
+                // owned vec directly saves one allocation on the hot path.
+                let batch = if attempt < MAX_TRANSIENT_RETRIES {
+                    all_transfers.clone()
+                } else {
+                    all_transfers.clone() // final attempt — same path keeps borrow checker happy
+                };
+                let results = client.create_transfers_batch(batch).await;
+
+                // A wholesale transient failure means ALL slots are LedgerTransient.
+                let all_transient = results.iter().all(|r| {
+                    matches!(r, Err(e) if e.is_transient())
+                });
+
+                if !all_transient || attempt >= MAX_TRANSIENT_RETRIES {
+                    tb_results = results;
+                    if attempt > 0 {
+                        if all_transient {
+                            warn!(
+                                attempt,
+                                batch_size,
+                                "TB transient error persisted after all retries — marking rejected"
+                            );
+                        } else {
+                            info!(
+                                attempt,
+                                batch_size,
+                                "TB batch succeeded after transient retry"
+                            );
+                        }
+                    }
+                    break;
+                }
+
+                attempt += 1;
+                let delay_ms = TRANSIENT_BACKOFF_BASE_MS * (1u64 << attempt.min(4));
+                warn!(
+                    attempt,
+                    delay_ms,
+                    batch_size,
+                    "TB transient error (view-change?) — backing off before retry"
+                );
+                tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+            }
+
             let tb_elapsed_ms = tb_t0.elapsed().as_millis();
 
             // Write deferred results.

@@ -470,3 +470,129 @@ mod tests {
         assert!(results.is_empty());
     }
 }
+
+// ── FaultInjectingLedgerClient ────────────────────────────────────────────────
+
+/// A test-only [`LedgerClient`] wrapper that injects a configurable number of
+/// `LedgerTransient` errors before delegating to the underlying client.
+///
+/// Used to unit-test retry logic in [`blazil_engine::handlers::LedgerHandler`]
+/// without requiring a live TigerBeetle cluster.
+///
+/// # How it works
+///
+/// On every call to [`create_transfers_batch`] the fault counter is checked.
+/// If it is > 0, the counter is decremented and a vec of `LedgerTransient`
+/// errors (one per transfer) is returned.  Once the counter reaches 0 all
+/// subsequent calls are forwarded to the inner client.
+///
+/// # Example
+///
+/// ```rust
+/// use blazil_ledger::mock::{InMemoryLedgerClient, FaultInjectingLedgerClient};
+/// use blazil_ledger::client::LedgerClient;
+/// use blazil_common::error::BlazerError;
+///
+/// #[tokio::main]
+/// async fn main() {
+///     // Inject 2 transient failures before succeeding.
+///     let inner = std::sync::Arc::new(InMemoryLedgerClient::new());
+///     let client = FaultInjectingLedgerClient::new(inner, 2);
+///
+///     // First call → transient error.
+///     // Second call → transient error.
+///     // Third call → success (delegates to inner).
+/// }
+/// ```
+///
+/// [`create_transfers_batch`]: LedgerClient::create_transfers_batch
+pub struct FaultInjectingLedgerClient<C: LedgerClient> {
+    inner: Arc<C>,
+    remaining_faults: std::sync::atomic::AtomicU32,
+}
+
+impl<C: LedgerClient + Send + Sync + 'static> FaultInjectingLedgerClient<C> {
+    /// Creates a new fault-injecting wrapper.
+    ///
+    /// - `inner` — the underlying client used once faults are exhausted.
+    /// - `fault_count` — how many `LedgerTransient` batch errors to inject
+    ///   before forwarding to `inner`.
+    pub fn new(inner: Arc<C>, fault_count: u32) -> Self {
+        Self {
+            inner,
+            remaining_faults: std::sync::atomic::AtomicU32::new(fault_count),
+        }
+    }
+}
+
+#[async_trait]
+impl<C: LedgerClient + Send + Sync + 'static> LedgerClient for FaultInjectingLedgerClient<C> {
+    async fn create_account(
+        &self,
+        account: crate::account::Account,
+    ) -> BlazerResult<blazil_common::ids::AccountId> {
+        self.inner.create_account(account).await
+    }
+
+    async fn create_transfer(
+        &self,
+        transfer: crate::transfer::Transfer,
+    ) -> BlazerResult<blazil_common::ids::TransferId> {
+        self.inner.create_transfer(transfer).await
+    }
+
+    async fn get_account(
+        &self,
+        id: &blazil_common::ids::AccountId,
+    ) -> BlazerResult<crate::account::Account> {
+        self.inner.get_account(id).await
+    }
+
+    async fn get_transfer(
+        &self,
+        id: &blazil_common::ids::TransferId,
+    ) -> BlazerResult<crate::transfer::Transfer> {
+        self.inner.get_transfer(id).await
+    }
+
+    /// Injects transient errors until the fault counter reaches zero, then
+    /// delegates to the inner client.
+    async fn create_transfers_batch(
+        &self,
+        transfers: Vec<crate::transfer::Transfer>,
+    ) -> Vec<BlazerResult<blazil_common::ids::TransferId>> {
+        use std::sync::atomic::Ordering;
+
+        // Saturating decrement: if remaining_faults > 0, inject a fault.
+        let prev = self
+            .remaining_faults
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| {
+                if v > 0 {
+                    Some(v - 1)
+                } else {
+                    None
+                }
+            });
+
+        if prev.is_ok() {
+            // Inject a transient error for every transfer in the batch.
+            return transfers
+                .iter()
+                .map(|_| {
+                    Err(BlazerError::LedgerTransient(
+                        "injected transient fault for testing".into(),
+                    ))
+                })
+                .collect();
+        }
+
+        self.inner.create_transfers_batch(transfers).await
+    }
+
+    async fn get_account_balances(
+        &self,
+        ids: &[blazil_common::ids::AccountId],
+    ) -> BlazerResult<Vec<crate::account::Account>> {
+        self.inner.get_account_balances(ids).await
+    }
+}

@@ -16,10 +16,23 @@
 //   sudo dnf install -y clang llvm libbpf-devel kernel-devel
 
 fn main() {
-    // Only compile BPF when the af-xdp feature is active.
-    // Other features (aeron, io-uring) are unaffected.
-    if std::env::var("CARGO_FEATURE_AF_XDP").is_ok() {
+    // Only compile BPF when the af-xdp feature is active AND we are on Linux.
+    // On macOS / CI hosts without kernel headers, skip gracefully — the
+    // src/ebpf/mod.rs module is gated with
+    //   #[cfg(all(target_os = "linux", feature = "af-xdp"))]
+    // so the `include_bytes!` never executes on non-Linux even if --all-features
+    // is passed.
+    let is_linux = std::env::var("CARGO_CFG_TARGET_OS")
+        .map(|os| os == "linux")
+        .unwrap_or(false);
+
+    if std::env::var("CARGO_FEATURE_AF_XDP").is_ok() && is_linux {
         compile_xdp_program();
+    } else if std::env::var("CARGO_FEATURE_AF_XDP").is_ok() && !is_linux {
+        println!(
+            "cargo:warning=af-xdp feature is enabled but target OS is not Linux; \
+             BPF compilation skipped (safe: ebpf module is cfg-gated to Linux)"
+        );
     }
 }
 

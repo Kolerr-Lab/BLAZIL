@@ -245,6 +245,17 @@ impl LedgerClient for TigerBeetleClient {
                 }
                 Err(tb::error::CreateTransfersError::Api(api_err)) => {
                     // Some transfers failed; those not in the error slice succeeded.
+                    //
+                    // Special case: any `Exists*` error means the transfer was
+                    // already committed — this happens on idempotent retries after
+                    // a view-change.  Treat them as `Ok` so the caller sees a
+                    // committed result rather than a spurious rejection.
+                    //
+                    // We detect "already committed" by checking the Debug output of
+                    // `e.kind()` for the substring "Exist" (case-sensitive), which
+                    // is stable across all TB versions that use the Exists* naming
+                    // convention.  This avoids coupling to generated variant names
+                    // that may change between TB releases.
                     let failed: std::collections::HashSet<usize> = api_err
                         .as_slice()
                         .iter()
@@ -256,10 +267,22 @@ impl LedgerClient for TigerBeetleClient {
                             .iter()
                             .find(|e| e.index() as usize == tb_pos)
                         {
-                            results[orig_i] = Some(Err(BlazerError::Ledger(format!(
-                                "TB transfer error {:?} at batch index {tb_pos}",
-                                e.kind()
-                            ))));
+                            // If the debug name of the error kind contains "Exist",
+                            // the transfer was already committed — treat as Ok.
+                            let kind_str = format!("{:?}", e.kind());
+                            if kind_str.contains("Exist") {
+                                tracing::debug!(
+                                    orig_i,
+                                    kind = %kind_str,
+                                    "TB transfer already committed (idempotent retry) — treating as Ok"
+                                );
+                                results[orig_i] = Some(Ok(*transfers[orig_i].id()));
+                            } else {
+                                results[orig_i] = Some(Err(BlazerError::Ledger(format!(
+                                    "TB transfer error {:?} at batch index {tb_pos}",
+                                    e.kind()
+                                ))));
+                            }
                         } else {
                             results[orig_i] = Some(Ok(*transfers[orig_i].id()));
                         }
@@ -272,15 +295,21 @@ impl LedgerClient for TigerBeetleClient {
                     );
                 }
                 Err(e) => {
+                    // Wholesale transport failure (session closed, timeout, connection
+                    // reset).  This is a TRANSIENT error — the TB Zig client lost
+                    // contact with the cluster during a VSR view-change.  The caller
+                    // (LedgerHandler) must retry the same batch; idempotent transfer
+                    // IDs ensure at-most-once semantics even if the batch was partially
+                    // committed before the interruption.
                     for &orig_i in &tb_to_orig {
-                        results[orig_i] = Some(Err(BlazerError::Ledger(format!(
-                            "create_transfers batch failed: {e}"
+                        results[orig_i] = Some(Err(BlazerError::LedgerTransient(format!(
+                            "create_transfers transport error (retryable): {e}"
                         ))));
                     }
                     tracing::error!(
                         count = submitted,
                         error = %e,
-                        "batch create_transfers transport error"
+                        "batch create_transfers transport error — marked as transient for retry"
                     );
                 }
             }
