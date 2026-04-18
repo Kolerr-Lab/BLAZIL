@@ -10,7 +10,7 @@ import { FailoverPanel } from "@/components/FailoverPanel";
 import { ClusterInfo } from "@/components/ClusterInfo";
 import type { EventMessage } from "@/types/metrics";
 
-const DEFAULT_WS_URL = "ws://157.245.62.49:9090/ws";
+const DEFAULT_WS_URL = "ws://18.215.238.241:9090/ws";
 
 export default function DashboardPage() {
   const [wsUrl, setWsUrl] = useState(DEFAULT_WS_URL);
@@ -20,6 +20,17 @@ export default function DashboardPage() {
   const eventsEndRef = useCallback((el: HTMLDivElement | null) => {
     el?.scrollIntoView({ behavior: "smooth" });
   }, []);
+
+  // Auto-connect on mount, then retry every 3s on error/disconnect.
+  useEffect(() => {
+    connect();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (state.status !== "error" && state.status !== "idle") return;
+    const timer = setTimeout(() => connect(), 3_000);
+    return () => clearTimeout(timer);
+  }, [state.status, connect]);
 
   // Browser title updates with live TPS.
   useEffect(() => {
