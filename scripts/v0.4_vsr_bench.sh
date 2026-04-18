@@ -244,6 +244,7 @@ nice -n -20 \
     --scenario sharded-tb \
     --shards "$SHARDS" \
     --duration "$WARMUP_SECS" \
+    --metrics-port "$METRICS_PORT" \
     2>&1 | tee -a "$LOG_FILE" || warn "Warmup non-zero exit (non-fatal)"
 
 log "Warmup done — TB page cache primed ✓"
