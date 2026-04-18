@@ -1,25 +1,28 @@
 "use client";
 
-// Static DigitalOcean droplet spec for the VSR bench cluster.
-// Update NODE_COUNT or DROPLET if the infra changes.
+// AWS i4i.4xlarge single-node VSR bench — 3 TB replicas on 1 instance.
+// Update when infra changes.
 
-const NODE_COUNT = 3;
+const NODE_COUNT = 1;
 
-const DROPLET = {
-  cpu: "4 AMD vCPUs",
-  ram: "8 GB",
-  disk: "160 GB NVMe SSD",
-  transfer: "5 TB",
-  price: "$56/mo",
+const INSTANCE = {
+  type: "i4i.4xlarge",
+  cpu: "16 vCPU (Intel Ice Lake)",
+  ram: "128 GB",
+  disk: "1× 1.9 TB NVMe (instance store)",
+  network: "Up to 25 Gbps",
+  price: "$1.248/hr",
 } as const;
 
 const SPECS = [
-  { icon: "⬡", label: "Nodes", value: `${NODE_COUNT}× DO Droplet` },
-  { icon: "▣", label: "CPU", value: DROPLET.cpu },
-  { icon: "◈", label: "RAM", value: DROPLET.ram },
-  { icon: "◉", label: "Disk", value: DROPLET.disk },
-  { icon: "⇅", label: "Transfer", value: DROPLET.transfer },
-  { icon: "$", label: "Cost", value: `${DROPLET.price} × ${NODE_COUNT} = $${56 * NODE_COUNT}/mo` },
+  { label: "Instance", value: `${NODE_COUNT}× AWS ${INSTANCE.type}` },
+  { label: "CPU", value: INSTANCE.cpu },
+  { label: "RAM", value: INSTANCE.ram },
+  { label: "Disk", value: INSTANCE.disk },
+  { label: "Network", value: INSTANCE.network },
+  { label: "Cost", value: INSTANCE.price },
+  { label: "TB Nodes", value: "3 replicas (VSR 2-of-3)" },
+  { label: "Window", value: "1 024 / shard" },
 ] as const;
 
 export function ClusterInfo() {
