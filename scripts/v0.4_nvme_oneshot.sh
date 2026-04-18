@@ -241,7 +241,7 @@ for dev in "${DETECTED[@]}"; do
     #   logbsize=256k: match the mkfs log buffer size
     #   allocsize=64m: aggressive pre-allocation for large sequential writes
     mount -t xfs \
-        -o noatime,nodiratime,nobarrier,logbsize=256k,allocsize=64m \
+        -o noatime,nodiratime,logbsize=256k,allocsize=64m \
         "$DEVPATH" \
         "$MNTPT"
 
