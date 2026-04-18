@@ -444,9 +444,11 @@ pub mod inner {
                         }
                     }
 
-                    // Capture final partial second if any.
+                    // Capture final partial second only if it is a full 1-second
+                    // window; a short partial second would drag down min_tps and
+                    // make consistency appear artificially low.
                     let elapsed_secs = last_window_time.elapsed().as_secs();
-                    if elapsed_secs >= 1 || received > last_window_received {
+                    if elapsed_secs >= 1 {
                         let delta_received = received.saturating_sub(last_window_received);
                         let current_second = per_second_tps.len() as u64;
                         per_second_tps.push((current_second, delta_received));
@@ -540,7 +542,10 @@ pub mod inner {
                 result.tps
             };
             let max_tps = tps_vals.iter().max().copied().unwrap_or(result.tps);
-            let min_tps = tps_vals.iter().min().copied().unwrap_or(0);
+            // Use result.tps as fallback for min too — if windowed_tps is empty
+            // (bench finished in < 1s), both min and max should equal the
+            // overall TPS so consistency reports 100% rather than 0%.
+            let min_tps = tps_vals.iter().min().copied().unwrap_or(result.tps);
             let consistency = if max_tps > 0 {
                 min_tps as f64 / max_tps as f64 * 100.0
             } else {
