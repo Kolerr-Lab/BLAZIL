@@ -121,7 +121,7 @@ pub mod inner {
         let dur_json = duration_secs
             .map(|d| d.to_string())
             .unwrap_or_else(|| "null".to_string());
-        let rt_workers_hint = (shard_count / 2).clamp(2, 16);
+        let rt_workers_hint = (shard_count / 2).clamp(2, 32);
         if let Some(ref tx) = metrics_tx {
             let msg = format!(
                 "{{\"type\":\"config\",\"shards\":{shard_count},\
@@ -135,7 +135,7 @@ pub mod inner {
         // ── Shared ledger runtime ─────────────────────────────────────────────
         // VSR is I/O-bound: 2 workers per 4 shards is sufficient.
         // Cap raised to 16 for ≥8-shard runs (v0.3 scaling tests).
-        let rt_workers = (shard_count / 2).clamp(2, 16);
+        let rt_workers = (shard_count / 2).clamp(2, 32);
         let ledger_rt = Arc::new(
             tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(rt_workers)
@@ -267,6 +267,9 @@ pub mod inner {
         }
 
         let wall_start = Instant::now();
+        // Capture start as Duration-from-epoch so shard threads can compute
+        // wall-clock second buckets without a shared reference to Instant.
+        let wall_start_for_shards = wall_start;
 
         let mut producer_handles = Vec::with_capacity(shard_count);
 
@@ -284,6 +287,7 @@ pub mod inner {
             let rejected_total = Arc::clone(&rejected_total);
             let stop_flag = Arc::clone(&stop_flag);
             let metrics_tx_shard = metrics_tx.clone();
+            let shard_wall_start = wall_start_for_shards;
 
             let handle = std::thread::Builder::new()
                 .name(format!("bench-shard-{shard_id}"))
@@ -302,7 +306,9 @@ pub mod inner {
                     let mut rejected = 0u64;
                     let mut last_hb = Instant::now();
 
-                    // Per-second TPS tracking for failover analysis.
+                    // Per-second TPS tracking — keyed by wall-clock second so
+                    // all shards share the same bucket timeline regardless of
+                    // thread scheduling jitter.
                     let mut per_second_tps: Vec<(u64, u64)> = Vec::new();
                     let mut last_window_time = Instant::now();
                     let mut last_window_received = 0u64;
@@ -393,7 +399,9 @@ pub mod inner {
                         let elapsed_secs = last_window_time.elapsed().as_secs();
                         if elapsed_secs >= 1 {
                             let delta_received = received.saturating_sub(last_window_received);
-                            let current_second = per_second_tps.len() as u64;
+                            // Use wall-clock second so all shards align to the
+                            // same bucket even if threads started at different times.
+                            let current_second = shard_wall_start.elapsed().as_secs();
                             per_second_tps.push((current_second, delta_received));
                             last_window_time = Instant::now();
                             last_window_received = received;
