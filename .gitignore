@@ -67,6 +67,9 @@ infra/ansible/inventory/production.local
 *.log
 logs/
 
+# Next.js
+tools/bench-dashboard/.next/
+
 # Build artifacts
 dist/
 build/

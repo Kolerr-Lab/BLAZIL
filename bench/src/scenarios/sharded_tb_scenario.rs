@@ -353,9 +353,16 @@ pub mod inner {
                     // Event-mode:    exits when received >= n.
                     // Duration-mode: stops sending when stop_flag fires, then
                     //                drains remaining in_flight before exiting.
+                    let mut drain_deadline: Option<Instant> = None;
                     loop {
+                        let stopped = duration_mode && stop_flag.load(Ordering::Relaxed);
+                        // Start a 5s drain deadline the moment stop_flag fires.
+                        if stopped && drain_deadline.is_none() {
+                            drain_deadline = Some(Instant::now() + Duration::from_secs(5));
+                        }
+                        let timed_out = drain_deadline.map_or(false, |d| Instant::now() >= d);
                         let done = if duration_mode {
-                            stop_flag.load(Ordering::Relaxed) && in_flight.is_empty()
+                            (stopped && in_flight.is_empty()) || timed_out
                         } else {
                             received >= n
                         };
