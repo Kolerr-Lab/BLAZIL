@@ -10,7 +10,7 @@ import { FailoverPanel } from "@/components/FailoverPanel";
 import { ClusterInfo } from "@/components/ClusterInfo";
 import type { EventMessage } from "@/types/metrics";
 
-const DEFAULT_WS_URL = "ws://18.215.238.241:9090/ws";
+const DEFAULT_WS_URL = "ws://3.81.16.33:9090/ws";
 
 export default function DashboardPage() {
   const [wsUrl, setWsUrl] = useState(DEFAULT_WS_URL);
