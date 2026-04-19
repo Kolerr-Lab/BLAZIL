@@ -235,19 +235,6 @@ pub mod inner {
         }
         println!("[diag] {shard_count} shard pipeline(s) started");
 
-        // ── Warmup ────────────────────────────────────────────────────────────
-        println!("[diag] warmup ({WARMUP_PER_SHARD} events/shard)...");
-        for ctx in &shard_contexts {
-            for _ in 0..WARMUP_PER_SHARD {
-                let event = make_event(ctx.debit_id, ctx.credit_id);
-                // Discard returned sequence — warmup results are not tracked.
-                publish_with_backpressure(&ctx.pipeline, event);
-            }
-        }
-        // Give TB time to drain the warmup batches before the timed section.
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        println!("[diag] warmup done — starting timed bench");
-
         // Broadcast bench_start event to dashboard.
         if let Some(ref tx) = metrics_tx {
             tx.send(
@@ -433,6 +420,15 @@ pub mod inner {
                                 (0u64, 0u64)
                             };
 
+                            // Print per-second TPS to stdout so progress is
+                            // visible without the dashboard.
+                            println!(
+                                "[t+{current_second:3}s] shard={shard_id} \
+                                 TPS={delta_received:>8} inflight={:>4} \
+                                 p99={p99_us}µs",
+                                in_flight.len(),
+                            );
+
                             // Broadcast per-shard tick to live dashboard.
                             if let Some(ref tx) = metrics_tx_shard {
                                 let fl = in_flight.len();
@@ -449,19 +445,28 @@ pub mod inner {
 
                         if !drained {
                             // No result ready yet — hint the CPU.
-                            if last_hb.elapsed().as_secs() >= 5 {
+                            if last_hb.elapsed().as_secs() >= 2 {
                                 // Periodic DashMap drain: evict entries whose
                                 // sequences predate the current in_flight window.
-                                // Cleans warmup residue + stale failover rejections.
                                 if let Some(&(min_seq, _)) = in_flight.front() {
                                     results.retain(|&seq, _| seq >= min_seq);
                                 }
                                 println!(
-                                    "[shard {shard_id}] recv={received}/{total_label} \
+                                    "[STALL shard={shard_id}] recv={received}/{total_label} \
                                      sent={sent} inflight={} results_map={}",
                                     in_flight.len(),
                                     results.len(),
                                 );
+                                // Early abort: if pipeline is completely dead
+                                // (zero results in first 10s), break immediately.
+                                if shard_wall_start.elapsed().as_secs() > 10 && received == 0 {
+                                    println!(
+                                        "[FATAL shard={shard_id}] No results after 10s — \
+                                         pipeline stall. Check TB logs: \
+                                         tail /tmp/tb0.log /tmp/tb1.log /tmp/tb2.log"
+                                    );
+                                    break;
+                                }
                                 last_hb = Instant::now();
                             }
                             for _ in 0..8 {
