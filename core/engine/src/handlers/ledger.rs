@@ -68,7 +68,7 @@ const MAX_TB_BATCH_SIZE: usize = 8_190;
 /// `MAX_TB_BATCH_SIZE` are flushed after this interval regardless.
 /// 500 µs ≈ the DO intra-region RTT so partial batches are held just
 /// long enough to accumulate more transfers without wasting a VSR round.
-const BATCH_FLUSH_TIMEOUT_US: u64 = 500;
+const BATCH_FLUSH_TIMEOUT_US: u64 = 3_000;
 
 /// Maximum retry attempts for a transient TB transport error (view-change,
 /// session reset).  Each attempt is separated by an exponential backoff:
