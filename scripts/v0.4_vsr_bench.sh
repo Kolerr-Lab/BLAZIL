@@ -15,14 +15,34 @@ readonly TB_DATA="/mnt/data1"
 readonly BENCH_BIN="/mnt/data1/cargo-target/release/blazil-bench"
 readonly TB_VERSION="0.16.78"
 
+# ── Kill zombie ports from previous run ──────────────────────────────────
+fuser -k 9090/tcp 3001/tcp 3002/tcp 3003/tcp 2>/dev/null || true
+pkill -f 'tigerbeetle start' 2>/dev/null || true
+sleep 1
+
 # ── OS tuning ──────────────────────────────────────────────────────────────
-cpupower frequency-set -g performance 2>/dev/null || \
-    for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
-        echo performance > "$g" 2>/dev/null || true
-    done
+# CPU governor — intel_pstate (AWS i4i) uses energy_performance_preference
+cpupower frequency-set -g performance 2>/dev/null || true
+for epp in /sys/devices/system/cpu/cpu*/cpufreq/energy_performance_preference; do
+    [[ -f "$epp" ]] && echo performance > "$epp" 2>/dev/null || true
+done
+for gov in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+    [[ -f "$gov" ]] && echo performance > "$gov" 2>/dev/null || true
+done
+
+# Network
 sysctl -w net.core.somaxconn=65535    2>/dev/null || true
 sysctl -w net.ipv4.tcp_tw_reuse=1     2>/dev/null || true
 echo never > /sys/kernel/mm/transparent_hugepage/enabled 2>/dev/null || true
+
+# NVMe I/O scheduler — none (bypass CFQ/mq-deadline for direct NVMe)
+for q in /sys/block/nvme*/queue/scheduler; do
+    [[ -f "$q" ]] && echo none > "$q" 2>/dev/null || true
+done
+# Reduce dirty page writeback pressure during bench
+sysctl -w vm.dirty_ratio=10          2>/dev/null || true
+sysctl -w vm.dirty_background_ratio=5 2>/dev/null || true
+
 ulimit -n 1048576
 
 echo "[bench] shards=$SHARDS window=1024 duration=${DURATION}s failover=t${FAILOVER_AT}s"
@@ -60,7 +80,6 @@ trap cleanup EXIT INT TERM
 
 # ── STEP 1: format fresh cluster ───────────────────────────────────────────
 echo "[bench] ── step 1: format cluster ──"
-pkill -f "tigerbeetle start" 2>/dev/null && sleep 1 || true
 rm -rf "${TB_DATA}"/tb-node{0,1,2}
 mkdir -p "${TB_DATA}"/tb-node{0,1,2}
 for r in 0 1 2; do
@@ -79,16 +98,24 @@ tigerbeetle start --addresses="$TB_ADDRS" \
     "${TB_DATA}/tb-node2/0_2.tigerbeetle" &>/tmp/tb2.log & TB2=$!
 echo "[bench] tb0=$TB0 tb1=$TB1 tb2=$TB2"
 
-# wait for all 3 ports
+# wait for all 3 ports (10s timeout each)
 printf "[bench] waiting for VSR quorum"
 for port in 3001 3002 3003; do
-    for i in $(seq 1 30); do
-        timeout 1 bash -c "echo >/dev/tcp/127.0.0.1/$port" 2>/dev/null && break
-        [[ $i -eq 30 ]] && { echo; echo "FATAL: :$port not ready"; exit 1; }
+    ready=0
+    for i in $(seq 1 10); do
+        if timeout 1 bash -c "echo >/dev/tcp/127.0.0.1/$port" 2>/dev/null; then
+            ready=1; break
+        fi
         printf "."; sleep 1
     done
+    if [[ $ready -eq 0 ]]; then
+        echo
+        echo "FATAL: :$port not ready after 10s — TB log:"
+        tail -5 /tmp/tb$(( port - 3001 )).log 2>/dev/null || true
+        exit 1
+    fi
 done
-sleep 3
+sleep 2
 echo " ✓"
 
 # ── STEP 3: start bench (WS server :9090 comes up first, then scenario) ───
