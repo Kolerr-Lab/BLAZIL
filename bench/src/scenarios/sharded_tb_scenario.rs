@@ -52,12 +52,12 @@ pub mod inner {
     // ── Constants ─────────────────────────────────────────────────────────────
 
     /// Ring buffer capacity per shard (power of 2, ≥ 2 × window).
-    const CAPACITY_PER_SHARD: usize = 4_096;
+    const CAPACITY_PER_SHARD: usize = 1_024;
 
     /// Publish window per shard: max in-flight events before draining.
-    /// 2048 maximises pipeline depth on a 3-node VSR cluster while
-    /// keeping queuing delay in the low-ms range.
-    const WINDOW_PER_SHARD: usize = 2_048;
+    /// 512 keeps P99 latency under 5ms while providing enough pipeline
+    /// depth for peak TPS on 4 shards against a 3-node VSR cluster.
+    const WINDOW_PER_SHARD: usize = 512;
 
     /// Max transfer amount (100 billion minor units).
     const MAX_AMOUNT_UNITS: u64 = 100_000_000_000;

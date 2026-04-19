@@ -69,9 +69,9 @@ async fn main() {
     let (metrics_tx, cmd_rx, _config_cache) = {
         if let Some(port) = metrics_port {
             let (tx, rx, cache) = blazil_bench::ws_server::start(port);
-            // Give the tokio task 50ms to bind the port before the scenario
-            // sends the config message (avoids race between spawn and send).
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            // Give the WS server 5s to bind and let the dashboard connect
+            // before any bench data flows (Dashboard-First guarantee).
+            tokio::time::sleep(std::time::Duration::from_millis(5_000)).await;
             (Some(tx), Some(rx), Some(cache))
         } else {
             (None, None, None)
