@@ -27,7 +27,6 @@ pub use inner::ConfigCache;
 
 #[cfg(feature = "metrics-ws")]
 mod inner {
-    use std::sync::Arc;
     use axum::{
         extract::{
             ws::{Message, WebSocket, WebSocketUpgrade},
@@ -37,6 +36,7 @@ mod inner {
         routing::get,
         Router,
     };
+    use std::sync::Arc;
     use tokio::sync::{broadcast, RwLock};
     use tower_http::cors::{Any, CorsLayer};
 
@@ -52,7 +52,13 @@ mod inner {
     /// - `broadcast::Receiver<String>`: dashboard → bench control commands.
     /// - `ConfigCache`: scenario writes the config JSON here; new WS clients
     ///   receive it as their first message so they always transition to "running".
-    pub fn start(port: u16) -> (broadcast::Sender<String>, broadcast::Receiver<String>, ConfigCache) {
+    pub fn start(
+        port: u16,
+    ) -> (
+        broadcast::Sender<String>,
+        broadcast::Receiver<String>,
+        ConfigCache,
+    ) {
         // outgoing: bench → dashboard
         let (out_tx, _) = broadcast::channel::<String>(8192);
         // incoming: dashboard → bench
@@ -88,7 +94,11 @@ mod inner {
 
     async fn ws_handler(
         ws: WebSocketUpgrade,
-        State((out_tx, in_tx, config_cache)): State<(broadcast::Sender<String>, broadcast::Sender<String>, ConfigCache)>,
+        State((out_tx, in_tx, config_cache)): State<(
+            broadcast::Sender<String>,
+            broadcast::Sender<String>,
+            ConfigCache,
+        )>,
     ) -> impl IntoResponse {
         ws.on_upgrade(move |socket| handle_socket(socket, out_tx, in_tx, config_cache))
     }

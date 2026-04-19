@@ -175,8 +175,16 @@ export function useBenchWS(wsUrl: string) {
 
   const connect = useCallback(() => {
     if (wsRef.current) {
-      wsRef.current.close();
+      // Null out handlers BEFORE closing so the old onclose/onerror cannot
+      // race with the new connection and overwrite "connecting" → "error".
+      const old = wsRef.current;
+      old.onopen = null;
+      old.onmessage = null;
+      old.onerror = null;
+      old.onclose = null;
+      old.close();
     }
+    summaryReceivedRef.current = false;
     setState((p) => ({ ...p, status: "connecting" }));
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
@@ -199,7 +207,15 @@ export function useBenchWS(wsUrl: string) {
   }, [wsUrl, handleMessage]);
 
   const disconnect = useCallback(() => {
-    wsRef.current?.close();
+    if (wsRef.current) {
+      const old = wsRef.current;
+      old.onopen = null;
+      old.onmessage = null;
+      old.onerror = null;
+      old.onclose = null;
+      old.close();
+      wsRef.current = null;
+    }
     setState((p) => ({ ...p, status: "idle" }));
   }, []);
 

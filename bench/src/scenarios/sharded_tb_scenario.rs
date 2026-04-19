@@ -29,9 +29,9 @@ pub mod inner {
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
-    use tokio::sync::broadcast;
     #[cfg(feature = "metrics-ws")]
     use crate::ws_server::ConfigCache;
+    use tokio::sync::broadcast;
 
     use blazil_common::currency::parse_currency;
     use blazil_common::ids::{AccountId, LedgerId, TransactionId};
@@ -93,10 +93,8 @@ pub mod inner {
         shard_count: usize,
         duration_secs: Option<u64>,
         metrics_tx: Option<broadcast::Sender<String>>,
-        #[cfg(feature = "metrics-ws")]
-        config_cache: Option<ConfigCache>,
-        #[cfg(not(feature = "metrics-ws"))]
-        _config_cache: Option<()>,
+        #[cfg(feature = "metrics-ws")] config_cache: Option<ConfigCache>,
+        #[cfg(not(feature = "metrics-ws"))] _config_cache: Option<()>,
     ) -> BenchmarkResult {
         assert!(
             shard_count.is_power_of_two() && shard_count >= 1,
