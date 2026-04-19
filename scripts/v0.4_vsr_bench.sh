@@ -131,11 +131,11 @@ nice -n -20 \
     >"$BENCH_LOG" 2>&1 &
 BENCH_PID=$!
 
-# wait for :9090
+# wait for :9090 — nc fast-poll 0.1s intervals, max 5s
 printf "[bench] polling :${METRICS_PORT}"
-for i in $(seq 1 40); do
-    timeout 1 bash -c "echo >/dev/tcp/127.0.0.1/${METRICS_PORT}" 2>/dev/null && break
-    printf "."; sleep 0.25
+for i in $(seq 1 50); do
+    nc -z 127.0.0.1 "${METRICS_PORT}" 2>/dev/null && break
+    printf "."; sleep 0.1
 done
 echo ""
 

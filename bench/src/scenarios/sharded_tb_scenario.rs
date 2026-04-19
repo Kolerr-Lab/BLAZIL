@@ -63,7 +63,7 @@ pub mod inner {
     const MAX_AMOUNT_UNITS: u64 = 100_000_000_000;
 
     /// Warmup events per shard — enough to prime TB batching + JIT.
-    const WARMUP_PER_SHARD: u64 = 2_000;
+    const WARMUP_PER_SHARD: u64 = 500;
 
     /// Spin hint count on ring-full backpressure before yielding.
     const BACKPRESSURE_SPIN: usize = 64;
@@ -245,7 +245,7 @@ pub mod inner {
             }
         }
         // Give TB time to drain the warmup batches before the timed section.
-        tokio::time::sleep(Duration::from_millis(2_000)).await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
         println!("[diag] warmup done — starting timed bench");
 
         // Broadcast bench_start event to dashboard.
