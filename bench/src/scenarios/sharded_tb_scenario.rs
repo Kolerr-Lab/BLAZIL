@@ -52,12 +52,11 @@ pub mod inner {
     // ── Constants ─────────────────────────────────────────────────────────────
 
     /// Ring buffer capacity per shard (power of 2, ≥ 2 × window).
-    const CAPACITY_PER_SHARD: usize = 2_048;
+    const CAPACITY_PER_SHARD: usize = 4_096;
 
     /// Publish window per shard: max in-flight events before draining.
-    /// 1024 keeps P99 latency low while providing enough pipeline
-    /// depth for peak TPS on 4 shards against a 3-node VSR cluster.
-    const WINDOW_PER_SHARD: usize = 1_024;
+    /// 2048 gives ~55K TPS/shard at p99=37ms (2048/0.037), ~220K total.
+    const WINDOW_PER_SHARD: usize = 2_048;
 
     /// Max transfer amount (100 billion minor units).
     const MAX_AMOUNT_UNITS: u64 = 100_000_000_000;
@@ -452,7 +451,7 @@ pub mod inner {
                                     results.retain(|&seq, _| seq >= min_seq);
                                 }
                                 println!(
-                                    "[STALL shard={shard_id}] recv={received}/{total_label} \
+                                    "[HB shard={shard_id}] recv={received}/{total_label} \
                                      sent={sent} inflight={} results_map={}",
                                     in_flight.len(),
                                     results.len(),
