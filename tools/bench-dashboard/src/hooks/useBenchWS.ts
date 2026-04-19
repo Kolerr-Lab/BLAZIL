@@ -187,8 +187,9 @@ export function useBenchWS(wsUrl: string) {
     };
     ws.onclose = () => {
       if (!summaryReceivedRef.current) {
+        // covers "connecting" (bench not ready yet) AND "running" (bench crashed)
         setState((p) =>
-          p.status === "running" ? { ...p, status: "error" } : p
+          p.status === "completed" ? p : { ...p, status: "error" }
         );
       }
     };
