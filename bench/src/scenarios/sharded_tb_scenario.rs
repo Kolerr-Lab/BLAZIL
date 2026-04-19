@@ -143,35 +143,24 @@ pub mod inner {
             tx.send(msg).ok();
         }
 
-        // ── Shared ledger runtime ─────────────────────────────────────────────
-        // VSR is I/O-bound: 2 workers per 4 shards is sufficient.
-        // Cap raised to 16 for ≥8-shard runs (v0.3 scaling tests).
-        let rt_workers = (shard_count / 2).clamp(2, 32);
-        let ledger_rt = Arc::new(
-            tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(rt_workers)
-                .thread_name("blazil-ledger-rt")
-                .enable_all()
-                .build()
-                .expect("ledger runtime"),
-        );
-
-        // ── Connect to TigerBeetle ────────────────────────────────────────────
-        println!("[diag] connecting to TigerBeetle @ {tb_addr}...");
-        let tb_client = Arc::new(
+        // ── Shared TB client for account creation only ────────────────────────
+        // Each shard gets its own dedicated TB client + ledger runtime below.
+        // This shared client is only used to create accounts before bench start.
+        println!("[diag] connecting to TigerBeetle @ {tb_addr} (setup client)...");
+        let setup_client = Arc::new(
             TigerBeetleClient::connect(&tb_addr, 0)
                 .await
                 .expect("TigerBeetle connect"),
         );
         println!("[diag] TB connect OK");
 
-        // ── Build N shards ────────────────────────────────────────────────────
+        // ── Build N shards — each with dedicated TB client + ledger runtime ──
         let mut shard_contexts: Vec<ShardContext> = Vec::with_capacity(shard_count);
 
         for shard_id in 0..shard_count {
             // One debit + one credit account per shard to avoid cross-shard
             // TB balance contention.
-            let debit_id = tb_client
+            let debit_id = setup_client
                 .create_account(Account::new(
                     AccountId::new(),
                     LedgerId::USD,
@@ -182,7 +171,7 @@ pub mod inner {
                 .await
                 .unwrap_or_else(|e| panic!("shard {shard_id} debit account: {e}"));
 
-            let credit_id = tb_client
+            let credit_id = setup_client
                 .create_account(Account::new(
                     AccountId::new(),
                     LedgerId::USD,
@@ -194,6 +183,26 @@ pub mod inner {
                 .unwrap_or_else(|e| panic!("shard {shard_id} credit account: {e}"));
 
             println!("[diag] shard {shard_id} accounts: debit={debit_id} credit={credit_id}");
+
+            // Dedicated TB client per shard — no cross-shard VSR queue contention.
+            let tb_client = Arc::new(
+                TigerBeetleClient::connect(&tb_addr, 0)
+                    .await
+                    .unwrap_or_else(|e| panic!("shard {shard_id} TB client: {e}")),
+            );
+
+            // Dedicated ledger runtime per shard — 2 workers each.
+            // Shared runtime caused task starvation at high concurrency
+            // (4 shards × 8 concurrent batches = 32 tasks competing for
+            // shard_count/2 shared workers → deadlock at ~t=13s).
+            let ledger_rt = Arc::new(
+                tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(2)
+                    .thread_name(format!("blazil-ledger-rt-{shard_id}"))
+                    .enable_all()
+                    .build()
+                    .unwrap_or_else(|e| panic!("shard {shard_id} ledger runtime: {e}")),
+            );
 
             // Pipeline builder for this shard.
             let builder = PipelineBuilder::new()
@@ -239,14 +248,14 @@ pub mod inner {
         // 200 events/shard — warms TB's LSM/memtable so first timed second
         // doesn't pay cold-start penalty. 200 << CAPACITY_PER_SHARD=2048 so
         // the ring never fills and this loop completes without spinning.
-        println!("[diag] warmup (200 events/shard)...");
+        println!("[diag] warmup (2000 events/shard)...");
         for ctx in &shard_contexts {
-            for _ in 0..200u64 {
+            for _ in 0..2_000u64 {
                 let event = make_event(ctx.debit_id, ctx.credit_id);
                 publish_with_backpressure(&ctx.pipeline, event);
             }
         }
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        tokio::time::sleep(Duration::from_millis(2_000)).await;
         println!("[diag] warmup done — starting timed bench");
 
         // Broadcast bench_start event to dashboard.
