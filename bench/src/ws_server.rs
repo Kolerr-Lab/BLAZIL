@@ -22,6 +22,8 @@
 
 #[cfg(feature = "metrics-ws")]
 pub use inner::start;
+#[cfg(feature = "metrics-ws")]
+pub use inner::ConfigCache;
 
 #[cfg(feature = "metrics-ws")]
 mod inner {
