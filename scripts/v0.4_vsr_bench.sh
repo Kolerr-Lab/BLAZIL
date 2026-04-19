@@ -73,9 +73,12 @@ TB_ADDRESSES="127.0.0.1:${TB_PORT_0},127.0.0.1:${TB_PORT_1},127.0.0.1:${TB_PORT_
 TB_PID_0=""; TB_PID_1=""; TB_PID_2=""
 
 # Bench timeline
+# Warmup: prime TB caches, no dashboard metrics
+# Main:   single 120s bench process — dashboard sees full continuous data
+# Failover: background timer kills replica 2 at t=60s into main bench
 WARMUP_SECS=30
-STEADY_SECS=60
-# auto-failover happens at t=(WARMUP+STEADY) = 90s, lasts remaining 30s
+MAIN_SECS=120
+FAILOVER_AT_SECS=60   # seconds into the main bench run
 
 # ── Pre-flight ─────────────────────────────────────────────────────────────
 [[ $EUID -ne 0 ]] && { echo -e "${RED}[error]${NC} Must run as root (sudo $0)"; exit 1; }
@@ -83,7 +86,7 @@ STEADY_SECS=60
 NCPU="$(nproc)"
 log "Blazil v0.4 — VSR 3-Node Low-Latency Bench"
 log "vCPUs     : $NCPU"
-log "Duration  : ${DURATION}s (warmup=${WARMUP_SECS}s steady=${STEADY_SECS}s failover=30s)"
+log "Duration  : warmup=${WARMUP_SECS}s + main=${MAIN_SECS}s (failover at t=${FAILOVER_AT_SECS}s)"
 log "Window    : 1024/shard (anti-bufferbloat)"
 
 # ── CPU layout ────────────────────────────────────────────────────────────
@@ -235,41 +238,55 @@ log "Cluster ready ✓"
 # ══════════════════════════════════════════════════════════════════════════
 # PHASE 5 — Warmup (30s at low load to prime TB caches)
 # ══════════════════════════════════════════════════════════════════════════
-hdr "PHASE 5 — Warmup (${WARMUP_SECS}s)"
+hdr "PHASE 5 — Warmup (${WARMUP_SECS}s, no dashboard)"
 
-# nice -n -20: dashboard/controller at high priority to avoid scheduling delay
+# Warmup: no --metrics-port so dashboard isn't confused by a short throwaway run.
+# Purpose: prime TB page cache + VSR log pipeline before the real measurement.
 nice -n -20 \
     env BLAZIL_TB_ADDRESS="$TB_ADDRESSES" \
     "$BENCH_BIN" \
     --scenario sharded-tb \
     --shards "$SHARDS" \
     --duration "$WARMUP_SECS" \
-    --metrics-port "$METRICS_PORT" \
     2>&1 | tee -a "$LOG_FILE" || warn "Warmup non-zero exit (non-fatal)"
 
 log "Warmup done — TB page cache primed ✓"
 
 # ══════════════════════════════════════════════════════════════════════════
-# PHASE 6 — Steady State (60s, window=1024/shard, live dashboard)
+# PHASE 6 — Main Bench (${MAIN_SECS}s continuous) + Auto-Failover at t=${FAILOVER_AT_SECS}s
+#
+# Single bench process = dashboard sees ONE continuous 120s timeline.
+# A background timer fires kill -9 replica2 at t=FAILOVER_AT_SECS so the
+# failover dip is visible mid-run on the dashboard.
 # ══════════════════════════════════════════════════════════════════════════
-hdr "PHASE 6 — VSR Steady State (${STEADY_SECS}s)"
+hdr "PHASE 6+7 — Main Bench (${MAIN_SECS}s) + Auto-Failover at t=${FAILOVER_AT_SECS}s"
 
 PUBLIC_IP="$(curl -s --connect-timeout 2 http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null \
     || hostname -I | awk '{print $1}')"
 
-log "Dashboard : ws://${PUBLIC_IP}:${METRICS_PORT}/ws"
-log "Window    : WINDOW_PER_SHARD=1024 — low queue depth, flat latency"
+log "Dashboard  : ws://${PUBLIC_IP}:${METRICS_PORT}/ws"
+log "Main bench : ${MAIN_SECS}s  |  failover kill at t=${FAILOVER_AT_SECS}s"
+log "Window     : WINDOW_PER_SHARD=1024 — low queue depth, flat latency"
 log ""
 
-STEADY_START=$(date +%s%3N)   # ms
+# Schedule auto-failover: kill replica 2 in the background after FAILOVER_AT_SECS.
+( sleep "$FAILOVER_AT_SECS" \
+    && log "AUTO-FAILOVER: kill -9 replica2 (PID $TB_PID_2) at t=${FAILOVER_AT_SECS}s" \
+    && kill -9 "$TB_PID_2" 2>/dev/null \
+    && log "Replica 2 killed — VSR running on 2-of-3 quorum" \
+) &
+FAILOVER_TIMER_PID=$!
 
+FAILOVER_START_MS=$(date +%s%3N)
+
+# Run the single 120s bench process — dashboard sees full continuous data.
 if [[ "$SKIP_CPU_PIN" == "1" ]] || ! command -v taskset &>/dev/null; then
     nice -n -20 \
         env BLAZIL_TB_ADDRESS="$TB_ADDRESSES" \
         "$BENCH_BIN" \
         --scenario sharded-tb \
         --shards "$SHARDS" \
-        --duration "$STEADY_SECS" \
+        --duration "$MAIN_SECS" \
         --metrics-port "$METRICS_PORT" \
         2>&1 | tee -a "$LOG_FILE"
 else
@@ -279,43 +296,18 @@ else
         "$BENCH_BIN" \
         --scenario sharded-tb \
         --shards "$SHARDS" \
-        --duration "$STEADY_SECS" \
+        --duration "$MAIN_SECS" \
         --metrics-port "$METRICS_PORT" \
         2>&1 | tee -a "$LOG_FILE"
 fi
 
-STEADY_END=$(date +%s%3N)
-log "Steady state complete in $(( (STEADY_END - STEADY_START) / 1000 ))s"
-
-# ══════════════════════════════════════════════════════════════════════════
-# PHASE 7 — Auto-Failover (kill -9 Replica 2, measure recovery)
-# ══════════════════════════════════════════════════════════════════════════
-hdr "PHASE 7 — Auto-Failover (kill -9 replica 2)"
-
-FAILOVER_START_MS=$(date +%s%3N)
-
-log "Sending SIGKILL to replica 2 (PID $TB_PID_2)..."
-kill -9 "$TB_PID_2" 2>/dev/null || warn "Replica 2 already dead"
-TB_PID_2=""
-
-log "Running 30s under 2-of-3 quorum (VSR must survive)..."
-nice -n -20 \
-    env BLAZIL_TB_ADDRESS="$TB_ADDRESSES" \
-    "$BENCH_BIN" \
-    --scenario sharded-tb \
-    --shards "$SHARDS" \
-    --duration 30 \
-    --metrics-port "$METRICS_PORT" \
-    2>&1 | tee -a "$LOG_FILE" || warn "Failover bench non-zero exit"
-
 FAILOVER_END_MS=$(date +%s%3N)
 RECOVERY_MS=$(( FAILOVER_END_MS - FAILOVER_START_MS ))
+TB_PID_2=""
 
-# Restart replica 2
-log "Restarting replica 2..."
-TB_PID_2="$(start_replica 2 "$TB2_CORES")"
-sleep 3
-log "Replica 2 back up (PID $TB_PID_2) — VSR sync in progress"
+# Clean up timer if bench ended before failover fired.
+kill "$FAILOVER_TIMER_PID" 2>/dev/null || true
+log "Main bench complete (${MAIN_SECS}s) — failover recovery window: ${RECOVERY_MS}ms"
 
 # ══════════════════════════════════════════════════════════════════════════
 # PHASE 8 — Results
