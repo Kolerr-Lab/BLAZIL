@@ -52,11 +52,12 @@ pub mod inner {
     // ── Constants ─────────────────────────────────────────────────────────────
 
     /// Ring buffer capacity per shard (power of 2, ≥ 2 × window).
-    const CAPACITY_PER_SHARD: usize = 4_096;
+    const CAPACITY_PER_SHARD: usize = 2_048;
 
     /// Publish window per shard: max in-flight events before draining.
-    /// 2048 gives ~55K TPS/shard at p99=37ms (2048/0.037), ~220K total.
-    const WINDOW_PER_SHARD: usize = 2_048;
+    /// 1024 keeps P99 latency low while providing enough pipeline
+    /// depth for peak TPS on 4 shards against a 3-node VSR cluster.
+    const WINDOW_PER_SHARD: usize = 1_024;
 
     /// Max transfer amount (100 billion minor units).
     const MAX_AMOUNT_UNITS: u64 = 100_000_000_000;
@@ -233,6 +234,20 @@ pub mod inner {
             });
         }
         println!("[diag] {shard_count} shard pipeline(s) started");
+
+        // ── Warmup ────────────────────────────────────────────────────────────
+        // 200 events/shard — warms TB's LSM/memtable so first timed second
+        // doesn't pay cold-start penalty. 200 << CAPACITY_PER_SHARD=2048 so
+        // the ring never fills and this loop completes without spinning.
+        println!("[diag] warmup (200 events/shard)...");
+        for ctx in &shard_contexts {
+            for _ in 0..200u64 {
+                let event = make_event(ctx.debit_id, ctx.credit_id);
+                publish_with_backpressure(&ctx.pipeline, event);
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        println!("[diag] warmup done — starting timed bench");
 
         // Broadcast bench_start event to dashboard.
         if let Some(ref tx) = metrics_tx {
