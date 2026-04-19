@@ -66,12 +66,15 @@ async fn main() {
     // Start WS server if requested.
     // Returns (out_tx, cmd_rx): bench→dashboard broadcaster + dashboard→bench receiver.
     #[cfg(feature = "metrics-ws")]
-    let (metrics_tx, cmd_rx) = {
+    let (metrics_tx, cmd_rx, _config_cache) = {
         if let Some(port) = metrics_port {
-            let (tx, rx) = blazil_bench::ws_server::start(port);
-            (Some(tx), Some(rx))
+            let (tx, rx, cache) = blazil_bench::ws_server::start(port);
+            // Give the tokio task 50ms to bind the port before the scenario
+            // sends the config message (avoids race between spawn and send).
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            (Some(tx), Some(rx), Some(cache))
         } else {
-            (None, None)
+            (None, None, None)
         }
     };
     #[cfg(not(feature = "metrics-ws"))]
@@ -88,7 +91,17 @@ async fn main() {
         } else {
             println!("[sharded-tb] shards={shard_count} events={events}");
         }
-        let result = sharded_tb_scenario::run(events, shard_count, duration_secs, metrics_tx).await;
+        let result = sharded_tb_scenario::run(
+            events,
+            shard_count,
+            duration_secs,
+            metrics_tx,
+            #[cfg(feature = "metrics-ws")]
+            _config_cache,
+            #[cfg(not(feature = "metrics-ws"))]
+            None,
+        )
+        .await;
         println!(
             "      → {} TPS  (p50={} µs  p99={} µs  p99.9={} µs)",
             blazil_bench::report::fmt_commas(result.tps),

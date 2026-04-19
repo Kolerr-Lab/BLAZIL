@@ -30,6 +30,8 @@ pub mod inner {
     use std::time::{Duration, Instant};
 
     use tokio::sync::broadcast;
+    #[cfg(feature = "metrics-ws")]
+    use crate::ws_server::ConfigCache;
 
     use blazil_common::currency::parse_currency;
     use blazil_common::ids::{AccountId, LedgerId, TransactionId};
@@ -91,6 +93,10 @@ pub mod inner {
         shard_count: usize,
         duration_secs: Option<u64>,
         metrics_tx: Option<broadcast::Sender<String>>,
+        #[cfg(feature = "metrics-ws")]
+        config_cache: Option<ConfigCache>,
+        #[cfg(not(feature = "metrics-ws"))]
+        _config_cache: Option<()>,
     ) -> BenchmarkResult {
         assert!(
             shard_count.is_power_of_two() && shard_count >= 1,
@@ -130,6 +136,12 @@ pub mod inner {
 \"tb_addr\":\"{tb_addr}\",\"capacity_per_shard\":{CAPACITY_PER_SHARD},\
 \"window_per_shard\":{WINDOW_PER_SHARD}}}"
             );
+            // Store in config_cache so clients connecting after bench start
+            // still receive this message and transition to "running".
+            #[cfg(feature = "metrics-ws")]
+            if let Some(ref cache) = config_cache {
+                *cache.write().await = Some(msg.clone());
+            }
             tx.send(msg).ok();
         }
 

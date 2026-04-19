@@ -92,6 +92,9 @@ export function useBenchWS(wsUrl: string) {
 
       return {
         ...prev,
+        // Auto-transition to "running" if config was missed (connected after bench start).
+        // Safe to set even if already "running" — no-op.
+        status: prev.status === "connecting" || prev.status === "idle" ? "running" : prev.status,
         history: newHistory,
         shards: newShards,
         current_tps: aggTps,
