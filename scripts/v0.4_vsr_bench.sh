@@ -128,8 +128,10 @@ nice -n -20 \
     --shards      "$SHARDS" \
     --duration    "$DURATION" \
     --metrics-port "$METRICS_PORT" \
-    >"$BENCH_LOG" 2>&1 &
-BENCH_PID=$!
+    2>&1 | tee "$BENCH_LOG" &
+BENCH_PID=${PIPESTATUS[0]}
+# tee forks — grab the actual bench PID from the process group
+BENCH_PID=$(pgrep -n -f "blazil-bench" 2>/dev/null || echo "")
 
 # wait for :9090 — nc fast-poll 0.1s intervals, max 5s
 printf "[bench] polling :${METRICS_PORT}"
@@ -163,7 +165,7 @@ KILL_TS_FILE=$(mktemp /tmp/blazil-kill-XXXX.ms)
 FAILOVER_PID=$!
 
 # ── STEP 5: wait for bench to finish ──────────────────────────────────────
-echo "[bench] running ... (${DURATION}s + 5s pre-warmup)"
+echo "[bench] running ... (${DURATION}s) — TPS output below:"
 wait "$BENCH_PID" 2>/dev/null || true
 BENCH_PID=""
 kill "$FAILOVER_PID" 2>/dev/null || true
