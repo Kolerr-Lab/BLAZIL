@@ -35,6 +35,12 @@ Real hardware. Real replication. Real benchmarks.
 - ✅ **VSR failover tested**: replica killed at t=80s, cluster recovered in 37s
 - ✅ **Dedicated TB client per shard** — no cross-shard VSR queue contention
 - ✅ CPU: Intel Xeon Platinum 8375C @ 2.90GHz, 16 vCPU, 128 GiB RAM, 1.9TB NVMe
+- 💰 **$1.496/hr on-demand** (AWS ap-southeast-1) — 237K fault-tolerant TPS at **$0.0000063/TPS/hr**
+
+> **Cost efficiency:**  
+> TigerBeetle's own recommended benchmark hardware is `i8g.16xlarge` (64 vCPU, ~$5.29/hr) — 3.5× the cost.  
+> Blazil v0.3 achieves 237K fault-tolerant TPS on `i4i.4xlarge` at $1.50/hr on-demand, or ~$1,077/month if run 24/7.  
+> Compare to Visa's undisclosed infrastructure cost for 24K peak TPS — Blazil delivers **10× the throughput**, fault-tolerant, on a single on-demand instance.
 
 > **Full report:** [2026-04-19 sharded-tb E2E (4 shards)](docs/runs/2026-04-19_16-44-35_sharded-tb-e2e-(4-shards).md)
 
