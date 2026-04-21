@@ -11,9 +11,9 @@
 [![Rust](https://img.shields.io/badge/Rust-stable%202021-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
 [![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat-square&logo=go)](https://go.dev)
 
-![436K TPS](https://img.shields.io/badge/436K_TPS-Sharded_3×Node-brightgreen?style=flat-square)
-![237K TPS](https://img.shields.io/badge/237K_TPS-VSR_AWS_i4i-blue?style=flat-square)
-![18x Visa](https://img.shields.io/badge/18×_Visa-peak_vs_peak-red?style=flat-square)
+![237K TPS](https://img.shields.io/badge/237K_TPS-VSR_Fault--Tolerant-brightgreen?style=flat-square)
+![10x Visa](https://img.shields.io/badge/10%C3%97_Visa-fault--tolerant-red?style=flat-square)
+![Failover Tested](https://img.shields.io/badge/Failover-Tested_Live-orange?style=flat-square)
 ![0% Error](https://img.shields.io/badge/0%25_Error-All_Runs-gold?style=flat-square)
 
 </div>
