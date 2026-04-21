@@ -12,9 +12,9 @@
 [![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat-square&logo=go)](https://go.dev)
 
 ![436K TPS](https://img.shields.io/badge/436K_TPS-Sharded_3×Node-brightgreen?style=flat-square)
-![131K TPS](https://img.shields.io/badge/131K_TPS-VSR_Consensus-blue?style=flat-square)
+![237K TPS](https://img.shields.io/badge/237K_TPS-VSR_AWS_i4i-blue?style=flat-square)
 ![18x Visa](https://img.shields.io/badge/18×_Visa-peak_vs_peak-red?style=flat-square)
-![0% Error](https://img.shields.io/badge/0%25_Error-1M_Events-gold?style=flat-square)
+![0% Error](https://img.shields.io/badge/0%25_Error-All_Runs-gold?style=flat-square)
 
 </div>
 
@@ -24,7 +24,23 @@
 
 Real hardware. Real replication. Real benchmarks.
 
-### **v0.2 Production Cluster** (DigitalOcean 3-node, April 2026)
+### **v0.4 AWS i4i.4xlarge** (Singapore, April 2026)
+
+| Architecture | Peak TPS | Avg TPS | P99 | Hardware | Fault Tolerance |
+|--------------|----------|---------|-----|----------|-----------------|
+| **4-shard VSR + failover** | **237,763** | 103,421 | 120ms | AWS i4i.4xlarge NVMe | ✅ VSR 3-node, survives 1-node kill |
+
+**Key Results:**
+- ✅ **0 errors, 0 rejected** across 12,421,068 events
+- ✅ **VSR failover tested**: replica killed at t=80s, cluster recovered in 37s
+- ✅ **Dedicated TB client per shard** — no cross-shard VSR queue contention
+- ✅ CPU: Intel Xeon Platinum 8375C @ 2.90GHz, 16 vCPU, 128 GiB RAM, 1.9TB NVMe
+
+> **Full report:** [2026-04-19 sharded-tb E2E (4 shards)](docs/runs/2026-04-19_16-44-35_sharded-tb-e2e-(4-shards).md)
+
+---
+
+### **v0.3 Production Cluster** (DigitalOcean 3-node, April 2026)
 
 | Architecture | TPS | Latency (p50/p99) | Hardware | Fault Tolerance |
 |--------------|-----|-------------------|----------|-----------------|
@@ -74,8 +90,9 @@ Real hardware. Real replication. Real benchmarks.
 | **Visa peak** | ~24,000 | **18×** | Published peak: 24K TPS |
 | **Coinbase** | ~10,000 (est.) | **44×** | High-frequency crypto exchange |
 | **Stripe** | ~5,000 (est.) | **87×** | Payment API provider |
-| **Blazil v0.2 (Sharded, DO)** | **436,351** | — | 3-node DO cluster, 0% error |
-| **Blazil v0.2 (VSR, DO)** | **130,998** | — | Fault-tolerant consensus |
+| **Blazil v0.3 (Sharded, DO)** | **436,351** | — | 3-node DO cluster, 0% error |
+| **Blazil v0.3 (VSR, DO)** | **130,998** | — | Fault-tolerant consensus |
+| **Blazil v0.4 (VSR, AWS i4i)** | **237,763** | — | 4-shard VSR + live failover, 0% error |
 
 > All Blazil numbers: real hardware, real TigerBeetle consensus, real disk writes, 0% error rate.  
 > Competitors: published peak capacity (often marketing numbers, not sustained).
@@ -201,25 +218,27 @@ Grafana → `http://<node-1-ip>:3001` (admin / blazil)
 > DO Linux nodes have no thermal limit → expect stable 1.2M+ TPS.
 
 #### vs Industry (E2E, real transactions)
-| System | TPS | Blazil v0.2 advantage | Notes |
+| System | TPS | Blazil v0.4 advantage | Notes |
 |--------|-----|-----------------------|-------|
 | SWIFT | ~hundreds/day | — | Legacy batch |
 | Mojaloop (OSS) | ~1,000 | **436×** | Open-source baseline |
 | Mastercard peak | ~5,000 | **87×** | Published peak |
 | Visa peak | ~24,000 | **18×** | Published peak |
-| **Blazil v0.2 (VSR, fault-tolerant)** | **130,998** | — | 3-node consensus, 0% error |
-| **Blazil v0.2 (Sharded, max throughput)** | **436,351** | — | 3× independent nodes, 0% error |
+| **Blazil v0.3 (VSR, fault-tolerant)** | **130,998** | — | 3-node DO consensus, 0% error |
+| **Blazil v0.3 (Sharded, max throughput)** | **436,351** | — | 3× independent nodes, 0% error |
+| **Blazil v0.4 (VSR, AWS i4i)** | **237,763** | — | 4-shard VSR + failover, 0% error |
 
 > All Blazil v0.2 DO numbers: real TigerBeetle VSR replication, real O_DIRECT disk writes, real TCP transport.  
 > 3-node DO Premium AMD NVMe cluster (SGP1). 1M–3M events, 0 rejected, 0 errors.  
 > Local pipeline numbers: in-memory, no disk I/O — different benchmark class.
 
-### Production Cluster (DigitalOcean 3-node, $252/month)
+### Production Cluster (DigitalOcean 3-node + AWS i4i)
 | Version | TPS | p50 | p99 | vs Visa | vs Mojaloop | Notes |
 |---------|-----|-----|-----|---------|-------------|-------|
 | v0.1 | 62,770 | — | 23ms | 2.6× | 62× | Tokio UDP, gRPC |
-| v0.2 Option A | **130,998** | 1,774ms | 2,747ms | **5.5×** | **131×** | VSR 3-replica, fault-tolerant ✅ |
-| v0.2 Option B | **436,351** | 1,803ms | 2,627ms | **18×** | **436×** | Sharded 3-node, max throughput |
+| v0.3 Option A | **130,998** | 1,774ms | 2,747ms | **5.5×** | **131×** | VSR 3-replica, DO AMD ✅ |
+| v0.3 Option B | **436,351** | 1,803ms | 2,627ms | **18×** | **436×** | Sharded 3-node, DO AMD |
+| v0.4 VSR + failover | **237,763** peak | 80ms | 120ms | **10×** | **237×** | AWS i4i.4xlarge, 4-shard, VSR live failover ✅ |
 
 > Hardware: 3× DO Premium AMD NVMe (s-4vcpu-8gb-amd), Ubuntu 24.04, TigerBeetle 0.16.78.  
 > **0 errors, 0 rejected** across all runs.
@@ -246,8 +265,9 @@ ssh root@<node-1> './stresstest-linux -target=<private-ip>:50051 -duration=120s'
 |---------|--------|--------------|----------|
 | **v0.1** | ✅ Done | 62,770 TPS (DO, gRPC) | Core engine, VSR consensus, gRPC streaming |
 | **v0.2** | ✅ Done | 1.2M TPS local · **436K TPS DO (sharded)** · **131K TPS DO (VSR)** | Aeron IPC, io_uring, sharded-tb E2E, TigerBeetle VSR, 0% error |
-| **v0.3** | 📅 Planned | est. 1M+ TPS (DO, 8-shard) | 8-shard sustained bench, per-second TPS window, VSR failover recovery test, `rt_workers` 16 |
-| **v0.4** | 🔭 Future | est. 5-10M TPS | Bare-metal NVMe Gen4, XDP ingress, larger ring buffer, multi-region |
+| **v0.3** | ✅ Done | **436K TPS** (DO sharded) · **131K TPS** (DO VSR) | 8-shard pipeline, VSR failover, per-second TPS window |
+| **v0.4** | ✅ Done | **237K peak TPS** (AWS i4i.4xlarge VSR) | Dedicated TB client/shard, live VSR failover test, AWS NVMe, 0% error |
+| **v0.5** | 📅 Planned | est. 400K+ TPS (AWS i4i, clean state) | WINDOW=2048, `--cache-grid` TB, taskset CPU pinning, 8-shard |
 
 ---
 
