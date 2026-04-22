@@ -124,8 +124,7 @@ impl<D: Dataset + 'static> Pipeline<D> {
                     .map_err(|e| Error::internal(format!("worker panicked: {e}")))
                     .and_then(|r| r);
 
-                    let batch_id =
-                        batch_id_counter.fetch_add(1, Ordering::Relaxed) as u64;
+                    let batch_id = batch_id_counter.fetch_add(1, Ordering::Relaxed) as u64;
 
                     let batch = decode_result.map(|samples| Batch { samples, batch_id });
 
@@ -173,10 +172,7 @@ mod tests {
             })
         }
 
-        fn iter_shuffled(
-            &self,
-            _seed: u64,
-        ) -> Box<dyn Iterator<Item = Result<Sample>> + '_> {
+        fn iter_shuffled(&self, _seed: u64) -> Box<dyn Iterator<Item = Result<Sample>> + '_> {
             Box::new((0..self.size).map(|i| self.get(i)))
         }
 

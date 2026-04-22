@@ -15,7 +15,7 @@
 //!   --duration 120
 //! ```
 
-use blazil_dataloader::{datasets::ImageNetDataset, DatasetConfig, Dataset, Pipeline};
+use blazil_dataloader::{datasets::ImageNetDataset, Dataset, DatasetConfig, Pipeline};
 use clap::Parser;
 use std::{
     sync::{
@@ -199,8 +199,7 @@ async fn run_phase(
         let interval = args.report_interval;
         tokio::spawn(async move {
             let mut last_samples = 0u64;
-            let mut ticker =
-                tokio::time::interval(Duration::from_secs(interval));
+            let mut ticker = tokio::time::interval(Duration::from_secs(interval));
             ticker.tick().await; // skip first tick
             loop {
                 ticker.tick().await;
@@ -328,14 +327,8 @@ fn print_report(
     println!("  Errors           : {errors}  ({error_rate:.4}%)");
     println!("{DIVIDER}");
     println!("  Throughput");
-    println!(
-        "    Avg            : {:.0} samples/sec",
-        avg_samples_sec
-    );
-    println!(
-        "    Batches/sec    : {:.0} batches/sec",
-        avg_batches_sec
-    );
+    println!("    Avg            : {:.0} samples/sec", avg_samples_sec);
+    println!("    Batches/sec    : {:.0} batches/sec", avg_batches_sec);
     println!("{DIVIDER}");
     println!("  Batch latency (decode + queue)");
     println!("    P50            : {p50_ms:.2}ms");

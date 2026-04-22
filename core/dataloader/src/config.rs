@@ -100,9 +100,7 @@ impl DatasetConfig {
             return Err(crate::Error::config("num_workers must be > 0"));
         }
         if self.ring_capacity < self.batch_size {
-            return Err(crate::Error::config(
-                "ring_capacity must be >= batch_size",
-            ));
+            return Err(crate::Error::config("ring_capacity must be >= batch_size"));
         }
         if self.num_shards == 0 {
             return Err(crate::Error::config("num_shards must be > 0"));

@@ -12,6 +12,7 @@ blazil-common = { path = "../common" }
 
 # I/O
 tokio = { version = "1.37", features = ["full"] }
+memmap2 = "0.9"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -40,6 +41,7 @@ tracing = "0.1"
 # Linux-only: io_uring
 [target.'cfg(target_os = "linux")'.dependencies]
 tokio-uring = "0.4"
+io-uring = "0.6"
 
 [dev-dependencies]
 criterion = "0.5"

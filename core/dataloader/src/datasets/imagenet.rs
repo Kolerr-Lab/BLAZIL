@@ -169,7 +169,11 @@ impl ImageNetDataset {
 
         // Resize to INPUT_SIZE × INPUT_SIZE (standard ImageNet preprocessing).
         // image 0.25 uses Triangle (bilinear) as the quality/speed default.
-        let img = img.resize_exact(INPUT_SIZE, INPUT_SIZE, image::imageops::FilterType::Triangle);
+        let img = img.resize_exact(
+            INPUT_SIZE,
+            INPUT_SIZE,
+            image::imageops::FilterType::Triangle,
+        );
 
         // Convert to packed RGB bytes: H×W×C = 224×224×3 = 150,528 bytes.
         let data = img.into_rgb8().into_raw();
@@ -333,7 +337,10 @@ mod tests {
         let ds = ImageNetDataset::open(&root, DatasetConfig::default()).unwrap();
 
         let result = ds.get(999);
-        assert!(matches!(result.unwrap_err(), Error::IndexOutOfBounds { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            Error::IndexOutOfBounds { .. }
+        ));
     }
 
     #[test]

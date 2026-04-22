@@ -35,7 +35,6 @@ pub enum Error {
     // TODO: Re-enable when arrow is added back
     // #[error("Parquet error: {0}")]
     // Parquet(#[from] parquet::errors::ParquetError),
-
     #[error("Configuration error: {0}")]
     Config(String),
 
@@ -46,7 +45,6 @@ pub enum Error {
     // #[cfg(feature = "cuda")]
     // #[error("CUDA error: {0}")]
     // Cuda(String),
-
     #[error("Checkpoint error: {0}")]
     Checkpoint(String),
 
