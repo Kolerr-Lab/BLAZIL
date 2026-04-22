@@ -220,7 +220,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_stream_shuffled_reproducible() {
-        let config = DatasetConfig::default().with_batch_size(10).with_workers(2);
+        // Use a single worker so batches are delivered in permutation order.
+        // Multi-worker correctness (all samples received) is covered by
+        // test_stream_shuffled_all_samples_received above.
+        let config = DatasetConfig::default().with_batch_size(10).with_workers(1);
         let pipeline = Pipeline::new(FakeDataset { size: 40 }, config);
 
         async fn collect_labels(p: &Pipeline<FakeDataset>, seed: u64) -> Vec<u32> {
