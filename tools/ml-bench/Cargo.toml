@@ -1,0 +1,28 @@
+[package]
+name = "ml-bench"
+version = "0.1.0"
+edition = "2021"
+authors = ["Blazil Team <lab.kolerr@kolerr.com>"]
+license = "BSL-1.1"
+description = "Blazil Dataloader benchmark — measures dataset throughput and GPU-readiness latency"
+repository = "https://github.com/Kolerr-Lab/BLAZIL"
+
+[[bin]]
+name = "ml-bench"
+path = "src/main.rs"
+
+[dependencies]
+blazil-dataloader = { path = "../../core/dataloader" }
+
+# Async runtime
+tokio = { version = "1.37", features = ["full"] }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Error handling
+anyhow = "1.0"
+
+# Tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -9,6 +9,7 @@ members = [
     "core/aeron-sys",
     "core/dataloader",
     "bench",
+    "tools/ml-bench",
 ]
 
 [workspace.package]

@@ -33,6 +33,7 @@
 pub mod config;
 pub mod datasets;
 pub mod error;
+pub mod pipeline;
 pub mod readers;
 pub mod transform;
 
@@ -42,6 +43,7 @@ pub mod transform;
 
 pub use config::DatasetConfig;
 pub use error::{Error, Result};
+pub use pipeline::Pipeline;
 
 /// Sample represents a single training example.
 #[derive(Debug, Clone)]
