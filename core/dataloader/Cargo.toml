@@ -1,0 +1,60 @@
+[package]
+name = "blazil-dataloader"
+version = "0.1.0"
+edition = "2021"
+authors = ["Blazil Team <lab.kolerr@kolerr.com>"]
+license = "BSL-1.1"
+repository = "https://github.com/Kolerr-Lab/BLAZIL"
+
+[dependencies]
+# Blazil core
+blazil-common = { path = "../common" }
+
+# I/O
+tokio = { version = "1.37", features = ["full"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Data formats
+# TODO: Re-add arrow/parquet when upstream bug is fixed
+# arrow = { version = "50", default-features = false }
+# parquet = { version = "50", default-features = false }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+
+# Crypto/RNG
+rand = "0.8"
+rand_chacha = "0.3"
+
+# Compression
+zstd = "0.13"
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Tracing
+tracing = "0.1"
+
+# Linux-only: io_uring
+[target.'cfg(target_os = "linux")'.dependencies]
+tokio-uring = "0.4"
+
+[dev-dependencies]
+criterion = "0.5"
+tempfile = "3.10"
+proptest = "1.4"
+
+[features]
+default = []
+# cuda = ["cuda-runtime-sys"]  # TODO: Add CUDA support later
+benchmarks = []
+
+# [dependencies.cuda-runtime-sys]
+# version = "0.3"
+# optional = true
+
+[lib]
+name = "blazil_dataloader"
+path = "src/lib.rs"
