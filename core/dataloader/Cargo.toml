@@ -38,9 +38,8 @@ anyhow = "1.0"
 # Tracing
 tracing = "0.1"
 
-# Linux-only: io_uring
+# Linux-only: io_uring (raw io-uring; tokio-uring is in blazil-transport only)
 [target.'cfg(target_os = "linux")'.dependencies]
-tokio-uring = "0.4"
 io-uring = "0.6"
 
 [dev-dependencies]
