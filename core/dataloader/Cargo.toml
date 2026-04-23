@@ -22,7 +22,7 @@ serde_json = "1.0"
 # TODO: Re-add arrow/parquet when upstream bug is fixed
 # arrow = { version = "50", default-features = false }
 # parquet = { version = "50", default-features = false }
-image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+image = { version = ">=0.25.0, <=0.25.9", default-features = false, features = ["jpeg", "png"] }
 
 # Crypto/RNG
 rand = "0.8"
