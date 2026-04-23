@@ -32,7 +32,7 @@ pub struct NormalizeImageNet;
 impl Transform for NormalizeImageNet {
     fn apply(&self, mut sample: Sample) -> Result<Sample> {
         let n = sample.data.len();
-        if !n.is_multiple_of(3) {
+        if n % 3 != 0 {
             return Err(Error::InvalidFormat {
                 reason: format!("NormalizeImageNet: data length {n} is not divisible by 3"),
             });
