@@ -203,7 +203,7 @@ impl IoUringReader {
                 let msg = format!("submit_and_wait: {e}");
                 for cqe in ring.completion() {
                     let i = cqe.user_data() as usize;
-                    results[i] = Err(Error::internal(&msg));
+                    results[i] = Err(Error::internal(msg.as_str()));
                 }
                 break;
             }
