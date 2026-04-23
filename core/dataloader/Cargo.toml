@@ -5,6 +5,9 @@ edition = "2021"
 authors = ["Blazil Team <lab.kolerr@kolerr.com>"]
 license = "BSL-1.1"
 repository = "https://github.com/Kolerr-Lab/BLAZIL"
+# Must match the pinned CI toolchain. Clippy uses this to skip suggestions
+# for stdlib APIs that aren't stable yet on this version (e.g. is_multiple_of).
+rust-version = "1.85.0"
 
 [dependencies]
 # Blazil core

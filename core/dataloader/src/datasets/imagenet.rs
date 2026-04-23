@@ -19,10 +19,19 @@
 //! Class indices are assigned by **alphabetical sort** of synset folder names,
 //! producing a deterministic 0-based integer label for each class.
 
-use crate::{Dataset, DatasetConfig, Error, Result, Sample};
+use crate::{
+    readers::{FileReader, MmapReader},
+    Dataset, DatasetConfig, Error, Result, Sample,
+};
 use rand::{seq::SliceRandom, SeedableRng};
 use rand_chacha::ChaCha8Rng;
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+
+#[cfg(target_os = "linux")]
+use crate::readers::IoUringReader;
 
 /// File extensions recognised as images (case-insensitive).
 const IMAGE_EXTENSIONS: &[&str] = &["jpeg", "jpg", "png", "webp"];
@@ -35,14 +44,31 @@ const INPUT_SIZE: u32 = 224;
 /// Loads the dataset index at construction time (directory scan).
 /// Each `get()` call reads + decodes one image synchronously.
 /// Use [`crate::Pipeline`] to prefetch batches in background threads.
-#[derive(Debug)]
+///
+/// **Sharding**: when `config.shard_id` is set, the entry list is sliced
+/// so each GPU process sees a disjoint, deterministic subset.
+///
+/// **I/O backend**: uses `IoUringReader` on Linux and `MmapReader` elsewhere
+/// for raw byte reads before image decoding.
 pub struct ImageNetDataset {
     config: DatasetConfig,
-    /// Flat list of (absolute_path, class_index) pairs.
+    /// Flat list of (absolute_path, class_index) for *this shard*.
     /// Class index = alphabetical rank of synset folder name (0-based).
     entries: Vec<(PathBuf, u32)>,
-    /// Total number of distinct classes found.
+    /// Total number of distinct classes found (across all shards).
     num_classes: usize,
+    /// Low-level file reader (io_uring on Linux, mmap elsewhere).
+    reader: Arc<dyn FileReader>,
+}
+
+impl std::fmt::Debug for ImageNetDataset {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ImageNetDataset")
+            .field("num_entries", &self.entries.len())
+            .field("num_classes", &self.num_classes)
+            .field("config", &self.config)
+            .finish_non_exhaustive()
+    }
 }
 
 impl ImageNetDataset {
@@ -51,6 +77,9 @@ impl ImageNetDataset {
     /// `root` can be:
     /// - A directory that contains `train/` → loads train split.
     /// - A directory that contains synset folders directly → loads as-is.
+    ///
+    /// When `config.shard_id` is set, only the entries belonging to this shard
+    /// are retained. The full class count is still returned via `num_classes()`.
     pub fn open(root: impl AsRef<Path>, config: DatasetConfig) -> Result<Self> {
         config.validate()?;
         let root = root.as_ref();
@@ -68,9 +97,9 @@ impl ImageNetDataset {
             root.to_path_buf()
         };
 
-        let (entries, num_classes) = Self::scan_split_dir(&split_dir)?;
+        let (all_entries, num_classes) = Self::scan_split_dir(&split_dir)?;
 
-        if entries.is_empty() {
+        if all_entries.is_empty() {
             return Err(Error::InvalidFormat {
                 reason: format!(
                     "No images found under {} — expected synset subfolders with JPEG/PNG files",
@@ -79,10 +108,41 @@ impl ImageNetDataset {
             });
         }
 
+        // Shard: each GPU process keeps only its 1/N slice.
+        // Entries are already in deterministic order so a simple stride
+        // gives balanced, non-overlapping shards.
+        let entries = if let Some(shard_id) = config.shard_id {
+            let n = config.num_shards;
+            all_entries
+                .into_iter()
+                .enumerate()
+                .filter(|(i, _)| i % n == shard_id)
+                .map(|(_, e)| e)
+                .collect()
+        } else {
+            all_entries
+        };
+
+        // Select the best available file reader.
+        #[cfg(target_os = "linux")]
+        let reader: Arc<dyn FileReader> = match IoUringReader::new() {
+            Ok(r) => {
+                tracing::debug!("ImageNet: using IoUringReader");
+                Arc::new(r)
+            }
+            Err(e) => {
+                tracing::warn!("io_uring unavailable ({e}), falling back to MmapReader");
+                Arc::new(MmapReader)
+            }
+        };
+        #[cfg(not(target_os = "linux"))]
+        let reader: Arc<dyn FileReader> = Arc::new(MmapReader);
+
         tracing::info!(
             split = %split_dir.display(),
             total_samples = entries.len(),
             num_classes = num_classes,
+            shard = ?config.shard_id,
             "ImageNet dataset loaded",
         );
 
@@ -90,6 +150,7 @@ impl ImageNetDataset {
             config,
             entries,
             num_classes,
+            reader,
         })
     }
 
@@ -155,8 +216,8 @@ impl ImageNetDataset {
     fn decode_at(&self, idx: usize) -> Result<Sample> {
         let (path, label) = &self.entries[idx];
 
-        // Read raw file bytes.
-        let bytes = std::fs::read(path).map_err(|e| Error::CorruptedSample {
+        // Read raw file bytes via the injected reader (io_uring / mmap).
+        let bytes = self.reader.read(path).map_err(|e| Error::CorruptedSample {
             index: idx,
             reason: format!("read '{}' failed: {e}", path.display()),
         })?;

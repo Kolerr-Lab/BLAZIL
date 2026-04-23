@@ -16,6 +16,9 @@ members = [
 edition = "2021"
 license = "BSL-1.1"
 repository = "https://github.com/Kolerr-Lab/BLAZIL"
+# Enforces MSRV locally — cargo check/test will reject any stdlib API
+# or dependency that requires a newer compiler than this.
+rust-version = "1.85.0"
 
 [workspace.dependencies]
 tokio = { version = "1", features = ["full"] }

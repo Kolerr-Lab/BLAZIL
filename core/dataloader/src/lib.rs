@@ -43,7 +43,7 @@ pub mod transform;
 
 pub use config::DatasetConfig;
 pub use error::{Error, Result};
-pub use pipeline::Pipeline;
+pub use pipeline::{CheckpointState, Pipeline};
 pub use transform::{Transform, TransformChain};
 
 /// Sample represents a single training example.
