@@ -390,7 +390,7 @@ impl PipelineRunner {
         let affinity_shard_id = self.affinity_shard_id;
 
         std::thread::Builder::new()
-            .name(format!("blazil-shard-{}", affinity_shard_id))
+            .name(format!("blazil-shard-{affinity_shard_id}"))
             .spawn(move || {
                 // ── OS-aware thread priority & core affinity ─────────────────────
                 // macOS: promote to User-Interactive QoS → scheduler prefers
@@ -609,8 +609,7 @@ mod tests {
 
         assert!(
             matches!(result, Some(TransactionResult::Committed { .. })),
-            "expected Committed, got {:?}",
-            result
+            "expected Committed, got {result:?}"
         );
     }
 
@@ -647,8 +646,7 @@ mod tests {
 
         assert!(
             matches!(result, Some(TransactionResult::Rejected { .. })),
-            "expected Rejected, got {:?}",
-            result
+            "expected Rejected, got {result:?}"
         );
     }
 
@@ -686,8 +684,7 @@ mod tests {
 
         assert!(
             matches!(result, Some(TransactionResult::Rejected { .. })),
-            "expected Rejected, got {:?}",
-            result
+            "expected Rejected, got {result:?}"
         );
     }
 
@@ -718,8 +715,7 @@ mod tests {
         for (i, result) in results.into_iter().enumerate() {
             assert!(
                 matches!(result, Some(TransactionResult::Committed { .. })),
-                "event {i}: expected Committed, got {:?}",
-                result
+                "event {i}: expected Committed, got {result:?}"
             );
         }
     }

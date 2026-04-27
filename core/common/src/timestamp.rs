@@ -178,15 +178,14 @@ impl fmt::Display for Timestamp {
         let (year, month, day, hour, min, sec) = unix_secs_to_ymd_hms(secs);
         write!(
             f,
-            "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:09}Z",
-            year, month, day, hour, min, sec, nanos_part
+            "{year:04}-{month:02}-{day:02}T{hour:02}:{min:02}:{sec:02}.{nanos_part:09}Z"
         )
     }
 }
 
 impl fmt::Debug for Timestamp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Timestamp({})", self)
+        write!(f, "Timestamp({self})")
     }
 }
 

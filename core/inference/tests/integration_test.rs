@@ -15,14 +15,14 @@ use std::path::PathBuf;
 /// Returns the path to the downloaded `.onnx` file.
 fn download_test_model(model_name: &str, url: &str) -> PathBuf {
     let cache_dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
-    let model_path = cache_dir.join(format!("{}.onnx", model_name));
+    let model_path = cache_dir.join(format!("{model_name}.onnx"));
 
     if model_path.exists() {
         eprintln!("Using cached model: {}", model_path.display());
         return model_path;
     }
 
-    eprintln!("Downloading test model from {}", url);
+    eprintln!("Downloading test model from {url}");
     let response = ureq::get(url).call().expect("Failed to download model");
 
     let mut file = std::fs::File::create(&model_path).expect("Failed to create model file");

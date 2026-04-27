@@ -80,8 +80,7 @@ pub fn from_env() -> usize {
         .inspect(|&n| {
             assert!(
                 (1..=MAX_SHARD_COUNT).contains(&n) && n.is_power_of_two(),
-                "BLAZIL_SHARD_COUNT must be power of 2, between 1 and {}",
-                MAX_SHARD_COUNT
+                "BLAZIL_SHARD_COUNT must be power of 2, between 1 and {MAX_SHARD_COUNT}"
             );
         })
         .unwrap_or_else(default_shard_count)
@@ -255,9 +254,7 @@ impl ShardedPipeline {
     pub fn resize(&mut self, new_shard_count: usize) {
         assert!(
             (1..=MAX_SHARD_COUNT).contains(&new_shard_count) && new_shard_count.is_power_of_two(),
-            "resize: shard_count must be power of 2 in [1, {}], got {}",
-            MAX_SHARD_COUNT,
-            new_shard_count
+            "resize: shard_count must be power of 2 in [1, {MAX_SHARD_COUNT}], got {new_shard_count}"
         );
 
         let old = self.shard_count.load(AtomicOrdering::Acquire);
@@ -508,7 +505,7 @@ mod tests {
             };
 
             let shard_id = id as usize % 4;
-            println!("Event {} -> shard {}", id, shard_id);
+            println!("Event {id} -> shard {shard_id}");
 
             sharded.publish_event(event).expect("shard not full");
         }
@@ -519,7 +516,7 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_secs(2));
 
         let result_count = sharded.results().len();
-        println!("Results count: {}", result_count);
+        println!("Results count: {result_count}");
 
         // Debug: show which sequences have results
         for entry in sharded.results().iter() {

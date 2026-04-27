@@ -239,8 +239,7 @@ mod tests {
             let msg = variant.to_string();
             assert!(
                 !msg.is_empty(),
-                "BlazerError variant has empty Display: {:?}",
-                variant
+                "BlazerError variant has empty Display: {variant:?}"
             );
         }
     }
@@ -299,7 +298,7 @@ mod tests {
             BlazerError::NegativeAmount,
         ];
         for err in not_transient {
-            assert!(!err.is_transient(), "expected non-transient: {:?}", err);
+            assert!(!err.is_transient(), "expected non-transient: {err:?}");
         }
     }
 }

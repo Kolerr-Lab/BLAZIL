@@ -105,7 +105,7 @@ impl OnnxModel {
 
         if input_shape.len() != 4 {
             return Err(Error::InvalidModelFormat {
-                reason: format!("expected 4D input (NCHW), got {:?}", input_shape),
+                reason: format!("expected 4D input (NCHW), got {input_shape:?}"),
             });
         }
 
@@ -167,7 +167,7 @@ impl OnnxModel {
             let expected_len = h * w * c;
             if sample.data.len() != expected_len {
                 return Err(Error::ShapeMismatch {
-                    expected: format!("{}×{}×{} = {}", h, w, c, expected_len),
+                    expected: format!("{h}×{w}×{c} = {expected_len}"),
                     actual: sample.data.len().to_string(),
                 });
             }

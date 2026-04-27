@@ -193,7 +193,7 @@ fn parse_optimization(s: &str) -> Result<OptimizationLevel> {
         "basic" => Ok(OptimizationLevel::Basic),
         "extended" => Ok(OptimizationLevel::Extended),
         "all" => Ok(OptimizationLevel::All),
-        _ => anyhow::bail!("Invalid optimization level: {}", s),
+        _ => anyhow::bail!("Invalid optimization level: {s}"),
     }
 }
 

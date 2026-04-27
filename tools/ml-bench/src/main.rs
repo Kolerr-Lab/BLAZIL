@@ -361,7 +361,7 @@ async fn main() -> anyhow::Result<()> {
     match args.mode.as_str() {
         "dataloader" => run_dataloader_benchmark(args, metrics_tx, config_cache).await,
         "inference" => run_inference_benchmark(args, metrics_tx, config_cache).await,
-        other => anyhow::bail!("Unknown mode '{}'. Supported: dataloader, inference", other),
+        other => anyhow::bail!("Unknown mode '{other}'. Supported: dataloader, inference"),
     }
 }
 
@@ -388,7 +388,7 @@ async fn run_dataloader_benchmark(
 
     let dataset = match args.dataset.as_str() {
         "imagenet" => ImageNetDataset::open(&args.path, config.clone())?,
-        other => anyhow::bail!("Unknown dataset '{}'. Supported: imagenet", other),
+        other => anyhow::bail!("Unknown dataset '{other}'. Supported: imagenet"),
     };
 
     let num_samples = dataset.len();
@@ -398,7 +398,7 @@ async fn run_dataloader_benchmark(
     println!("  Samples      : {num_samples}");
     println!("  Classes      : {num_classes}");
     println!("  Index time   : {load_ms}ms");
-    println!("{}", DIVIDER);
+    println!("{DIVIDER}");
 
     if num_samples == 0 {
         anyhow::bail!("Dataset is empty — check path: {}", args.path);
@@ -433,7 +433,7 @@ async fn run_dataloader_benchmark(
             "  Fault mode   : {} (inject at t+{}s, duration {}s)",
             args.fault_mode, args.fault_at, args.fault_duration
         );
-        println!("{}", DIVIDER);
+        println!("{DIVIDER}");
     }
 
     // ── Warmup ───────────────────────────────
@@ -478,7 +478,7 @@ async fn run_dataloader_benchmark(
             .ok();
         }
 
-        println!("  Warmup done.\n{}", DIVIDER);
+        println!("  Warmup done.\n{DIVIDER}");
     }
 
     // ── Benchmark ────────────────────────────
@@ -614,7 +614,7 @@ async fn run_inference_benchmark(
 
     let dataset = match args.dataset.as_str() {
         "imagenet" => ImageNetDataset::open(&args.path, config.clone())?,
-        other => anyhow::bail!("Unknown dataset '{}'. Supported: imagenet", other),
+        other => anyhow::bail!("Unknown dataset '{other}'. Supported: imagenet"),
     };
 
     let num_samples = dataset.len();
@@ -639,11 +639,11 @@ async fn run_inference_benchmark(
     let model_classes = model.num_classes();
 
     println!("  Model        : {}", model_path.display());
-    println!("  Input shape  : {:?}", input_shape);
-    println!("  Model classes: {:?}", model_classes);
+    println!("  Input shape  : {input_shape:?}");
+    println!("  Model classes: {model_classes:?}");
     println!("  Model load   : {model_load_ms}ms");
     println!("  Inf workers  : {}", args.inference_workers);
-    println!("{}", DIVIDER);
+    println!("{DIVIDER}");
 
     // ── Build pipelines ───────────────────────
     let data_pipeline = Pipeline::new(dataset, config);
@@ -712,7 +712,7 @@ async fn run_inference_benchmark(
             .ok();
         }
 
-        println!("  Warmup done.\n{}", DIVIDER);
+        println!("  Warmup done.\n{DIVIDER}");
     }
 
     // ── Benchmark ────────────────────────────
@@ -1246,8 +1246,8 @@ fn print_report(
     println!("  Errors           : {errors}  ({error_rate:.4}%)");
     println!("{DIVIDER}");
     println!("  Throughput");
-    println!("    Avg            : {:.0} samples/sec", avg_samples_sec);
-    println!("    Batches/sec    : {:.0} batches/sec", avg_batches_sec);
+    println!("    Avg            : {avg_samples_sec:.0} samples/sec");
+    println!("    Batches/sec    : {avg_batches_sec:.0} batches/sec");
     println!("{DIVIDER}");
     println!("  Batch latency (decode + queue)");
     println!("    P50            : {p50_ms:.2}ms");
@@ -1323,12 +1323,9 @@ fn print_inference_report(
     println!("  Errors           : {errors}  ({error_rate:.4}%)");
     println!("{DIVIDER}");
     println!("  Throughput");
-    println!("    Samples/sec    : {:.0} samples/sec", avg_samples_sec);
-    println!(
-        "    Predictions/sec: {:.0} predictions/sec",
-        avg_predictions_sec
-    );
-    println!("    Batches/sec    : {:.0} batches/sec", avg_batches_sec);
+    println!("    Samples/sec    : {avg_samples_sec:.0} samples/sec");
+    println!("    Predictions/sec: {avg_predictions_sec:.0} predictions/sec");
+    println!("    Batches/sec    : {avg_batches_sec:.0} batches/sec");
     println!("{DIVIDER}");
     println!("  End-to-End Latency (dataloader + inference)");
     println!("    P50            : {p50_ms:.2}ms");

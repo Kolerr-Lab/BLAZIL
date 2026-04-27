@@ -397,7 +397,7 @@ pub fn save_run(result: &BenchmarkResult, tb_addr: Option<&str>) {
         .to_lowercase()
         .replace(' ', "-")
         .replace(['/', '\\', ':'], "-");
-    let filename = format!("docs/runs/{}_{}.md", ts_file, scenario_slug);
+    let filename = format!("docs/runs/{ts_file}_{scenario_slug}.md");
 
     if let Err(e) = std::fs::create_dir_all("docs/runs") {
         eprintln!("[bench] WARNING: could not create docs/runs: {e}");

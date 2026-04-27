@@ -325,8 +325,7 @@ mod tests {
         let err = Amount::new(Decimal::new(-1, 0), usd()).unwrap_err();
         assert!(
             matches!(err, BlazerError::NegativeAmount),
-            "expected NegativeAmount, got: {:?}",
-            err
+            "expected NegativeAmount, got: {err:?}"
         );
     }
 
@@ -336,8 +335,7 @@ mod tests {
         let err = Amount::new(Decimal::new(1, 9), usd()).unwrap_err();
         assert!(
             matches!(err, BlazerError::InvalidAmountScale(9)),
-            "expected InvalidAmountScale(9), got: {:?}",
-            err
+            "expected InvalidAmountScale(9), got: {err:?}"
         );
     }
 
@@ -373,8 +371,7 @@ mod tests {
         let err = a.checked_add(b).unwrap_err();
         assert!(
             matches!(err, BlazerError::CurrencyMismatch { .. }),
-            "expected CurrencyMismatch, got: {:?}",
-            err
+            "expected CurrencyMismatch, got: {err:?}"
         );
     }
 
@@ -403,8 +400,7 @@ mod tests {
         let err = a.checked_sub(b).unwrap_err();
         assert!(
             matches!(err, BlazerError::InsufficientFunds { .. }),
-            "expected InsufficientFunds, got: {:?}",
-            err
+            "expected InsufficientFunds, got: {err:?}"
         );
     }
 
@@ -415,8 +411,7 @@ mod tests {
         let err = a.checked_sub(b).unwrap_err();
         assert!(
             matches!(err, BlazerError::CurrencyMismatch { .. }),
-            "expected CurrencyMismatch, got: {:?}",
-            err
+            "expected CurrencyMismatch, got: {err:?}"
         );
     }
 

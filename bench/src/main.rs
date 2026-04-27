@@ -215,8 +215,8 @@ async fn main() {
     let event_size = std::mem::size_of::<TransactionEvent>();
     let ring_buffer_mb = (event_size * 1_000_000) / 1_024 / 1_024;
 
-    println!("TransactionEvent size: {} bytes", event_size);
-    println!("RingBuffer total: {} MB", ring_buffer_mb);
+    println!("TransactionEvent size: {event_size} bytes");
+    println!("RingBuffer total: {ring_buffer_mb} MB");
     println!();
 
     println!("Events: sharded=100K (scaling sweep 1/2/4/8 shards)");
@@ -286,7 +286,7 @@ async fn main() {
                 ar.p99_ns,
             );
         }
-        println!("Speedup (UDP/TCP):  {:.1}x", transport_speedup);
+        println!("Speedup (UDP/TCP):  {transport_speedup:.1}x");
         println!(
             "Gap closed: {:.1}% (target was 20-30x)",
             (transport_speedup / 20.0) * 100.0

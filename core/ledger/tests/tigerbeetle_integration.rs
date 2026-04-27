@@ -234,11 +234,10 @@ async fn idempotency_real() {
         BlazerError::Ledger(msg) => {
             assert!(
                 msg.contains("create_accounts failed") || msg.contains("exists"),
-                "error message should mention failure or exists, got: {}",
-                msg
+                "error message should mention failure or exists, got: {msg}"
             );
         }
-        other => panic!("expected BlazerError::Ledger, got: {:?}", other),
+        other => panic!("expected BlazerError::Ledger, got: {other:?}"),
     }
 }
 
@@ -282,11 +281,10 @@ async fn insufficient_funds_real() {
         BlazerError::Ledger(msg) => {
             assert!(
                 msg.contains("create_transfers failed") || msg.contains("exceeds_credits"),
-                "error message should mention exceeds_credits, got: {}",
-                msg
+                "error message should mention exceeds_credits, got: {msg}"
             );
         }
-        other => panic!("expected BlazerError::Ledger, got: {:?}", other),
+        other => panic!("expected BlazerError::Ledger, got: {other:?}"),
     }
 }
 

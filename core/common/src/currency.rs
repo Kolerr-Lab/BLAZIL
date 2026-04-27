@@ -78,8 +78,7 @@ mod tests {
         let err = parse_currency("INVALID").unwrap_err();
         assert!(
             matches!(err, BlazerError::InvalidCurrency(_)),
-            "expected InvalidCurrency, got: {:?}",
-            err
+            "expected InvalidCurrency, got: {err:?}"
         );
     }
 

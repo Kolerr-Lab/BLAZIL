@@ -191,10 +191,6 @@ mod tests {
                 allowed += 1;
             }
         }
-        assert!(
-            (45..=55).contains(&allowed),
-            "expected ~50, got {}",
-            allowed
-        );
+        assert!((45..=55).contains(&allowed), "expected ~50, got {allowed}");
     }
 }

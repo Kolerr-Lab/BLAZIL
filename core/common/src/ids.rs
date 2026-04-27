@@ -440,7 +440,7 @@ mod tests {
     #[test]
     fn debug_includes_type_name_and_value() {
         let id = TransactionId::from_u64(99);
-        let debug_str = format!("{:?}", id);
+        let debug_str = format!("{id:?}");
         assert!(
             debug_str.starts_with("TransactionId("),
             "Debug output missing type name: {debug_str}"

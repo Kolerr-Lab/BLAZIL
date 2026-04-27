@@ -430,10 +430,8 @@ fn tb_account_to_blazil(tb: tb::Account) -> BlazerResult<Account> {
     let id = convert::u128_to_account_id(tb.id());
     // Currency is stored using the ISO 4217 numeric code in user_data_32
     let numeric = tb.user_data_32();
-    let currency =
-        Currency::from_numeric(u16::try_from(numeric).unwrap_or(0)).ok_or_else(|| {
-            BlazerError::InvalidCurrency(format!("unknown numeric code: {}", numeric))
-        })?;
+    let currency = Currency::from_numeric(u16::try_from(numeric).unwrap_or(0))
+        .ok_or_else(|| BlazerError::InvalidCurrency(format!("unknown numeric code: {numeric}")))?;
 
     // Reconstruct LedgerId from the u32 ledger field
     let ledger_id = blazil_common::ids::LedgerId::new(tb.ledger())?;
@@ -476,10 +474,8 @@ fn tb_transfer_to_blazil(tb: tb::Transfer) -> BlazerResult<Transfer> {
     // Currency is not stored on the transfer itself in TigerBeetle.
     // We use user_data_32 to store it (same convention as on Account).
     let numeric = tb.user_data_32();
-    let currency =
-        Currency::from_numeric(u16::try_from(numeric).unwrap_or(0)).ok_or_else(|| {
-            BlazerError::InvalidCurrency(format!("unknown numeric code: {}", numeric))
-        })?;
+    let currency = Currency::from_numeric(u16::try_from(numeric).unwrap_or(0))
+        .ok_or_else(|| BlazerError::InvalidCurrency(format!("unknown numeric code: {numeric}")))?;
 
     let amount = convert::minor_units_to_amount(tb.amount(), currency)?;
 

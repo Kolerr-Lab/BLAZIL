@@ -301,7 +301,7 @@ mod tests {
         let train = root.join("train");
 
         for class in 0..num_classes {
-            let synset = format!("n{:08}", class);
+            let synset = format!("n{class:08}");
             let class_dir = train.join(&synset);
             std::fs::create_dir_all(&class_dir).unwrap();
 

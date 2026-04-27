@@ -50,15 +50,13 @@ fn scaling_sweep_blocking() {
         } else {
             let speedup = r.tps as f64 / baseline_tps;
             let eff = (speedup / *sc as f64) * 100.0;
-            format!("{:>8.1}% ", eff)
+            format!("{eff:>8.1}% ")
         };
         println!(
-            "  | {:<7} | {:>11} | {:>8} | {:>8} | {} |",
-            sc,
+            "  | {sc:<7} | {:>11} | {:>8} | {:>8} | {efficiency} |",
             fmt_commas(r.tps),
             r.p99_ns,
             r.p99_9_ns,
-            efficiency,
         );
     }
     println!("  +---------+-------------+----------+----------+------------+");
@@ -76,7 +74,7 @@ pub async fn run(events: u64, shard_count: usize) -> BenchmarkResult {
 ///
 /// Public so that Criterion bench targets can call it directly.
 pub fn run_once_blocking(events: u64, shard_count: usize) -> BenchmarkResult {
-    println!("Running with {} shards", shard_count);
+    println!("Running with {shard_count} shards");
     // Create sharded pipeline with N independent shards
     let sharded = Arc::new(
         ShardedPipeline::new(shard_count, CAPACITY_PER_SHARD, MAX_AMOUNT_UNITS)
@@ -189,10 +187,7 @@ pub fn run_once_blocking(events: u64, shard_count: usize) -> BenchmarkResult {
 
     // Use max thread duration as the effective duration (bottleneck)
     BenchmarkResult::new(
-        &format!(
-            "Sharded Pipeline ({} shards, {} producers)",
-            shard_count, num_producers
-        ),
+        &format!("Sharded Pipeline ({shard_count} shards, {num_producers} producers)"),
         total_events,
         max_duration,
         &mut all_latencies,
