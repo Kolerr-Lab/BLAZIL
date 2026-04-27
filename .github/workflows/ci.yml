@@ -120,7 +120,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             pkg-config libssl-dev \
-            clang lld
+            clang lld \
+            netcat-openbsd
 
       - name: Start TigerBeetle
         run: |
