@@ -298,7 +298,7 @@ mod tests {
 
         assert_eq!(results.len(), num);
         for res in &results {
-            assert!(res.is_ok(), "unexpected error: {:?}", res);
+            assert!(res.is_ok(), "unexpected error: {res:?}");
         }
     }
 }
