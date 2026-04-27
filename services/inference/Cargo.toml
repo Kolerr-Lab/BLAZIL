@@ -39,8 +39,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Config
 toml = "0.8"
 
-# Metrics
-prometheus = { version = "0.13", features = ["process"] }
+# Metrics — default-features disabled to avoid pulling in protobuf@2 (RUSTSEC-2024-0437).
+# TextEncoder (text/plain format) does not need the protobuf feature.
+prometheus = { version = "0.13", default-features = false, features = ["process"] }
 warp = "0.3"
 
 # CLI

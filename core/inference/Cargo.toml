@@ -3,9 +3,9 @@ name = "blazil-inference"
 version = "0.1.0"
 edition = "2021"
 authors = ["Blazil Team <lab.kolerr@kolerr.com>"]
-license = "BSL-1.1"
-repository = "https://github.com/Kolerr-Lab/BLAZIL"
-rust-version = "1.85.0"
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 # Blazil core
