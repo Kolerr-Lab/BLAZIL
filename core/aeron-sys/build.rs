@@ -96,8 +96,7 @@ fn build_aeron_static(aeron_src: &std::path::Path) {
             .expect("cmake --build failed");
         assert!(
             status.success(),
-            "Aeron cmake target `{}` build failed",
-            target
+            "Aeron cmake target `{target}` build failed"
         );
     }
 
