@@ -15,6 +15,8 @@
 //! These tests are `#[ignore]`d by default so that `cargo test --workspace`
 //! (no features, no submodule) continues to pass in CI.
 
+#![cfg(feature = "aeron")]
+
 #[cfg(feature = "aeron")]
 mod aeron_ipc_tests {
     use std::time::Duration;
