@@ -16,6 +16,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       # Zig is required by tigerbeetle-unofficial (C library built via Zig cc).
       # It must come before the Rust toolchain so cargo can find `zig` in PATH.
@@ -35,7 +37,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             pkg-config libssl-dev \
-            clang lld
+            clang lld \
+            cmake g++
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
