@@ -1,0 +1,80 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #0d1117;
+  --bg-card: #161d2b;
+  --bg-card-hover: #1c2438;
+  --border: #263350;
+  --border-bright: #374d78;
+  --accent-green: #00ffb2;
+  --accent-green-dim: #00cc8e;
+  --accent-green-glow: rgba(0, 255, 178, 0.18);
+  --accent-blue: #60a5fa;
+  --accent-amber: #fbbf24;
+  --accent-red: #f87171;
+  --accent-purple: #c084fc;
+  --text: #f8fafc;
+  --text-muted: #b0bfd4;
+  --text-dim: #7a8fa8;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: "Inter", "SF Pro Display", -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* TPS Hero number glow */
+.tps-glow {
+  text-shadow:
+    0 0 20px rgba(0, 229, 160, 0.6),
+    0 0 60px rgba(0, 229, 160, 0.3),
+    0 0 100px rgba(0, 229, 160, 0.15);
+}
+
+/* Pulse animation for running indicator */
+@keyframes pulse-ring {
+  0% { transform: scale(1); opacity: 1; }
+  70% { transform: scale(1.4); opacity: 0; }
+  100% { transform: scale(1.4); opacity: 0; }
+}
+
+.pulse-ring {
+  animation: pulse-ring 1.5s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border-bright); border-radius: 3px; }
+
+/* Card base */
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.card-glow {
+  box-shadow: 0 0 30px rgba(0, 229, 160, 0.06);
+}
+
+/* Recharts overrides */
+.recharts-cartesian-grid line {
+  stroke: var(--border) !important;
+}
+.recharts-text {
+  fill: var(--text-muted) !important;
+  font-size: 11px !important;
+}
+.recharts-tooltip-wrapper {
+  outline: none !important;
+}

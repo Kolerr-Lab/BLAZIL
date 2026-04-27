@@ -90,10 +90,11 @@ function LiveGauge({
 export function LatencyPanel({ state }: Props) {
   const { summary, current_p50_us, current_p99_us } = state;
 
-  const p50_ns = summary?.p50_ns ?? 0;
-  const p99_ns = summary?.p99_ns ?? 0;
-  const p999_ns = summary?.p999_ns ?? 0;
-  const mean_ns = summary?.mean_ns ?? 0;
+  // Type guard for fintech summary (has p50_ns) vs AI summary (has p50_us)
+  const p50_ns = (summary && 'p50_ns' in summary) ? summary.p50_ns : (summary && 'p50_us' in summary) ? summary.p50_us * 1000 : 0;
+  const p99_ns = (summary && 'p99_ns' in summary) ? summary.p99_ns : (summary && 'p99_us' in summary) ? summary.p99_us * 1000 : 0;
+  const p999_ns = (summary && 'p999_ns' in summary) ? summary.p999_ns : (summary && 'p999_us' in summary) ? summary.p999_us * 1000 : 0;
+  const mean_ns = (summary && 'mean_ns' in summary) ? summary.mean_ns : 0;
   const maxBar = p999_ns;
 
   // Per-second latency history for sparkbar chart.

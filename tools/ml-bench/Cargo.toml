@@ -11,8 +11,14 @@ repository = "https://github.com/Kolerr-Lab/BLAZIL"
 name = "ml-bench"
 path = "src/main.rs"
 
+[features]
+default = ["metrics-ws"]
+# Embed a WebSocket metrics server for live dashboard
+metrics-ws = ["axum", "tower-http", "serde", "serde_json"]
+
 [dependencies]
 blazil-dataloader = { path = "../../core/dataloader" }
+blazil-inference = { path = "../../core/inference" }
 
 # Async runtime
 tokio = { version = "1.37", features = ["full"] }
@@ -26,3 +32,9 @@ anyhow = "1.0"
 # Tracing
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# WebSocket metrics server (optional, enabled with metrics-ws feature)
+axum = { version = "0.8", features = ["ws"], optional = true }
+tower-http = { version = "0.6", features = ["cors"], optional = true }
+serde = { version = "1.0", features = ["derive"], optional = true }
+serde_json = { version = "1.0", optional = true }

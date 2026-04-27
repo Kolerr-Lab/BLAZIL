@@ -89,16 +89,18 @@ export function Header({
               color: "var(--accent-green)",
             }}
           >
-            <span>{config.shards} shards</span>
-            <span style={{ color: "var(--border-bright)" }}>·</span>
+            {'shards' in config && <span>{config.shards} shards</span>}
+            {'shards' in config && <span style={{ color: "var(--border-bright)" }}>·</span>}
             <span>
               {config.duration_secs ? `${config.duration_secs}s` : "event mode"}
             </span>
-            <span style={{ color: "var(--border-bright)" }}>·</span>
-            <span className="truncate max-w-[160px]" title={config.tb_addr}>
-              {config.tb_addr.split(",")[0]}
-              {config.tb_addr.includes(",") ? "…" : ""}
-            </span>
+            {'tb_addr' in config && <span style={{ color: "var(--border-bright)" }}>·</span>}
+            {'tb_addr' in config && (
+              <span className="truncate max-w-[160px]" title={config.tb_addr}>
+                {config.tb_addr.split(",")[0]}
+                {config.tb_addr.includes(",") ? "…" : ""}
+              </span>
+            )}
           </div>
         )}
       </div>

@@ -8,8 +8,10 @@ members = [
     "core/common",
     "core/aeron-sys",
     "core/dataloader",
+    "core/inference",
     "bench",
     "tools/ml-bench",
+    "services/inference",
 ]
 
 [workspace.package]

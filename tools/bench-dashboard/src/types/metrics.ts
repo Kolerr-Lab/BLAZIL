@@ -1,8 +1,9 @@
-// Types for all WebSocket messages broadcast by the blazil-bench binary.
+// Types for all WebSocket messages broadcast by blazil-bench and ml-bench binaries.
 
 export type BenchStatus = "idle" | "connecting" | "running" | "completed" | "error";
 
-export interface ConfigMessage {
+// Fintech benchmark config (VSR consensus)
+export interface FintechConfigMessage {
   type: "config";
   shards: number;
   duration_secs: number | null;
@@ -12,7 +13,36 @@ export interface ConfigMessage {
   window_per_shard: number;
 }
 
-export interface TickMessage {
+// AI dataloader benchmark config
+export interface DataloaderConfigMessage {
+  type: "config";
+  mode: "dataloader";
+  dataset: string;
+  batch_size: number;
+  workers: number;
+  duration_secs: number;
+  num_samples: number;
+  num_classes: number;
+}
+
+// AI inference benchmark config
+export interface InferenceConfigMessage {
+  type: "config";
+  mode: "inference";
+  dataset: string;
+  model: string;
+  batch_size: number;
+  workers: number;
+  inference_workers: number;
+  duration_secs: number;
+  num_samples: number;
+  num_classes: number;
+}
+
+export type ConfigMessage = FintechConfigMessage | DataloaderConfigMessage | InferenceConfigMessage;
+
+// Fintech tick (per-shard TPS)
+export interface FintechTickMessage {
   type: "tick";
   t: number;        // seconds since bench start
   shard_id: number;
@@ -24,6 +54,32 @@ export interface TickMessage {
   p50_us: number;   // rolling p50 in microseconds
   p99_us: number;   // rolling p99 in microseconds
 }
+
+// AI dataloader tick (samples/sec)
+export interface DataloaderTickMessage {
+  type: "tick";
+  t: number;
+  mode: "dataloader";
+  samples_per_sec: number;
+  total_samples: number;
+  total_batches: number;
+  total_errors: number;
+}
+
+// AI inference tick (RPS)
+export interface InferenceTickMessage {
+  type: "tick";
+  t: number;
+  mode: "inference";
+  rps: number;
+  samples_per_sec: number;
+  total_samples: number;
+  total_predictions: number;
+  total_batches: number;
+  total_errors: number;
+}
+
+export type TickMessage = FintechTickMessage | DataloaderTickMessage | InferenceTickMessage;
 
 export interface EventMessage {
   type: "event";
@@ -40,7 +96,8 @@ export interface EventMessage {
   message: string;
 }
 
-export interface SummaryMessage {
+// Fintech summary
+export interface FintechSummaryMessage {
   type: "summary";
   total_committed: number;
   total_rejected: number;
@@ -58,6 +115,42 @@ export interface SummaryMessage {
   wall_secs: number;
   shards: number;
 }
+
+// AI dataloader summary
+export interface DataloaderSummaryMessage {
+  type: "summary";
+  mode: "dataloader";
+  total_samples: number;
+  total_batches: number;
+  total_errors: number;
+  error_rate: number;
+  samples_per_sec: number;
+  batches_per_sec: number;
+  p50_us: number;
+  p99_us: number;
+  p999_us: number;
+  wall_secs: number;
+}
+
+// AI inference summary
+export interface InferenceSummaryMessage {
+  type: "summary";
+  mode: "inference";
+  total_samples: number;
+  total_batches: number;
+  total_predictions: number;
+  total_errors: number;
+  error_rate: number;
+  rps: number;
+  samples_per_sec: number;
+  batches_per_sec: number;
+  p50_us: number;
+  p99_us: number;
+  p999_us: number;
+  wall_secs: number;
+}
+
+export type SummaryMessage = FintechSummaryMessage | DataloaderSummaryMessage | InferenceSummaryMessage;
 
 export type BenchMessage =
   | ConfigMessage
@@ -95,16 +188,20 @@ export interface ShardState {
 export interface DashboardState {
   status: BenchStatus;
   config: ConfigMessage | null;
+  mode: "fintech" | "dataloader" | "inference";  // Detected from config
   elapsed_secs: number;
   history: SecondSnapshot[];     // per-second, up to 600 entries
-  shards: Map<number, ShardState>;
+  shards: Map<number, ShardState>;  // For fintech only
   events: EventMessage[];
   summary: SummaryMessage | null;
-  // Live aggregates across all shards for the current second.
-  current_tps: number;
-  peak_tps: number;
-  total_committed: number;
-  total_rejected: number;
+  // Current metrics (latest second)
+  current_tps: number;            // TPS for fintech, samples/sec for dataloader, RPS for inference
+  peak_tps: number;               // Peak throughput
+  total_committed: number;        // Fintech: committed txns
+  total_rejected: number;         // Fintech: rejected txns
+  total_samples: number;          // AI: total samples processed
+  total_predictions: number;      // AI inference: total predictions
+  total_errors: number;           // AI: errors
   current_p50_us: number;
   current_p99_us: number;
 }

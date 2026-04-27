@@ -10,6 +10,7 @@ import { FailoverPanel } from "@/components/FailoverPanel";
 import { ClusterInfo } from "@/components/ClusterInfo";
 import type { EventMessage } from "@/types/metrics";
 
+// Fintech bench: ws://13.229.63.205:9090/ws
 const DEFAULT_WS_URL = "ws://13.229.63.205:9090/ws";
 
 export default function DashboardPage() {
@@ -240,16 +241,48 @@ export default function DashboardPage() {
               Run Summary
             </div>
             <div className="card p-5 grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-4">
-              {[
-                { label: "Average TPS", value: state.summary.avg_tps.toLocaleString(), accent: "var(--accent-green)" },
-                { label: "Peak TPS", value: state.summary.max_tps.toLocaleString(), accent: "var(--accent-green)" },
-                { label: "Min TPS", value: state.summary.min_tps.toLocaleString(), accent: "var(--text-muted)" },
-                { label: "Consistency", value: `${state.summary.consistency.toFixed(1)}%`, accent: "var(--accent-purple)" },
-                { label: "Committed", value: state.summary.total_committed.toLocaleString(), accent: "var(--accent-green)" },
-                { label: "Rejected", value: state.summary.total_rejected.toLocaleString(), accent: state.summary.total_rejected > 0 ? "var(--accent-red)" : "var(--text-muted)" },
-                { label: "Error Rate", value: `${state.summary.error_rate.toFixed(3)}%`, accent: state.summary.error_rate > 0.01 ? "var(--accent-red)" : "var(--accent-green)" },
-                { label: "Survival Rate", value: `${state.summary.survival_rate.toFixed(2)}%`, accent: "var(--accent-green)" },
-              ].map(({ label, value, accent }) => (
+              {(() => {
+                /* Fintech mode summary */
+                if ('avg_tps' in state.summary) {
+                  const s = state.summary;
+                  return [
+                    { label: "Average TPS", value: s.avg_tps.toLocaleString(), accent: "var(--accent-green)" },
+                    { label: "Peak TPS", value: s.max_tps.toLocaleString(), accent: "var(--accent-green)" },
+                    { label: "Min TPS", value: s.min_tps.toLocaleString(), accent: "var(--text-muted)" },
+                    { label: "Consistency", value: `${s.consistency.toFixed(1)}%`, accent: "var(--accent-purple)" },
+                    { label: "Committed", value: s.total_committed.toLocaleString(), accent: "var(--accent-green)" },
+                    { label: "Rejected", value: s.total_rejected.toLocaleString(), accent: s.total_rejected > 0 ? "var(--accent-red)" : "var(--text-muted)" },
+                    { label: "Error Rate", value: `${s.error_rate.toFixed(3)}%`, accent: s.error_rate > 0.01 ? "var(--accent-red)" : "var(--accent-green)" },
+                    { label: "Survival Rate", value: `${s.survival_rate.toFixed(2)}%`, accent: "var(--accent-green)" },
+                  ];
+                }
+                /* Inference mode summary */
+                if ('rps' in state.summary) {
+                  const s = state.summary;
+                  return [
+                    { label: "RPS", value: s.rps.toLocaleString(), accent: "var(--accent-green)" },
+                    { label: "Samples/sec", value: s.samples_per_sec.toLocaleString(), accent: "var(--accent-blue)" },
+                    { label: "Total Predictions", value: s.total_predictions.toLocaleString(), accent: "var(--accent-green)" },
+                    { label: "Total Samples", value: s.total_samples.toLocaleString(), accent: "var(--text)" },
+                    { label: "Batches", value: s.total_batches.toLocaleString(), accent: "var(--text-muted)" },
+                    { label: "Errors", value: s.total_errors.toLocaleString(), accent: s.total_errors > 0 ? "var(--accent-red)" : "var(--accent-green)" },
+                    { label: "Error Rate", value: `${s.error_rate.toFixed(3)}%`, accent: s.error_rate > 0.01 ? "var(--accent-red)" : "var(--accent-green)" },
+                    { label: "P99 Latency", value: `${(s.p99_us / 1000).toFixed(2)}ms`, accent: "var(--accent-amber)" },
+                  ];
+                }
+                /* Dataloader mode summary */
+                const s = state.summary;
+                return [
+                  { label: "Samples/sec", value: s.samples_per_sec.toLocaleString(), accent: "var(--accent-green)" },
+                  { label: "Total Samples", value: s.total_samples.toLocaleString(), accent: "var(--accent-green)" },
+                  { label: "Batches/sec", value: s.batches_per_sec.toLocaleString(), accent: "var(--accent-blue)" },
+                  { label: "Total Batches", value: s.total_batches.toLocaleString(), accent: "var(--text)" },
+                  { label: "Errors", value: s.total_errors.toLocaleString(), accent: s.total_errors > 0 ? "var(--accent-red)" : "var(--accent-green)" },
+                  { label: "Error Rate", value: `${s.error_rate.toFixed(3)}%`, accent: s.error_rate > 0.01 ? "var(--accent-red)" : "var(--accent-green)" },
+                  { label: "P50 Latency", value: `${(s.p50_us / 1000).toFixed(2)}ms`, accent: "var(--accent-blue)" },
+                  { label: "P99 Latency", value: `${(s.p99_us / 1000).toFixed(2)}ms`, accent: "var(--accent-amber)" },
+                ];
+              })().map(({ label, value, accent }) => (
                 <div key={label} className="flex flex-col gap-1">
                   <div className="text-[10px] uppercase font-semibold tracking-widest" style={{ color: "var(--text-muted)" }}>
                     {label}

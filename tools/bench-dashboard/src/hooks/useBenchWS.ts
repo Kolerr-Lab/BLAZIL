@@ -13,6 +13,7 @@ const SPARKLINE_LEN = 30;
 
 function initialState(): DashboardState {
   return {
+    mode: "fintech",
     status: "idle",
     config: null,
     elapsed_secs: 0,
@@ -24,6 +25,9 @@ function initialState(): DashboardState {
     peak_tps: 0,
     total_committed: 0,
     total_rejected: 0,
+    total_samples: 0,
+    total_predictions: 0,
+    total_errors: 0,
     current_p50_us: 0,
     current_p99_us: 0,
   };
@@ -118,11 +122,10 @@ export function useBenchWS(wsUrl: string) {
       }
 
       if (msg.type === "config") {
-        setState(() => ({
-          ...initialState(),
-          status: "running",
-          config: msg as typeof msg & { type: "config" },
-        }));
+        summaryReceivedRef.current = false;
+        const mode: DashboardState["mode"] =
+          "mode" in msg ? (msg.mode as "dataloader" | "inference") : "fintech";
+        setState({ ...initialState(), status: "connecting", config: msg, mode });
         return;
       }
 
@@ -147,27 +150,84 @@ export function useBenchWS(wsUrl: string) {
       if (msg.type === "tick") {
         const tick = msg as typeof msg & { type: "tick" };
         const t = tick.t;
-        if (!pendingTicksRef.current.has(t)) {
-          pendingTicksRef.current.set(t, new Map());
-        }
-        pendingTicksRef.current.get(t)!.set(tick.shard_id, {
-          tps: tick.tps,
-          committed: tick.committed_total,
-          rejected: tick.rejected_total,
-          p50_us: tick.p50_us,
-          p99_us: tick.p99_us,
-          inflight: tick.inflight,
-          sent: tick.sent_total,
-        });
+        
+        // Handle fintech tick messages (with shard_id)
+        if ('shard_id' in tick) {
+          if (!pendingTicksRef.current.has(t)) {
+            pendingTicksRef.current.set(t, new Map());
+          }
+          pendingTicksRef.current.get(t)!.set(tick.shard_id, {
+            tps: tick.tps,
+            committed: tick.committed_total,
+            rejected: tick.rejected_total,
+            p50_us: tick.p50_us,
+            p99_us: tick.p99_us,
+            inflight: tick.inflight,
+            sent: tick.sent_total,
+          });
 
-        // Flush previous second immediately when a new second arrives.
-        if (t > 0 && pendingTicksRef.current.has(t - 1)) {
-          flushSecond(t - 1);
-        }
+          // Flush previous second immediately when a new second arrives.
+          if (t > 0 && pendingTicksRef.current.has(t - 1)) {
+            flushSecond(t - 1);
+          }
 
-        // Safety flush: emit current second after 1.2s to handle straggling shards.
-        if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
-        flushTimerRef.current = setTimeout(() => flushSecond(t), 1200);
+          // Safety flush: emit current second after 1.2s to handle straggling shards.
+          if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
+          flushTimerRef.current = setTimeout(() => flushSecond(t), 1200);
+        } else {
+          // Handle AI tick messages (dataloader or inference) - no p50/p99 in tick messages
+          // Use type narrowing with mode field
+          if ('mode' in tick && tick.mode === 'dataloader') {
+            setState((prev) => {
+              const tps = tick.samples_per_sec;
+              const snapshot: SecondSnapshot = {
+                t,
+                tps,
+                per_shard: [],
+                error_rate: tick.total_errors / Math.max(tick.total_samples, 1) * 100,
+                p50_us: 0,
+                p99_us: 0,
+                total_committed: tick.total_samples,
+                total_rejected: tick.total_errors,
+              };
+              return {
+                ...prev,
+                elapsed_secs: t,
+                status: "running",
+                current_tps: tps,
+                peak_tps: Math.max(prev.peak_tps, tps),
+                total_samples: tick.total_samples,
+                total_errors: tick.total_errors,
+                history: [...prev.history, snapshot].slice(-MAX_HISTORY),
+              };
+            });
+          } else if ('mode' in tick && tick.mode === 'inference') {
+            setState((prev) => {
+              const tps = tick.rps;
+              const snapshot: SecondSnapshot = {
+                t,
+                tps,
+                per_shard: [],
+                error_rate: tick.total_errors / Math.max(tick.total_samples, 1) * 100,
+                p50_us: 0,
+                p99_us: 0,
+                total_committed: tick.total_samples,
+                total_rejected: tick.total_errors,
+              };
+              return {
+                ...prev,
+                elapsed_secs: t,
+                status: "running",
+                current_tps: tps,
+                peak_tps: Math.max(prev.peak_tps, tps),
+                total_samples: tick.total_samples,
+                total_predictions: tick.total_predictions,
+                total_errors: tick.total_errors,
+                history: [...prev.history, snapshot].slice(-MAX_HISTORY),
+              };
+            });
+          }
+        }
       }
     },
     [flushSecond]

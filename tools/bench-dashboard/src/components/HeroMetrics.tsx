@@ -145,7 +145,7 @@ export function HeroMetrics({ state }: Props) {
         />
         <StatCard
           label="Consistency"
-          value={summary ? `${summary.consistency.toFixed(1)}%` : state.history.length > 10 ? (() => {
+          value={(summary && 'consistency' in summary) ? `${summary.consistency.toFixed(1)}%` : state.history.length > 10 ? (() => {
             const tps = state.history.map(h => h.tps).filter(v => v > 0);
             const min = Math.min(...tps);
             const max = Math.max(...tps);

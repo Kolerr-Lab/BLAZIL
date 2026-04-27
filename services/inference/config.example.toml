@@ -1,0 +1,30 @@
+# Blazil Inference Server Configuration
+
+# Aeron IPC channel URI
+# Default: "aeron:ipc?term-length=67108864" (64 MB log buffer)
+channel = "aeron:ipc?term-length=67108864"
+
+# Aeron IPC directory (shared memory)
+# Linux: /dev/shm (tmpfs, zero page-fault latency)
+# macOS: /tmp
+aeron_dir = "/dev/shm/aeron-inference"
+
+# Path to ONNX model file
+model_path = "/path/to/model.onnx"
+
+# Number of inference worker threads
+# 0 = auto (num_cpus)
+inference_workers = 8
+
+# Device: "cpu", "cuda", "tensorrt"
+device = "cpu"
+
+# Optimization level: "disable", "basic", "extended", "all"
+optimization_level = "basic"
+
+# Enable Prometheus metrics HTTP server
+enable_metrics = true
+
+# Metrics HTTP server port
+# Endpoints: /metrics (Prometheus), /health (health check)
+metrics_port = 9091

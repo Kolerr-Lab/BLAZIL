@@ -65,7 +65,7 @@ export function FailoverPanel({ state, sendCommand }: Props) {
 
   // ── Derive live cluster nodes from WS events + shard TPS ─────────────────
   const nodes = useMemo<ClusterNode[]>(() => {
-    const totalShards = state.config?.shards ?? 0;
+    const totalShards = (state.config && 'shards' in state.config) ? state.config.shards : 0;
     const nodeCount = 3;
 
     // Authoritative node status from WS events
