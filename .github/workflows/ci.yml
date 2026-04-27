@@ -27,7 +27,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.85.0
+          toolchain: 1.88.0
           components: clippy, rustfmt
 
       - name: Install system dependencies
@@ -107,7 +107,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.85.0
+          toolchain: 1.88.0
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -215,7 +215,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.85.0
+          toolchain: 1.88.0
           components: clippy
 
       - name: Cache cargo
