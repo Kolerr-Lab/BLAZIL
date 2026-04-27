@@ -33,6 +33,7 @@ fn download_test_model(model_name: &str, url: &str) -> PathBuf {
 }
 
 #[test]
+#[ignore = "downloads ~5 MB ONNX model from github.com — run with --ignored on a machine with internet access"]
 fn test_load_onnx_model_cpu() {
     // SqueezeNet 1.1 — small (5 MB), fast, 1000-class ImageNet classifier.
     let model_path = download_test_model(
@@ -51,6 +52,7 @@ fn test_load_onnx_model_cpu() {
 }
 
 #[test]
+#[ignore = "downloads ~5 MB ONNX model from github.com — run with --ignored on a machine with internet access"]
 fn test_run_inference_squeezenet() {
     let model_path = download_test_model(
         "squeezenet1.1",

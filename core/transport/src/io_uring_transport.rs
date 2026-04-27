@@ -442,7 +442,7 @@ fn build_response(request_id: &str, result: TransactionResult) -> TransactionRes
 fn uring_error_response(request_id: &str, err: &BlazerError) -> TransactionResponse {
     let msg = match err {
         BlazerError::RingBufferFull { retry_after_ms } => {
-            format!("server busy, retry after {}ms", retry_after_ms)
+            format!("server busy, retry after {retry_after_ms}ms")
         }
         _ => err.to_string(),
     };

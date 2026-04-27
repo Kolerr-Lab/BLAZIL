@@ -142,21 +142,21 @@ impl UdpTransportServer {
     pub async fn serve(&self) -> BlazerResult<()> {
         // Bind once as a std socket so we can try_clone for the send half.
         let std_listener = std::net::UdpSocket::bind(&self.addr)
-            .map_err(|e| BlazerError::Internal(format!("Failed to bind UDP socket: {}", e)))?;
+            .map_err(|e| BlazerError::Internal(format!("Failed to bind UDP socket: {e}")))?;
         std_listener
             .set_nonblocking(true)
-            .map_err(|e| BlazerError::Internal(format!("set_nonblocking failed: {}", e)))?;
+            .map_err(|e| BlazerError::Internal(format!("set_nonblocking failed: {e}")))?;
 
         let std_sender = std_listener
             .try_clone()
-            .map_err(|e| BlazerError::Internal(format!("Failed to clone UDP socket: {}", e)))?;
-        std_sender.set_nonblocking(true).map_err(|e| {
-            BlazerError::Internal(format!("set_nonblocking (sender) failed: {}", e))
-        })?;
+            .map_err(|e| BlazerError::Internal(format!("Failed to clone UDP socket: {e}")))?;
+        std_sender
+            .set_nonblocking(true)
+            .map_err(|e| BlazerError::Internal(format!("set_nonblocking (sender) failed: {e}")))?;
 
         let local_addr = std_listener
             .local_addr()
-            .map_err(|e| BlazerError::Internal(format!("Failed to get local address: {}", e)))?;
+            .map_err(|e| BlazerError::Internal(format!("Failed to get local address: {e}")))?;
 
         {
             let mut addr = self.bound_addr.lock().unwrap();
@@ -170,9 +170,9 @@ impl UdpTransportServer {
 
         // Wrap into tokio sockets (each half has exclusive OS-fd ownership).
         let recv_sock = UdpSocket::from_std(std_listener)
-            .map_err(|e| BlazerError::Internal(format!("from_std (recv) failed: {}", e)))?;
+            .map_err(|e| BlazerError::Internal(format!("from_std (recv) failed: {e}")))?;
         let send_sock = UdpSocket::from_std(std_sender)
-            .map_err(|e| BlazerError::Internal(format!("from_std (send) failed: {}", e)))?;
+            .map_err(|e| BlazerError::Internal(format!("from_std (send) failed: {e}")))?;
 
         // Channel that collects completed responses from concurrent tasks.
         // Bounded to 64K to apply light back-pressure; tasks yield if full.

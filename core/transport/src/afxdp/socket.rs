@@ -97,7 +97,7 @@ impl XSocket {
     /// `Arc<OwnedUmem>` ownership pattern in `AfXdpTransportServer`).
     pub fn new(cfg: &XSocketConfig, umem: &OwnedUmem) -> BlazerResult<Self> {
         let if_name = InterfaceName::try_from(cfg.if_name.as_str())
-            .map_err(|e| BlazerError::Transport(format!("invalid if_name '{}': {e}", cfg.if_name)))?;
+            .map_err(|e| BlazerError::Transport(format!("invalid if_name '{cfg.if_name}': {e}")))?;
 
         let rx_size = NonZeroU32::new(RX_RING_SIZE).unwrap();
         let tx_size = NonZeroU32::new(TX_RING_SIZE).unwrap();
