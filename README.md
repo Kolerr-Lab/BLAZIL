@@ -38,7 +38,7 @@ Real hardware. Real replication. Real benchmarks.
 - 💰 **$1.496/hr on-demand** (AWS ap-southeast-1) — 237K fault-tolerant TPS at **$0.0000063/TPS/hr**
 
 > **Cost efficiency vs TigerBeetle's own benchmark hardware:**  
-> TigerBeetle's published benchmarks run on `i8g.16xlarge` (64 vCPU, ~$5.29/hr) — 3.5× the cost of Blazil's bench hardware.  
+> TigerBeetle's published benchmarks run on `i8g.16xlarge` (256 vCPU, ~$5.29/hr) — 3.5× the cost of Blazil's bench hardware.  
 > Blazil v0.3 achieves 237K fault-tolerant TPS on `i4i.4xlarge` at **$1.496/hr** on-demand (~$1,077/month 24/7).  
 >  
 > **Benchmark conditions comparison:**  
@@ -48,7 +48,7 @@ Real hardware. Real replication. Real benchmarks.
 > | VSR quorum | ✅ | ✅ |  
 > | Live failover test | ❌ | ✅ kill -9 replica at t=80s |  
 > | Recovery during bench | ❌ | ✅ 37s recovery, 0 errors |  
-> | Hardware | i8g.16xlarge (64 vCPU, $5.29/hr) | i4i.4xlarge (16 vCPU, $1.50/hr) |  
+> | Hardware | i8g.16xlarge (256 vCPU, $5.29/hr) | i4i.4xlarge (16 vCPU, $1.50/hr) |  
 >  
 > Blazil delivers production-grade fault tolerance — including live node kill and recovery — on hardware that costs **3.5× less**, running **3× longer**.  
 > On equivalent `i8g.16xlarge` hardware, Blazil's throughput would scale proportionally with vCPU count.
