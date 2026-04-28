@@ -122,7 +122,9 @@ impl AeronPublication {
 
             match pos {
                 p if p >= 0 => return Ok(p),
-                sys::AERON_PUBLICATION_BACK_PRESSURED | sys::AERON_PUBLICATION_ADMIN_ACTION => {
+                p if p == sys::AERON_PUBLICATION_BACK_PRESSURED as i64
+                    || p == sys::AERON_PUBLICATION_ADMIN_ACTION as i64 =>
+                {
                     // Transient — spin and retry.
                     std::hint::spin_loop();
                     if Instant::now() >= deadline {
@@ -131,12 +133,12 @@ impl AeronPublication {
                         ));
                     }
                 }
-                sys::AERON_PUBLICATION_NOT_CONNECTED => {
+                p if p == sys::AERON_PUBLICATION_NOT_CONNECTED as i64 => {
                     return Err(BlazerError::Transport(
                         "Aeron publication: no subscriber connected".to_owned(),
                     ));
                 }
-                sys::AERON_PUBLICATION_CLOSED => {
+                p if p == sys::AERON_PUBLICATION_CLOSED as i64 => {
                     return Err(BlazerError::Transport(
                         "Aeron publication: publication closed".to_owned(),
                     ));

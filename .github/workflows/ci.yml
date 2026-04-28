@@ -47,7 +47,7 @@ jobs:
         run: cargo check --workspace --features blazil-transport/aeron,blazil-transport/io-uring
 
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --workspace --features blazil-transport/aeron,blazil-transport/io-uring
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets --features blazil-transport/aeron,blazil-transport/io-uring -- -D warnings
