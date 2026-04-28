@@ -69,27 +69,18 @@ pub mod inner {
     // At observed p50=244ms: 32_768 / 0.244 ≈ 134K/shard × 8 = 1.07M TPS theory.
     // Must be ≤ CAPACITY_PER_SHARD.
     const WINDOW_PER_SHARD: usize = 32_768;
-    const MAX_AMOUNT_UNITS: u64 = 100_000_000_000;
     const WARMUP_PER_SHARD: u64 = 2_000;
 
     // ── Kill configuration per node (1-indexed, matching dashboard) ───────────
 
     /// Shell commands for killing and restarting each TigerBeetle node.
     /// Index 0 = node 1, index 1 = node 2, index 2 = node 3.
+    #[derive(Default)]
     pub struct NodeCommands {
         /// Shell command to kill TB node N (run via `sh -c "cmd"`).
         pub kill: [Option<String>; 3],
         /// Shell command to restart TB node N (run via `sh -c "cmd"`).
         pub restart: [Option<String>; 3],
-    }
-
-    impl Default for NodeCommands {
-        fn default() -> Self {
-            Self {
-                kill: [None, None, None],
-                restart: [None, None, None],
-            }
-        }
     }
 
     /// Configuration for the VSR failover benchmark.
@@ -124,7 +115,7 @@ pub mod inner {
     // ── Public entry point ────────────────────────────────────────────────────
 
     /// Run the VSR failover benchmark.
-    pub async fn run(mut cfg: FailoverConfig) -> BenchmarkResult {
+    pub async fn run(cfg: FailoverConfig) -> BenchmarkResult {
         assert!(
             cfg.shard_count.is_power_of_two() && cfg.shard_count >= 1,
             "shard_count must be a power of 2"

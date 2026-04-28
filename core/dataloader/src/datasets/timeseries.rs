@@ -311,7 +311,7 @@ mod tests {
 
         let sample = dataset.get(0)?;
         // 5 timesteps × 1 feature × 4 bytes = 20 bytes
-        assert_eq!(sample.data.len(), 5 * 1 * 4);
+        assert_eq!(sample.data.len(), 5 * 4);
 
         Ok(())
     }

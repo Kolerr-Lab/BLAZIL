@@ -6,6 +6,18 @@ pub const AERON_PUBLICATION_ADMIN_ACTION: i32 = -3;
 pub const AERON_PUBLICATION_CLOSED: i32 = -4;
 pub const AERON_PUBLICATION_MAX_POSITION_EXCEEDED: i32 = -5;
 pub const AERON_PUBLICATION_ERROR: i32 = -6;
+pub const AERON_PUBLICATION_TERM_WINDOW_LENGTH_ENV_VAR: &[u8; 37] =
+    b"AERON_PUBLICATION_TERM_WINDOW_LENGTH\0";
+pub const AERON_PUBLICATION_LINGER_TIMEOUT_ENV_VAR: &[u8; 33] =
+    b"AERON_PUBLICATION_LINGER_TIMEOUT\0";
+pub const AERON_PUBLICATION_UNBLOCK_TIMEOUT_ENV_VAR: &[u8; 34] =
+    b"AERON_PUBLICATION_UNBLOCK_TIMEOUT\0";
+pub const AERON_PUBLICATION_CONNECTION_TIMEOUT_ENV_VAR: &[u8; 37] =
+    b"AERON_PUBLICATION_CONNECTION_TIMEOUT\0";
+pub const AERON_PUBLICATION_RESERVED_SESSION_ID_LOW_ENV_VAR: &[u8; 42] =
+    b"AERON_PUBLICATION_RESERVED_SESSION_ID_LOW\0";
+pub const AERON_PUBLICATION_RESERVED_SESSION_ID_HIGH_ENV_VAR: &[u8; 43] =
+    b"AERON_PUBLICATION_RESERVED_SESSION_ID_HIGH\0";
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct aeron_context_stct {
@@ -122,6 +134,13 @@ extern "C" {
     ) -> ::std::os::raw::c_int;
 }
 extern "C" {
+    #[doc = " Poll the completion of the aeron_async_add_publication call.\n\n @param publication to set if completed successfully.\n @param async to check for completion.\n @return 0 for not complete (try again), 1 for completed successfully, or -1 for an error."]
+    pub fn aeron_async_add_publication_poll(
+        publication: *mut *mut aeron_publication_t,
+        async_: *mut aeron_async_add_publication_t,
+    ) -> ::std::os::raw::c_int;
+}
+extern "C" {
     #[doc = " Asynchronously add a subscription using the given client and return an object to use to determine when the\n subscription is available.\n\n @param async object to use for polling completion.\n @param client to add the subscription to.\n @param uri for the channel of the subscription.\n @param stream_id for the subscription.\n @param on_available_image_handler to be called when images become available on the subscription.\n @param on_available_image_clientd to be passed when images become available on the subscription.\n @param on_unavailable_image_handler to be called when images go unavailable on the subscription.\n @param on_unavailable_image_clientd to be passed when images go unavailable on the subscription.\n @return 0 for success or -1 for an error."]
     pub fn aeron_async_add_subscription(
         async_: *mut *mut aeron_async_add_subscription_t,
@@ -132,6 +151,13 @@ extern "C" {
         on_available_image_clientd: *mut ::std::os::raw::c_void,
         on_unavailable_image_handler: aeron_on_unavailable_image_t,
         on_unavailable_image_clientd: *mut ::std::os::raw::c_void,
+    ) -> ::std::os::raw::c_int;
+}
+extern "C" {
+    #[doc = " Poll the completion of the aeron_async_add_subscription call.\n\n @param subscription to set if completed successfully.\n @param async to check for completion.\n @return 0 for not complete (try again), 1 for completed successfully, or -1 for an error."]
+    pub fn aeron_async_add_subscription_poll(
+        subscription: *mut *mut aeron_subscription_t,
+        async_: *mut aeron_async_add_subscription_t,
     ) -> ::std::os::raw::c_int;
 }
 #[doc = " Function called when filling in the reserved value field of a message.\n\n @param clientd passed to the offer function.\n @param buffer of the entire frame, including Aeron data header.\n @param frame_length of the entire frame."]
@@ -202,22 +228,6 @@ extern "C" {
     #[doc = " Return the current aeron error message for calling thread.\n\n @return aeron error message for calling thread."]
     pub fn aeron_errmsg() -> *const ::std::os::raw::c_char;
 }
-// ── Async polling functions ──────────────────────────────────────────────────
-extern "C" {
-    #[doc = " Poll for completion of async publication creation.\n\n @param publication pointer to write the publication into if complete.\n @param async handle returned from aeron_async_add_publication.\n @return 0 if not complete, 1 if complete, or -1 on error."]
-    pub fn aeron_async_add_publication_poll(
-        publication: *mut *mut aeron_publication_t,
-        async_: *mut aeron_async_add_publication_t,
-    ) -> ::std::os::raw::c_int;
-}
-extern "C" {
-    #[doc = " Poll for completion of async subscription creation.\n\n @param subscription pointer to write the subscription into if complete.\n @param async handle returned from aeron_async_add_subscription.\n @return 0 if not complete, 1 if complete, or -1 on error."]
-    pub fn aeron_async_add_subscription_poll(
-        subscription: *mut *mut aeron_subscription_t,
-        async_: *mut aeron_async_add_subscription_t,
-    ) -> ::std::os::raw::c_int;
-}
-// ── Embedded driver API ──────────────────────────────────────────────────────
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct aeron_driver_context_stct {
@@ -231,85 +241,79 @@ pub struct aeron_driver_stct {
 }
 pub type aeron_driver_t = aeron_driver_stct;
 extern "C" {
-    #[doc = " Create and initialize a driver context.\n\n @param context pointer to driver context.\n @return 0 for success and -1 for error."]
-    pub fn aeron_driver_context_init(
-        context: *mut *mut aeron_driver_context_t,
-    ) -> ::std::os::raw::c_int;
-}
-extern "C" {
-    #[doc = " Close and delete driver context.\n\n @param context to close and delete.\n @return 0 for success and -1 for error."]
-    pub fn aeron_driver_context_close(
-        context: *mut aeron_driver_context_t,
-    ) -> ::std::os::raw::c_int;
-}
-extern "C" {
-    #[doc = " Set the directory to use for the driver.\n\n @param context driver context.\n @param value directory path.\n @return 0 for success and -1 for error."]
     pub fn aeron_driver_context_set_dir(
         context: *mut aeron_driver_context_t,
         value: *const ::std::os::raw::c_char,
     ) -> ::std::os::raw::c_int;
 }
 extern "C" {
-    #[doc = " Set whether the directory should be deleted on driver start.\n\n @param context driver context.\n @param value true to delete on start, false otherwise.\n @return 0 for success and -1 for error."]
     pub fn aeron_driver_context_set_dir_delete_on_start(
         context: *mut aeron_driver_context_t,
         value: bool,
     ) -> ::std::os::raw::c_int;
 }
 extern "C" {
-    #[doc = " Set the term buffer length.\n\n @param context driver context.\n @param value term buffer length.\n @return 0 for success and -1 for error."]
     pub fn aeron_driver_context_set_term_buffer_length(
         context: *mut aeron_driver_context_t,
         value: usize,
     ) -> ::std::os::raw::c_int;
 }
 extern "C" {
-    #[doc = " Set the IPC term buffer length.\n\n @param context driver context.\n @param value IPC term buffer length.\n @return 0 for success and -1 for error."]
     pub fn aeron_driver_context_set_ipc_term_buffer_length(
         context: *mut aeron_driver_context_t,
         value: usize,
     ) -> ::std::os::raw::c_int;
 }
 extern "C" {
-    #[doc = " Set the SO_SNDBUF size for sockets.\n\n @param context driver context.\n @param value SO_SNDBUF size.\n @return 0 for success and -1 for error."]
-    pub fn aeron_driver_context_set_socket_so_sndbuf(
-        context: *mut aeron_driver_context_t,
-        value: usize,
-    ) -> ::std::os::raw::c_int;
-}
-extern "C" {
-    #[doc = " Set the SO_RCVBUF size for sockets.\n\n @param context driver context.\n @param value SO_RCVBUF size.\n @return 0 for success and -1 for error."]
     pub fn aeron_driver_context_set_socket_so_rcvbuf(
         context: *mut aeron_driver_context_t,
         value: usize,
     ) -> ::std::os::raw::c_int;
 }
 extern "C" {
-    #[doc = " Create and initialize a driver.\n\n @param driver pointer to driver.\n @param context driver context to use.\n @return 0 for success and -1 for error."]
+    pub fn aeron_driver_context_set_socket_so_sndbuf(
+        context: *mut aeron_driver_context_t,
+        value: usize,
+    ) -> ::std::os::raw::c_int;
+}
+extern "C" {
+    #[doc = " Create a aeron_driver_context_t struct and initialize with default values.\n\n @param context to create and initialize\n @return 0 for success and -1 for error."]
+    pub fn aeron_driver_context_init(
+        context: *mut *mut aeron_driver_context_t,
+    ) -> ::std::os::raw::c_int;
+}
+extern "C" {
+    #[doc = " Close and delete aeron_driver_context_t struct.\n\n @param context to close and delete\n @return 0 for success and -1 for error."]
+    pub fn aeron_driver_context_close(
+        context: *mut aeron_driver_context_t,
+    ) -> ::std::os::raw::c_int;
+}
+extern "C" {
+    #[doc = " Create a aeron_driver_t struct and initialize from the aeron_driver_context_t struct.\n\n The given aeron_driver_context_t struct will be used exclusively by the driver. Do not reuse between drivers.\n\n @param driver  to create and initialize.\n @param context to use for initialization.\n @return 0 for success and -1 for error."]
     pub fn aeron_driver_init(
         driver: *mut *mut aeron_driver_t,
         context: *mut aeron_driver_context_t,
     ) -> ::std::os::raw::c_int;
 }
 extern "C" {
-    #[doc = " Start the driver.\n\n @param driver to start.\n @param manual_main_loop true if using manual do_work loop, false for internal thread.\n @return 0 for success and -1 for error."]
+    #[doc = " Start an aeron_driver_t given the threading mode. This may spawn threads for the Sender, Receiver, and Conductor\n depending on threading mode used.\n\n @param driver to start.\n @param manual_main_loop to be called by the caller for the Conductor do_work cycle.\n @return 0 for success and -1 for error."]
     pub fn aeron_driver_start(
         driver: *mut aeron_driver_t,
         manual_main_loop: bool,
     ) -> ::std::os::raw::c_int;
 }
 extern "C" {
-    #[doc = " Close and delete driver.\n\n @param driver to close.\n @return 0 for success and -1 for error."]
-    pub fn aeron_driver_close(driver: *mut aeron_driver_t) -> ::std::os::raw::c_int;
-}
-extern "C" {
-    #[doc = " Do a single unit of work for the driver.\n\n @param driver to do work for.\n @return amount of work done (0 means idle)."]
+    #[doc = " Call the Conductor (or Shared) main do_work duty cycle once.\n\n Driver must have been created with manual_main_loop set to true.\n\n @param driver to call do_work duty cycle on.\n @return 0 for success and -1 for error."]
     pub fn aeron_driver_main_do_work(driver: *mut aeron_driver_t) -> ::std::os::raw::c_int;
 }
 extern "C" {
-    #[doc = " Apply idle strategy based on work count.\n\n @param driver to apply strategy for.\n @param work_count from previous do_work call."]
+    #[doc = " Call the Conductor (or Shared) Idle Strategy.\n\n @param driver to idle.\n @param work_count to pass to idle strategy."]
     pub fn aeron_driver_main_idle_strategy(
         driver: *mut aeron_driver_t,
         work_count: ::std::os::raw::c_int,
     );
+}
+extern "C" {
+    #[doc = " Close and delete aeron_driver_t struct.\n\n @param driver to close and delete\n @return 0 for success and -1 for error."]
+    pub fn aeron_driver_close(driver: *mut aeron_driver_t) -> ::std::os::raw::c_int;
 }

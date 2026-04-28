@@ -62,9 +62,6 @@ pub mod inner {
     /// Max transfer amount (100 billion minor units).
     const MAX_AMOUNT_UNITS: u64 = 100_000_000_000;
 
-    /// Warmup events per shard — enough to prime TB batching + JIT.
-    const WARMUP_PER_SHARD: u64 = 500;
-
     /// Spin hint count on ring-full backpressure before yielding.
     const BACKPRESSURE_SPIN: usize = 64;
 
@@ -370,7 +367,7 @@ pub mod inner {
                         if stopped && drain_deadline.is_none() {
                             drain_deadline = Some(Instant::now() + Duration::from_secs(5));
                         }
-                        let timed_out = drain_deadline.map_or(false, |d| Instant::now() >= d);
+                        let timed_out = drain_deadline.is_some_and(|d| Instant::now() >= d);
                         let done = if duration_mode {
                             (stopped && in_flight.is_empty()) || timed_out
                         } else {

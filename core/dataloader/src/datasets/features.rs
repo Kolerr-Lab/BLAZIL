@@ -353,7 +353,7 @@ mod tests {
         assert_eq!(stats.max, vec![3.0, 6.0, 9.0]);
 
         // Test normalization
-        let normalized = stats.normalize_zscore(&vec![2.0, 4.0, 6.0]);
+        let normalized = stats.normalize_zscore(&[2.0, 4.0, 6.0]);
         // Should be close to [0.0, 0.0, 0.0] (mean values)
         assert!(normalized[0].abs() < 0.01);
 
@@ -405,8 +405,8 @@ mod tests {
         assert!(dataset.stats.is_some());
 
         // After normalization, mean should be ~0, std ~1
-        let sample = dataset.get(1)?; // Middle value
-                                      // Middle value should be close to 0 after z-score normalization
+        let _sample = dataset.get(1)?; // Middle value
+                                       // Middle value should be close to 0 after z-score normalization
 
         Ok(())
     }
@@ -438,7 +438,7 @@ mod tests {
                 .collect();
 
             for &val in &floats {
-                assert!(val >= -0.01 && val <= 1.01); // Allow small float error
+                assert!((-0.01..=1.01).contains(&val)); // Allow small float error
             }
         }
 

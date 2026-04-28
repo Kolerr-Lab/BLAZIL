@@ -130,10 +130,12 @@ fn build_aeron_static(aeron_src: &std::path::Path) {
 #[cfg(feature = "regenerate-bindings")]
 fn regenerate_bindings(aeron_src: &std::path::Path, manifest_dir: &std::path::Path) {
     let headers = aeron_src.join("aeron-client/src/main/c");
+    let driver_headers = aeron_src.join("aeron-driver/src/main/c");
     let out = manifest_dir.join("src/bindings.rs");
 
     let bindings = bindgen::Builder::default()
         .header(headers.join("aeronc.h").to_str().unwrap())
+        .header(driver_headers.join("aeronmd.h").to_str().unwrap())
         // Allowlist: only what Blazil uses.
         .allowlist_type("aeron_context_t")
         .allowlist_type("aeron_t")
@@ -162,17 +164,23 @@ fn regenerate_bindings(aeron_src: &std::path::Path, manifest_dir: &std::path::Pa
         .allowlist_function("aeron_driver_context_close")
         .allowlist_function("aeron_driver_context_set_dir")
         .allowlist_function("aeron_driver_context_set_dir_delete_on_start")
+        .allowlist_function("aeron_driver_context_set_term_buffer_length")
+        .allowlist_function("aeron_driver_context_set_ipc_term_buffer_length")
+        .allowlist_function("aeron_driver_context_set_socket_so_sndbuf")
+        .allowlist_function("aeron_driver_context_set_socket_so_rcvbuf")
         .allowlist_function("aeron_driver_init")
         .allowlist_function("aeron_driver_start")
         .allowlist_function("aeron_driver_main_do_work")
         .allowlist_function("aeron_driver_main_idle_strategy")
         .allowlist_function("aeron_driver_close")
         .allowlist_function("aeron_async_add_publication")
+        .allowlist_function("aeron_async_add_publication_poll")
         .allowlist_function("aeron_async_poll_publication")
         .allowlist_function("aeron_publication_offer")
         .allowlist_function("aeron_publication_is_connected")
         .allowlist_function("aeron_publication_close")
         .allowlist_function("aeron_async_add_subscription")
+        .allowlist_function("aeron_async_add_subscription_poll")
         .allowlist_function("aeron_async_poll_subscription")
         .allowlist_function("aeron_subscription_poll")
         .allowlist_function("aeron_subscription_is_connected")
@@ -181,6 +189,7 @@ fn regenerate_bindings(aeron_src: &std::path::Path, manifest_dir: &std::path::Pa
         .allowlist_function("aeron_errcode")
         .allowlist_var("AERON_PUBLICATION_.*")
         .clang_arg(format!("-I{}", headers.display()))
+        .clang_arg(format!("-I{}", driver_headers.display()))
         .generate()
         .expect("bindgen failed to generate bindings");
 
