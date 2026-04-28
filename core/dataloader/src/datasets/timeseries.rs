@@ -323,7 +323,7 @@ mod tests {
 
         let mut csv_content = "timestamp,value\n".to_string();
         for i in 0..100 {
-            csv_content.push_str(&format!("{},{}\n", i, i));
+            csv_content.push_str(&format!("{i},{i}\n"));
         }
         fs::write(&csv_path, csv_content).unwrap();
 
@@ -371,7 +371,7 @@ mod tests {
 
         let mut csv_content = "timestamp,value\n".to_string();
         for i in 0..100 {
-            csv_content.push_str(&format!("{},{}\n", i, i));
+            csv_content.push_str(&format!("{i},{i}\n"));
         }
         fs::write(&csv_path, csv_content).unwrap();
 

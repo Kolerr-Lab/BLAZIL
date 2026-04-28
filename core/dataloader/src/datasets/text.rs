@@ -532,7 +532,7 @@ mod tests {
 
         // Create 10 samples
         for i in 0..10 {
-            fs::write(class0.join(format!("doc{}.txt", i)), format!("text {}", i)).unwrap();
+            fs::write(class0.join(format!("doc{i}.txt")), format!("text {i}")).unwrap();
         }
 
         // Shard 0 of 2
