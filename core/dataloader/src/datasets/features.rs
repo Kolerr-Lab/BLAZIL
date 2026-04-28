@@ -195,7 +195,7 @@ impl FeatureDataset {
         let num_cols = header.split(',').count();
         if num_cols < 2 {
             return Err(Error::InvalidFormat {
-                reason: format!("CSV must have at least 2 columns, got {}", num_cols),
+                reason: format!("CSV must have at least 2 columns, got {num_cols}"),
             });
         }
 

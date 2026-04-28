@@ -121,7 +121,7 @@ impl TimeSeriesDataset {
         let num_cols = header.split(',').count();
         if num_cols < 2 {
             return Err(Error::InvalidFormat {
-                reason: format!("CSV must have at least 2 columns, got {}", num_cols),
+                reason: format!("CSV must have at least 2 columns, got {num_cols}"),
             });
         }
 
@@ -180,7 +180,7 @@ impl TimeSeriesDataset {
             let target_row = &all_data[idx + window_size];
             let target = if target_idx >= target_row.len() {
                 return Err(Error::InvalidFormat {
-                    reason: format!("target_col {} out of bounds", target_idx),
+                    reason: format!("target_col {target_idx} out of bounds"),
                 });
             } else {
                 target_row[target_idx]
