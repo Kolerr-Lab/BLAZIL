@@ -22,12 +22,7 @@ use crate::{
 };
 use rand::{seq::SliceRandom, SeedableRng};
 use rand_chacha::ChaCha8Rng;
-use std::{
-    collections::HashMap,
-    fs,
-    path::Path,
-    sync::Arc,
-};
+use std::{collections::HashMap, fs, path::Path, sync::Arc};
 
 #[cfg(target_os = "linux")]
 use crate::readers::IoUringReader;
@@ -279,12 +274,9 @@ impl TextDataset {
             }
 
             let text = parts[0].trim_matches('"').to_string();
-            let label: u32 = parts[1]
-                .trim()
-                .parse()
-                .map_err(|_| Error::InvalidFormat {
-                    reason: format!("invalid label on line {}: {}", line_idx + 2, parts[1]),
-                })?;
+            let label: u32 = parts[1].trim().parse().map_err(|_| Error::InvalidFormat {
+                reason: format!("invalid label on line {}: {}", line_idx + 2, parts[1]),
+            })?;
 
             // Build vocabulary
             for word in simple_tokenize(&text) {
@@ -382,10 +374,7 @@ impl TextDataset {
 
     /// Convert token IDs (Vec<u32>) to bytes (Vec<u8>).
     fn tokens_to_bytes(tokens: Vec<u32>) -> Vec<u8> {
-        tokens
-            .into_iter()
-            .flat_map(|id| id.to_le_bytes())
-            .collect()
+        tokens.into_iter().flat_map(|id| id.to_le_bytes()).collect()
     }
 }
 
@@ -457,10 +446,7 @@ mod tests {
     #[test]
     fn test_simple_tokenize() {
         let tokens = simple_tokenize("Hello, world! This is a test.");
-        assert_eq!(
-            tokens,
-            vec!["hello", "world", "this", "is", "a", "test"]
-        );
+        assert_eq!(tokens, vec!["hello", "world", "this", "is", "a", "test"]);
     }
 
     #[test]

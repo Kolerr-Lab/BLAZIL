@@ -103,12 +103,7 @@ impl AudioDataset {
     ///     audio3.wav
     /// ```
     pub fn from_directory(root: impl AsRef<Path>, config: DatasetConfig) -> Result<Self> {
-        Self::from_directory_with_options(
-            root,
-            DEFAULT_SAMPLE_RATE,
-            DEFAULT_DURATION_SECS,
-            config,
-        )
+        Self::from_directory_with_options(root, DEFAULT_SAMPLE_RATE, DEFAULT_DURATION_SECS, config)
     }
 
     /// Open audio dataset with custom sample rate and duration.
@@ -258,7 +253,9 @@ impl AudioDataset {
                 .samples::<i16>()
                 .map(|s| s.unwrap_or(0) as f32 / 32768.0)
                 .collect(),
-            hound::SampleFormat::Float => reader.samples::<f32>().map(|s| s.unwrap_or(0.0)).collect(),
+            hound::SampleFormat::Float => {
+                reader.samples::<f32>().map(|s| s.unwrap_or(0.0)).collect()
+            }
         };
 
         // Convert stereo to mono (average channels)
@@ -295,10 +292,7 @@ impl AudioDataset {
 
     /// Convert Vec<f32> to Vec<u8>.
     fn floats_to_bytes(floats: Vec<f32>) -> Vec<u8> {
-        floats
-            .into_iter()
-            .flat_map(|f| f.to_le_bytes())
-            .collect()
+        floats.into_iter().flat_map(|f| f.to_le_bytes()).collect()
     }
 }
 

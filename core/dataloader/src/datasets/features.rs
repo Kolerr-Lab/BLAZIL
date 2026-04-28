@@ -20,10 +20,7 @@
 use crate::{Dataset, DatasetConfig, Error, Result, Sample};
 use rand::{seq::SliceRandom, SeedableRng};
 use rand_chacha::ChaCha8Rng;
-use std::{
-    fs,
-    path::Path,
-};
+use std::{fs, path::Path};
 
 /// Statistics for feature normalization.
 #[derive(Debug, Clone)]
@@ -59,8 +56,8 @@ impl FeatureStats {
             }
         }
 
-        for i in 0..num_features {
-            mean[i] /= n;
+        for m in &mut mean {
+            *m /= n;
         }
 
         // Compute std
@@ -72,11 +69,11 @@ impl FeatureStats {
             }
         }
 
-        for i in 0..num_features {
-            std[i] = (std[i] / n).sqrt();
+        for s in &mut std {
+            *s = (*s / n).sqrt();
             // Avoid division by zero
-            if std[i] < 1e-8 {
-                std[i] = 1.0;
+            if *s < 1e-8 {
+                *s = 1.0;
             }
         }
 
@@ -291,10 +288,7 @@ impl FeatureDataset {
 
     /// Convert Vec<f32> to Vec<u8> for Sample.data.
     fn floats_to_bytes(floats: Vec<f32>) -> Vec<u8> {
-        floats
-            .into_iter()
-            .flat_map(|f| f.to_le_bytes())
-            .collect()
+        floats.into_iter().flat_map(|f| f.to_le_bytes()).collect()
     }
 }
 
@@ -412,7 +406,7 @@ mod tests {
 
         // After normalization, mean should be ~0, std ~1
         let sample = dataset.get(1)?; // Middle value
-        // Middle value should be close to 0 after z-score normalization
+                                      // Middle value should be close to 0 after z-score normalization
 
         Ok(())
     }

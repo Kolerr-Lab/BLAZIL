@@ -24,10 +24,7 @@
 use crate::{Dataset, DatasetConfig, Error, Result, Sample};
 use rand::{seq::SliceRandom, SeedableRng};
 use rand_chacha::ChaCha8Rng;
-use std::{
-    fs,
-    path::Path,
-};
+use std::{fs, path::Path};
 
 /// Time series dataset with sliding window.
 ///
@@ -132,7 +129,7 @@ impl TimeSeriesDataset {
         // and target_col indices need to be adjusted
         let num_features = num_cols - 1; // All columns except timestamp
         let target_col_original = target_col.unwrap_or(num_cols - 1);
-        
+
         // Adjust target_col for skipped timestamp (col 0)
         if target_col_original == 0 {
             return Err(Error::InvalidFormat {
@@ -233,10 +230,7 @@ impl TimeSeriesDataset {
 
     /// Convert Vec<f32> to Vec<u8> for Sample.data.
     fn floats_to_bytes(floats: Vec<f32>) -> Vec<u8> {
-        floats
-            .into_iter()
-            .flat_map(|f| f.to_le_bytes())
-            .collect()
+        floats.into_iter().flat_map(|f| f.to_le_bytes()).collect()
     }
 }
 

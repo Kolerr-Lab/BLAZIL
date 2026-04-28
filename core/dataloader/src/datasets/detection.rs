@@ -93,7 +93,7 @@ impl BoundingBox {
     pub fn from_coco(class_id: u32, x_min: f32, y_min: f32, width: f32, height: f32) -> Self {
         Self {
             class_id,
-            x: x_min + width / 2.0,  // Convert to center
+            x: x_min + width / 2.0, // Convert to center
             y: y_min + height / 2.0,
             width,
             height,
@@ -232,12 +232,11 @@ impl DetectionDataset {
             }
 
             // Parse label file
-            let label_content = fs::read_to_string(&label_path).map_err(|e| {
-                Error::CorruptedSample {
+            let label_content =
+                fs::read_to_string(&label_path).map_err(|e| Error::CorruptedSample {
                     index: all_annotations.len(),
                     reason: format!("read label '{}': {e}", label_path.display()),
-                }
-            })?;
+                })?;
 
             let mut bboxes = Vec::new();
             for line in label_content.lines() {
@@ -353,12 +352,13 @@ impl Dataset for DetectionDataset {
         let annotation = &self.annotations[idx];
 
         // Read image bytes
-        let bytes = self.reader.read(&annotation.image_path).map_err(|e| {
-            Error::CorruptedSample {
-                index: idx,
-                reason: format!("read '{}': {e}", annotation.image_path.display()),
-            }
-        })?;
+        let bytes =
+            self.reader
+                .read(&annotation.image_path)
+                .map_err(|e| Error::CorruptedSample {
+                    index: idx,
+                    reason: format!("read '{}': {e}", annotation.image_path.display()),
+                })?;
 
         // Decode and resize image (same as ImageNet)
         let img = image::load_from_memory(&bytes).map_err(|e| Error::CorruptedSample {
