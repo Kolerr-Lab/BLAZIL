@@ -38,8 +38,8 @@ Real hardware. Real replication. Real benchmarks.
 - 💰 **$1.496/hr on-demand** (AWS ap-southeast-1) — 237K fault-tolerant TPS at **$0.0000063/TPS/hr**
 
 > **Cost efficiency vs TigerBeetle's own benchmark hardware:**  
-> TigerBeetle's published benchmarks run on `i8g.16xlarge` (256 vCPU, ~$5.29/hr) — 3.5× the cost of Blazil's bench hardware.  
-> Blazil v0.3 achieves 237K fault-tolerant TPS on `i4i.4xlarge` at **$1.496/hr** on-demand (~$1,077/month 24/7).  
+> TigerBeetle's published benchmarks run on `i8g.16xlarge` (256 vCPU, $5.29/hr) — 3.5× the cost of Blazil's bench hardware.  
+> Blazil v0.3 achieves 237K fault-tolerant TPS on `i4i.4xlarge` at **$1.496/hr** on-demand ($1,077/month 24/7).  
 >  
 > **Benchmark conditions comparison:**  
 > | | TigerBeetle (published) | Blazil v0.3 |  
