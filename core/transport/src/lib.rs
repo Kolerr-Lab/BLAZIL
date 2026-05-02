@@ -38,6 +38,7 @@ pub mod backpressure;
 pub mod connection;
 pub mod metrics_server;
 pub mod mock;
+pub mod priority;
 pub mod protocol;
 pub mod rate_limit;
 pub mod server;
@@ -60,6 +61,7 @@ pub mod afxdp;
 pub mod ebpf;
 
 pub use protocol::{TransactionRequest, TransactionResponse};
+pub use priority::EventPriority;
 pub use server::TransportServer;
 pub use tcp::TcpTransportServer;
 

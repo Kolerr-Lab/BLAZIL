@@ -43,7 +43,6 @@ mod aeron_ipc_tests {
 
     /// Send one message and receive it back on the same IPC endpoint.
     #[test]
-    #[ignore = "requires aeron feature + C library (git submodule)"]
     fn test_ipc_single_message() {
         let driver = start_driver(TEST_AERON_DIR_SINGLE);
 
@@ -91,7 +90,6 @@ mod aeron_ipc_tests {
 
     /// Publish 1 000 messages and confirm all are received in order.
     #[test]
-    #[ignore = "requires aeron feature + C library (git submodule)"]
     fn test_ipc_1000_messages() {
         let driver = start_driver(TEST_AERON_DIR_1000);
         let ctx = AeronContext::new(TEST_AERON_DIR_1000).expect("AeronContext::new");
@@ -143,7 +141,6 @@ mod aeron_ipc_tests {
     /// This test exercises the full E2E path:
     /// client pub → server sub → Pipeline → server pub → client sub
     #[tokio::test]
-    #[ignore = "requires aeron feature + C library (git submodule)"]
     async fn test_transport_server_round_trip() {
         use std::sync::Arc;
 
