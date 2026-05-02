@@ -37,12 +37,12 @@ use std::time::Duration;
 
 use blazil_common::error::BlazerResult;
 
+use super::context::AeronContext;
 use super::subscription::AeronSubscription;
 use crate::priority::{
     EventPriority, STREAM_CRITICAL_REQ, STREAM_CRITICAL_RSP, STREAM_HIGH_REQ, STREAM_HIGH_RSP,
     STREAM_NORMAL_REQ, STREAM_NORMAL_RSP,
 };
-use super::context::AeronContext;
 
 // ── PriorityFragment ──────────────────────────────────────────────────────────
 
@@ -128,16 +128,28 @@ impl PrioritySubscriber {
         channel: &str,
         timeout: Duration,
     ) -> BlazerResult<Self> {
-        tracing::info!(channel, "Creating priority-aware request subscriber (server side)");
+        tracing::info!(
+            channel,
+            "Creating priority-aware request subscriber (server side)"
+        );
 
         let critical = AeronSubscription::new(ctx, channel, STREAM_CRITICAL_REQ, timeout)?;
-        tracing::debug!(stream_id = STREAM_CRITICAL_REQ, "Critical request subscription registered");
+        tracing::debug!(
+            stream_id = STREAM_CRITICAL_REQ,
+            "Critical request subscription registered"
+        );
 
         let high = AeronSubscription::new(ctx, channel, STREAM_HIGH_REQ, timeout)?;
-        tracing::debug!(stream_id = STREAM_HIGH_REQ, "High request subscription registered");
+        tracing::debug!(
+            stream_id = STREAM_HIGH_REQ,
+            "High request subscription registered"
+        );
 
         let normal = AeronSubscription::new(ctx, channel, STREAM_NORMAL_REQ, timeout)?;
-        tracing::debug!(stream_id = STREAM_NORMAL_REQ, "Normal request subscription registered");
+        tracing::debug!(
+            stream_id = STREAM_NORMAL_REQ,
+            "Normal request subscription registered"
+        );
 
         tracing::info!("Priority-aware request subscriber initialized");
 
@@ -169,16 +181,28 @@ impl PrioritySubscriber {
         channel: &str,
         timeout: Duration,
     ) -> BlazerResult<Self> {
-        tracing::info!(channel, "Creating priority-aware response subscriber (client side)");
+        tracing::info!(
+            channel,
+            "Creating priority-aware response subscriber (client side)"
+        );
 
         let critical = AeronSubscription::new(ctx, channel, STREAM_CRITICAL_RSP, timeout)?;
-        tracing::debug!(stream_id = STREAM_CRITICAL_RSP, "Critical response subscription registered");
+        tracing::debug!(
+            stream_id = STREAM_CRITICAL_RSP,
+            "Critical response subscription registered"
+        );
 
         let high = AeronSubscription::new(ctx, channel, STREAM_HIGH_RSP, timeout)?;
-        tracing::debug!(stream_id = STREAM_HIGH_RSP, "High response subscription registered");
+        tracing::debug!(
+            stream_id = STREAM_HIGH_RSP,
+            "High response subscription registered"
+        );
 
         let normal = AeronSubscription::new(ctx, channel, STREAM_NORMAL_RSP, timeout)?;
-        tracing::debug!(stream_id = STREAM_NORMAL_RSP, "Normal response subscription registered");
+        tracing::debug!(
+            stream_id = STREAM_NORMAL_RSP,
+            "Normal response subscription registered"
+        );
 
         tracing::info!("Priority-aware response subscriber initialized");
 
@@ -312,9 +336,7 @@ impl PrioritySubscriber {
 
     /// Check if all priority streams have at least one publisher.
     pub fn is_all_connected(&self) -> bool {
-        self.critical.is_connected()
-            && self.high.is_connected()
-            && self.normal.is_connected()
+        self.critical.is_connected() && self.high.is_connected() && self.normal.is_connected()
     }
 }
 
@@ -337,9 +359,15 @@ mod tests {
         // Actual Aeron integration tests require a running Media Driver and are
         // in the tests/ directory.
 
-        assert_eq!(EventPriority::Critical.response_stream_id(), STREAM_CRITICAL_RSP);
+        assert_eq!(
+            EventPriority::Critical.response_stream_id(),
+            STREAM_CRITICAL_RSP
+        );
         assert_eq!(EventPriority::High.response_stream_id(), STREAM_HIGH_RSP);
-        assert_eq!(EventPriority::Normal.response_stream_id(), STREAM_NORMAL_RSP);
+        assert_eq!(
+            EventPriority::Normal.response_stream_id(),
+            STREAM_NORMAL_RSP
+        );
 
         assert_eq!(STREAM_CRITICAL_RSP, 101);
         assert_eq!(STREAM_HIGH_RSP, 201);

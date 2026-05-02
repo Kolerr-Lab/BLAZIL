@@ -109,7 +109,9 @@ pub const STREAM_LEGACY_RSP: i32 = 1002;
 ///
 /// Determines which Aeron stream an event is published to and the polling
 /// order in the pipeline.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default,
+)]
 pub enum EventPriority {
     /// Emergency events that must bypass all traffic.
     ///
@@ -241,10 +243,7 @@ mod tests {
             STREAM_CRITICAL_REQ
         );
         assert_eq!(EventPriority::High.request_stream_id(), STREAM_HIGH_REQ);
-        assert_eq!(
-            EventPriority::Normal.request_stream_id(),
-            STREAM_NORMAL_REQ
-        );
+        assert_eq!(EventPriority::Normal.request_stream_id(), STREAM_NORMAL_REQ);
 
         // Response streams
         assert_eq!(

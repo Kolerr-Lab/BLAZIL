@@ -60,8 +60,8 @@ pub mod afxdp;
 #[cfg(all(target_os = "linux", feature = "af-xdp"))]
 pub mod ebpf;
 
-pub use protocol::{TransactionRequest, TransactionResponse};
 pub use priority::EventPriority;
+pub use protocol::{TransactionRequest, TransactionResponse};
 pub use server::TransportServer;
 pub use tcp::TcpTransportServer;
 

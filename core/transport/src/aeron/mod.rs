@@ -24,17 +24,17 @@
 
 pub mod context;
 pub mod driver;
-pub mod publication;
 pub mod priority_publisher;
 pub mod priority_subscriber;
+pub mod publication;
 pub mod subscription;
 pub mod transport;
 
 // Convenient re-exports for external callers (e.g., integration tests, bench).
 pub use context::AeronContext;
 pub use driver::EmbeddedAeronDriver;
-pub use publication::AeronPublication;
 pub use priority_publisher::PriorityPublisher;
 pub use priority_subscriber::{PriorityFragment, PrioritySubscriber};
+pub use publication::AeronPublication;
 pub use subscription::AeronSubscription;
 pub use transport::{AeronTransportServer, DEFAULT_AERON_CHANNEL, REQ_STREAM_ID, RSP_STREAM_ID};

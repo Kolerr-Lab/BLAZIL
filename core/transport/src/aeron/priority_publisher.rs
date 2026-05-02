@@ -30,12 +30,12 @@ use std::time::Duration;
 
 use blazil_common::error::BlazerResult;
 
+use super::context::AeronContext;
 use super::publication::AeronPublication;
 use crate::priority::{
     EventPriority, STREAM_CRITICAL_REQ, STREAM_CRITICAL_RSP, STREAM_HIGH_REQ, STREAM_HIGH_RSP,
     STREAM_NORMAL_REQ, STREAM_NORMAL_RSP,
 };
-use super::context::AeronContext;
 
 // ── PriorityPublisher ─────────────────────────────────────────────────────────
 
@@ -101,16 +101,28 @@ impl PriorityPublisher {
         channel: &str,
         timeout: Duration,
     ) -> BlazerResult<Self> {
-        tracing::info!(channel, "Creating priority-aware request publisher (client side)");
+        tracing::info!(
+            channel,
+            "Creating priority-aware request publisher (client side)"
+        );
 
         let critical = AeronPublication::new(ctx, channel, STREAM_CRITICAL_REQ, timeout)?;
-        tracing::debug!(stream_id = STREAM_CRITICAL_REQ, "Critical request publication registered");
+        tracing::debug!(
+            stream_id = STREAM_CRITICAL_REQ,
+            "Critical request publication registered"
+        );
 
         let high = AeronPublication::new(ctx, channel, STREAM_HIGH_REQ, timeout)?;
-        tracing::debug!(stream_id = STREAM_HIGH_REQ, "High request publication registered");
+        tracing::debug!(
+            stream_id = STREAM_HIGH_REQ,
+            "High request publication registered"
+        );
 
         let normal = AeronPublication::new(ctx, channel, STREAM_NORMAL_REQ, timeout)?;
-        tracing::debug!(stream_id = STREAM_NORMAL_REQ, "Normal request publication registered");
+        tracing::debug!(
+            stream_id = STREAM_NORMAL_REQ,
+            "Normal request publication registered"
+        );
 
         tracing::info!("Priority-aware request publisher initialized");
 
@@ -142,16 +154,28 @@ impl PriorityPublisher {
         channel: &str,
         timeout: Duration,
     ) -> BlazerResult<Self> {
-        tracing::info!(channel, "Creating priority-aware response publisher (server side)");
+        tracing::info!(
+            channel,
+            "Creating priority-aware response publisher (server side)"
+        );
 
         let critical = AeronPublication::new(ctx, channel, STREAM_CRITICAL_RSP, timeout)?;
-        tracing::debug!(stream_id = STREAM_CRITICAL_RSP, "Critical response publication registered");
+        tracing::debug!(
+            stream_id = STREAM_CRITICAL_RSP,
+            "Critical response publication registered"
+        );
 
         let high = AeronPublication::new(ctx, channel, STREAM_HIGH_RSP, timeout)?;
-        tracing::debug!(stream_id = STREAM_HIGH_RSP, "High response publication registered");
+        tracing::debug!(
+            stream_id = STREAM_HIGH_RSP,
+            "High response publication registered"
+        );
 
         let normal = AeronPublication::new(ctx, channel, STREAM_NORMAL_RSP, timeout)?;
-        tracing::debug!(stream_id = STREAM_NORMAL_RSP, "Normal response publication registered");
+        tracing::debug!(
+            stream_id = STREAM_NORMAL_RSP,
+            "Normal response publication registered"
+        );
 
         tracing::info!("Priority-aware response publisher initialized");
 
@@ -248,9 +272,7 @@ impl PriorityPublisher {
     /// # }
     /// ```
     pub fn is_all_connected(&self) -> bool {
-        self.critical.is_connected()
-            && self.high.is_connected()
-            && self.normal.is_connected()
+        self.critical.is_connected() && self.high.is_connected() && self.normal.is_connected()
     }
 }
 
@@ -273,7 +295,10 @@ mod tests {
         // Actual Aeron integration tests require a running Media Driver and are
         // in the tests/ directory.
 
-        assert_eq!(EventPriority::Critical.request_stream_id(), STREAM_CRITICAL_REQ);
+        assert_eq!(
+            EventPriority::Critical.request_stream_id(),
+            STREAM_CRITICAL_REQ
+        );
         assert_eq!(EventPriority::High.request_stream_id(), STREAM_HIGH_REQ);
         assert_eq!(EventPriority::Normal.request_stream_id(), STREAM_NORMAL_REQ);
 
