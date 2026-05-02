@@ -354,7 +354,7 @@ mod tests {
         // This is a property test that the poll order is correct.
         // Actual behavior is tested in integration tests with a real Media Driver.
 
-        let priorities = vec![
+        let priorities = [
             EventPriority::Critical,
             EventPriority::High,
             EventPriority::Normal,
