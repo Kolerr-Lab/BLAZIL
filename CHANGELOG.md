@@ -9,6 +9,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## v0.3.2 (May 2026)
+
+### 🎯 Priority Queuing
+
+**Production-ready multi-stream priority routing** for critical event handling.
+
+#### Architecture
+- **Multi-stream Aeron IPC**: 3 independent priority levels (Critical/High/Normal)
+- **Stream allocation**: Critical (100/101), High (200/201), Normal (300/301)
+- **Legacy support**: Streams 1001/1002 automatically map to Normal priority
+- **Independent backpressure**: Each stream has isolated flow control
+
+#### Performance Guarantees
+- **Critical events**: <1ms latency (margin calls, fraud alerts, circuit breakers)
+- **High priority**: <5ms latency (VIP customers, large transactions >$1M)
+- **Normal traffic**: <50ms latency (standard operations, batch processing)
+
+#### Implementation
+- New module: `core/transport/src/priority.rs` (450 LOC)
+- `PriorityPublisher`: Multi-stream publisher for request/response routing
+- `PrioritySubscriber`: Priority-ordered polling (Critical → High → Normal)
+- **Test coverage**: 429 tests passing (426 unit + 3 Aeron integration)
+- **Code quality**: Zero Clippy warnings, zero dead code, zero technical debt
+
+#### Use Cases
+- **Fintech**: Margin calls, fraud detection, compliance violations
+- **AI**: Model drift alerts, anomaly detection, critical inference requests
+- **Operations**: System health alerts, circuit breaker activation
+
+**Documentation**: [docs/PRIORITY_QUEUING.md](docs/PRIORITY_QUEUING.md)
+
+---
+
+## v0.3.1 (April 2026)
+
+### 🤖 AI Infrastructure
+
+**Production-grade ML inference with zero-copy data pipeline.**
+
+#### Datasets
+- **5 production datasets**: Text/NLP, Time Series, Features, Audio, Object Detection
+- **2,291 LOC**: Comprehensive data loading and preprocessing
+- **57 tests passing**: Full test coverage across all datasets
+- **Zero-copy I/O**: io_uring on Linux, mmap fallback on macOS
+
+#### Capabilities
+- **Text/NLP**: Vocabulary management, tokenization, special tokens ([PAD], [UNK])
+- **Time Series**: Sliding windows (configurable size/stride), CSV format
+- **Features**: Z-score/Min-max normalization, anomaly detection
+- **Audio**: WAV processing, resampling, mono conversion, padding
+- **Object Detection**: YOLO/COCO format, bounding boxes, multi-bbox support
+
+#### Performance Target
+- **1,500-2,000 RPS**: Tract ONNX inference on DO Premium AMD (4 vCPU, $84/month)
+- **Cost efficiency**: 8-12× cheaper than NVIDIA Triton ($0.042 vs $0.266 per RPS/month)
+
+**Documentation**: [docs/DATASETS_IMPLEMENTATION.md](docs/DATASETS_IMPLEMENTATION.md)
+
+---
+
+## v0.3 (April 2026)
+
+### 🚀 AWS Production Benchmarks
+
+**237K TPS on AWS i4i.4xlarge with live VSR failover testing.**
+
+#### Performance
+- **Peak TPS**: 237,763 (4-shard VSR configuration)
+- **Average TPS**: 103,421 sustained
+- **Latency**: P99 120ms (includes disk fsync)
+- **Hardware**: AWS i4i.4xlarge (16 vCPU, 128GB RAM, 1.9TB NVMe)
+- **Cost**: $1.496/hour on-demand ($0.0000063 per TPS/hour)
+
+#### Fault Tolerance
+- **Live failover**: VSR replica killed at t=80s, recovered in 37s
+- **Zero errors**: 12,421,068 events, 0% error rate
+- **3-node consensus**: TigerBeetle VSR quorum maintained during failure
+
+#### Architecture
+- **Dedicated TB client per shard**: Eliminates cross-shard queue contention
+- **4-shard configuration**: Optimal for 16 vCPU hardware
+- **VSR replication**: 3-node fault-tolerant consensus
+
+**Full report**: [docs/runs/2026-04-19_16-44-35_sharded-tb-e2e-(4-shards).md](docs/runs/2026-04-19_16-44-35_sharded-tb-e2e-(4-shards).md)
+
+---
+
 ## v0.2 (March 2026)
 
 ### 🚀 Performance
