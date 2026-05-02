@@ -314,13 +314,13 @@ mod tests {
     #[test]
     fn test_stream_id_no_collisions() {
         // Ensure no stream ID collisions
-        let all_req_streams = vec![
+        let all_req_streams = [
             STREAM_CRITICAL_REQ,
             STREAM_HIGH_REQ,
             STREAM_NORMAL_REQ,
             STREAM_LEGACY_REQ,
         ];
-        let all_rsp_streams = vec![
+        let all_rsp_streams = [
             STREAM_CRITICAL_RSP,
             STREAM_HIGH_RSP,
             STREAM_NORMAL_RSP,
@@ -330,7 +330,7 @@ mod tests {
         // Check uniqueness
         let mut seen = std::collections::HashSet::new();
         for &id in all_req_streams.iter().chain(all_rsp_streams.iter()) {
-            assert!(seen.insert(id), "Duplicate stream ID: {}", id);
+            assert!(seen.insert(id), "Duplicate stream ID: {id}");
         }
     }
 }
