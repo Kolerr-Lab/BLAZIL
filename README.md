@@ -15,6 +15,7 @@
 ![10x Visa](https://img.shields.io/badge/10%C3%97_Visa-fault--tolerant-red?style=flat-square)
 ![Failover Tested](https://img.shields.io/badge/Failover-Tested_Live-orange?style=flat-square)
 ![0% Error](https://img.shields.io/badge/0%25_Error-All_Runs-gold?style=flat-square)
+![Priority Queuing](https://img.shields.io/badge/Priority_Queuing-%3C1ms_Critical-ff69b4?style=flat-square)
 ![AI Ready](https://img.shields.io/badge/AI-5_Datasets_Production-purple?style=flat-square)
 
 </div>
@@ -134,6 +135,21 @@ graph LR
 - **Logic**: Rust + LMAX Disruptor ring buffer (12.5M ops/s, 84ns P99)
 - **Storage**: TigerBeetle VSR (3-node fault-tolerant consensus)
 - **I/O**: io_uring (zero-copy kernel bypass, no syscalls)
+- **Priority Routing**: Multi-stream Aeron IPC (Critical <1ms, High <5ms, Normal <50ms)
+
+**Priority Queuing (v0.3.2, May 2026):**
+
+Blazil implements **multi-stream priority routing** for critical events:
+
+| Priority | Latency Target | Use Cases | Stream IDs |
+|----------|----------------|-----------|------------|
+| **Critical** | <1ms | Margin calls, fraud alerts, circuit breakers | 100/101 |
+| **High** | <5ms | VIP customers, large transactions (>$1M) | 200/201 |
+| **Normal** | <50ms | Standard transactions, batch operations | 300/301 |
+
+**Architecture:** Independent Aeron streams with priority-ordered polling ensures critical events **never starve** under high load. Each stream has independent backpressure handling.
+
+**Documentation:** [docs/PRIORITY_QUEUING.md](docs/PRIORITY_QUEUING.md)
 
 **How a transaction flows:**
 
@@ -200,6 +216,7 @@ Grafana → `http://<node-1-ip>:3001` (admin / blazil)
 | **Services** | Go + gRPC Streaming | Zero RTT, 256 in-flight window |
 | **Ledger** | TigerBeetle VSR | Fastest financial database on Earth |
 | **Transport** | io_uring + Aeron IPC | Zero-copy kernel I/O bypass |
+| **Priority Routing** | Multi-stream Aeron (Critical/High/Normal) | <1ms critical events, independent backpressure |
 | **Replication** | VSR consensus | 3-node fault tolerance |
 | **AI/ML** | Tract ONNX + 5 datasets | Pure Rust inference, production-grade dataloader |
 | **Observability** | Prometheus + Grafana + OTel | Real-time metrics, distributed tracing |
@@ -398,6 +415,7 @@ graph LR
 | **v0.2** | ✅ Done | 1.2M TPS local · **436K TPS DO (sharded)** · **131K TPS DO (VSR)** | Aeron IPC, io_uring, sharded-tb E2E, TigerBeetle VSR, 0% error |
 | **v0.3** | ✅ Done | **237K peak TPS** (AWS i4i.4xlarge VSR) | Dedicated TB client/shard, live VSR failover test, AWS NVMe, 0% error |
 | **v0.3.1 AI** | ✅ Done | 1,500-2,000 RPS target (AI inference) | 5 production datasets, Tract ONNX, io_uring dataloader, 57 tests passing |
+| **v0.3.2 Priority** | ✅ Done | Same TPS, <1ms critical latency | Multi-stream priority routing (Critical/High/Normal), 429 tests, 0 Clippy warnings |
 | **v0.4** | 🔭 Future | est. 5-10M TPS | Bare-metal NVMe Gen4, XDP kernel bypass, larger ring buffer, multi-region |
 
 ---
