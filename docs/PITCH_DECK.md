@@ -6,9 +6,9 @@
 ## Slide 1: Cover
 **Title:** BLAZIL  
 **Tagline:** The World's Fastest Financial Infrastructure  
-**Subtitle:** 237K TPS Production-Ready | 10× Faster Than Visa | Zero Technical Debt
+**Subtitle:** 233K TPS Production-Ready | 10× Faster Than Visa | Zero Technical Debt
 
-**Visual:** Blazil logo + performance chart showing 237K TPS bar towering over competitors
+**Visual:** Blazil logo + performance chart showing 233K TPS bar towering over competitors
 
 **Contact:**  
 Kolerr Lab  
@@ -51,7 +51,7 @@ https://github.com/Kolerr-Lab/BLAZIL
 
 **Core Value Props:**
 1. **10× Faster Than Visa**
-   - 237K TPS production-ready (fault-tolerant)
+   - 233K TPS production-ready (fault-tolerant)
    - <1ms latency for critical events (margin calls, fraud alerts)
    - Zero-copy kernel bypass (io_uring + Aeron IPC)
 
@@ -76,8 +76,8 @@ https://github.com/Kolerr-Lab/BLAZIL
 
 | Metric | Blazil v0.3 | Visa | Mastercard | Stripe |
 |--------|-------------|------|------------|--------|
-| **Peak TPS** | **237,763** | 24,000 | 5,000 | 2,750 |
-| **Advantage** | — | **10×** | **48×** | **86×** |
+| **Peak TPS** | **233,000** | 24,000 | 5,000 | 2,750 |
+| **Advantage** | — | **10×** | **47×** | **85×** |
 | **P99 Latency** | 120ms | 150ms | 200ms+ | 300ms+ |
 | **Fault Tolerance** | ✅ 3-node VSR | ❌ | ❌ | ❌ |
 | **Zero Errors** | ✅ 100% | — | — | — |
@@ -164,7 +164,7 @@ https://github.com/Kolerr-Lab/BLAZIL
 **Timeline:**
 - **March 2026 (v0.1):** Core engine + VSR consensus → 62K TPS
 - **April 2026 (v0.2):** Aeron IPC + io_uring → 436K TPS (sharded), 131K TPS (VSR)
-- **April 2026 (v0.3):** AWS production benchmarks → **237K TPS fault-tolerant**
+- **April 2026 (v0.3):** AWS production benchmarks → **233K TPS fault-tolerant**
 - **April 2026 (v0.3.1):** AI datasets → 5 production datasets, 57 tests
 - **May 2026 (v0.3.2):** Priority Queuing → <1ms critical events, 429 tests
 
@@ -177,7 +177,7 @@ https://github.com/Kolerr-Lab/BLAZIL
 - **6 comprehensive docs** (architecture, datasets, priority queuing, benchmarks)
 
 **Validation:**
-- ✅ AWS i4i.4xlarge: 237K TPS with VSR failover
+- ✅ AWS i4i.4xlarge: 233K TPS with VSR failover
 - ✅ DigitalOcean 3-node: 436K TPS sharded, 131K TPS VSR
 - ✅ Live fault tolerance: VSR replica killed & recovered (37s)
 - ✅ Zero errors across 12M+ events
@@ -193,7 +193,7 @@ https://github.com/Kolerr-Lab/BLAZIL
 
 | Company | TPS | Fault Tolerance | Cost/TPS | Tech Stack |
 |---------|-----|-----------------|----------|------------|
-| **Blazil** | **237K** | ✅ VSR 3-node | **$0.0000063/hr** | Pure Rust |
+| **Blazil** | **233K** | ✅ VSR 3-node | **$0.0000063/hr** | Pure Rust |
 | Visa | 24K | ❌ | — | Legacy C++ |
 | Stripe | 2.7K | ❌ | $0.029/txn | Ruby/Go/Rust |
 | Mojaloop (OSS) | 1K | ❌ | Self-hosted | Node.js/Java |
@@ -266,7 +266,7 @@ https://github.com/Kolerr-Lab/BLAZIL
 - **[Your Name], CEO & Founder**
   - [Your background: education, prior experience]
   - Expert in high-performance Rust systems
-  - Led development of Blazil from zero to 237K TPS in 4 months
+  - Led development of Blazil from zero to 233K TPS in 4 months
 
 **Technical Advisors:**
 - [If you have advisors, list here]
@@ -461,7 +461,7 @@ https://github.com/Kolerr-Lab/BLAZIL
 - **Milestones:** 15 customers, $5M ARR, 5-10M TPS benchmark (12-18 months)
 
 **Why Now?**
-1. **Product-market fit:** 237K TPS proven, zero errors
+1. **Product-market fit:** 233K TPS proven, zero errors
 2. **Market timing:** Real-time payment mandates (FedNow, PIX, UPI)
 3. **AI explosion:** $150B market by 2030, cost pressure driving demand
 4. **Technology moat:** 3-5 years to replicate zero-copy stack
@@ -469,14 +469,14 @@ https://github.com/Kolerr-Lab/BLAZIL
 
 **What We're Offering:**
 - Ground floor access to category-defining company
-- 10× faster than Visa, 86× faster than Stripe
+- 10× faster than Visa, 85× faster than Stripe
 - Dual revenue streams (fintech + AI)
 - Clear path to $50M ARR in 3 years
 - Strong IP moat (patent pending, BSL 1.1 license)
 
 **Next Steps:**
 1. Schedule technical deep-dive (architecture walkthrough)
-2. Provide AWS demo access (live 237K TPS cluster)
+2. Provide AWS demo access (live 233K TPS cluster)
 3. Share detailed financial model (3-year projections)
 4. Introduce to design partners (reference customers)
 
@@ -562,7 +562,7 @@ O_DIRECT NVMe writes (zero page cache)
 **Case Study 3: Payment Processor (LATAM)**
 - **Problem:** 30% transaction failures during peak (Black Friday)
 - **Solution:** Blazil Priority Queuing (Critical/High/Normal)
-- **Result:** 0% critical event failures, 237K TPS sustained
+- **Result:** 0% critical event failures, 233K TPS sustained
 - **Impact:** $2M revenue saved, 99.99% uptime SLA achieved
 
 ### A4: Competitive Benchmarking Detail
@@ -570,14 +570,14 @@ O_DIRECT NVMe writes (zero page cache)
 
 | System | TPS | P50 Latency | P99 Latency | Error Rate | Cost/Million Txns |
 |--------|-----|-------------|-------------|------------|-------------------|
-| **Blazil v0.3** | **237,763** | 80ms | 120ms | 0% | **$15** |
+| **Blazil v0.3** | **233,000** | 80ms | 120ms | 0% | **$15** |
 | Stripe | 2,750 | 300ms | 800ms | 0.1% | $29,000 |
 | Visa (peak) | 24,000 | 150ms | 250ms | <0.01% | — |
 | Mojaloop | 1,000 | 500ms | 1,200ms | 0.5% | Self-hosted |
 | AWS DynamoDB | 10,000 | 10ms | 20ms | 0% | $1,250 |
 
 **Why Blazil Wins:**
-1. Speed: 10-237× faster than competitors
+1. Speed: 10-233× faster than competitors
 2. Cost: 50-2000× cheaper (per transaction)
 3. Reliability: Zero errors (vs 0.1-0.5% industry average)
 4. Latency: 5-10× lower P99 (critical for real-time use cases)
@@ -589,7 +589,7 @@ O_DIRECT NVMe writes (zero page cache)
 - [Education: University, Degree, Year]
 - [Prior Experience: Companies, Roles, Achievements]
 - [Expertise: Rust systems programming, distributed systems, fintech]
-- [Notable: Built Blazil from 0 to 237K TPS in 4 months, 22,543 LOC]
+- [Notable: Built Blazil from 0 to 233K TPS in 4 months, 22,543 LOC]
 
 **Technical Advisors:**
 - [Advisor 1: Name, Background, Why they joined]
@@ -605,9 +605,9 @@ O_DIRECT NVMe writes (zero page cache)
 
 **General Tips:**
 - Keep each slide to 1-2 minutes (15 slides = 20-30 min total)
-- Lead with data, not adjectives ("237K TPS" not "blazing fast")
+- Lead with data, not adjectives ("233K TPS" not "blazing fast")
 - Anticipate questions: cost breakdown, GTM timeline, competitive response
-- Have AWS demo ready (live 237K TPS cluster)
+- Have AWS demo ready (live 233K TPS cluster)
 - Print appendix slides for technical deep-dive requests
 
 **Slide-Specific Notes:**
@@ -631,7 +631,7 @@ O_DIRECT NVMe writes (zero page cache)
 1. Customize Slide 10 (Team) with your actual background
 2. Add Slide A5 (Team Bios) details
 3. Review financial model assumptions (Slide 11) for realism
-4. Prepare live AWS demo (237K TPS cluster)
+4. Prepare live AWS demo (233K TPS cluster)
 5. Export to PDF/PowerPoint for design handoff to Claude AI
 
 **Design Guidance for Claude AI:**
