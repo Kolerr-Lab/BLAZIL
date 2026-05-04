@@ -5,7 +5,7 @@
 
 ## Slide 1: Cover
 **Title:** BLAZIL  
-**Tagline:** The World's Fastest Financial Infrastructure  
+**Tagline:** The World's Fastest Financial & AI Infrastructure  
 **Subtitle:** 233K TPS Production-Ready | 10× Faster Than Visa | Zero Technical Debt
 
 **Visual:** Blazil logo + performance chart showing 233K TPS bar towering over competitors
