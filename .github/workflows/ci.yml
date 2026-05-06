@@ -23,7 +23,7 @@ jobs:
       # It must come before the Rust toolchain so cargo can find `zig` in PATH.
       - name: Install Zig
         run: |
-          curl -fsSL https://github.com/ziglang/zig/releases/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz -o zig.tar.xz
+          curl -fsSL https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz -o zig.tar.xz
           tar -xf zig.tar.xz
           mv zig-linux-x86_64-0.13.0 ~/zig
           echo "$HOME/zig" >> $GITHUB_PATH
@@ -106,7 +106,7 @@ jobs:
 
       - name: Install Zig
         run: |
-          curl -fsSL https://github.com/ziglang/zig/releases/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz -o zig.tar.xz
+          curl -fsSL https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz -o zig.tar.xz
           tar -xf zig.tar.xz
           mv zig-linux-x86_64-0.13.0 ~/zig
           echo "$HOME/zig" >> $GITHUB_PATH
@@ -217,7 +217,7 @@ jobs:
       # Zig is required by blazil-ledger's tigerbeetle-client dev-dependency.
       - name: Install Zig
         run: |
-          curl -fsSL https://github.com/ziglang/zig/releases/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz -o zig.tar.xz
+          curl -fsSL https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz -o zig.tar.xz
           tar -xf zig.tar.xz
           mv zig-linux-x86_64-0.13.0 ~/zig
           echo "$HOME/zig" >> $GITHUB_PATH
