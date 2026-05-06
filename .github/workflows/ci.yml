@@ -22,9 +22,11 @@ jobs:
       # Zig is required by tigerbeetle-unofficial (C library built via Zig cc).
       # It must come before the Rust toolchain so cargo can find `zig` in PATH.
       - name: Install Zig
-        uses: goto-bus-stop/setup-zig@v2
-        with:
-          version: 0.13.0
+        run: |
+          curl -fsSL https://github.com/ziglang/zig/releases/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz -o zig.tar.xz
+          tar -xf zig.tar.xz
+          sudo mv zig-linux-x86_64-0.13.0 /usr/local/zig
+          echo "/usr/local/zig" >> $GITHUB_PATH
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -103,9 +105,11 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Zig
-        uses: goto-bus-stop/setup-zig@v2
-        with:
-          version: 0.13.0
+        run: |
+          curl -fsSL https://github.com/ziglang/zig/releases/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz -o zig.tar.xz
+          tar -xf zig.tar.xz
+          sudo mv zig-linux-x86_64-0.13.0 /usr/local/zig
+          echo "/usr/local/zig" >> $GITHUB_PATH
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -212,9 +216,11 @@ jobs:
 
       # Zig is required by blazil-ledger's tigerbeetle-client dev-dependency.
       - name: Install Zig
-        uses: goto-bus-stop/setup-zig@v2
-        with:
-          version: 0.13.0
+        run: |
+          curl -fsSL https://github.com/ziglang/zig/releases/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz -o zig.tar.xz
+          tar -xf zig.tar.xz
+          sudo mv zig-linux-x86_64-0.13.0 /usr/local/zig
+          echo "/usr/local/zig" >> $GITHUB_PATH
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
