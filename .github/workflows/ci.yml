@@ -25,8 +25,8 @@ jobs:
         run: |
           curl -fsSL https://github.com/ziglang/zig/releases/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz -o zig.tar.xz
           tar -xf zig.tar.xz
-          sudo mv zig-linux-x86_64-0.13.0 /usr/local/zig
-          echo "/usr/local/zig" >> $GITHUB_PATH
+          mv zig-linux-x86_64-0.13.0 ~/zig
+          echo "$HOME/zig" >> $GITHUB_PATH
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -108,8 +108,8 @@ jobs:
         run: |
           curl -fsSL https://github.com/ziglang/zig/releases/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz -o zig.tar.xz
           tar -xf zig.tar.xz
-          sudo mv zig-linux-x86_64-0.13.0 /usr/local/zig
-          echo "/usr/local/zig" >> $GITHUB_PATH
+          mv zig-linux-x86_64-0.13.0 ~/zig
+          echo "$HOME/zig" >> $GITHUB_PATH
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -219,8 +219,8 @@ jobs:
         run: |
           curl -fsSL https://github.com/ziglang/zig/releases/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz -o zig.tar.xz
           tar -xf zig.tar.xz
-          sudo mv zig-linux-x86_64-0.13.0 /usr/local/zig
-          echo "/usr/local/zig" >> $GITHUB_PATH
+          mv zig-linux-x86_64-0.13.0 ~/zig
+          echo "$HOME/zig" >> $GITHUB_PATH
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
