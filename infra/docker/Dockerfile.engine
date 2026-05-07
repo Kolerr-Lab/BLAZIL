@@ -27,20 +27,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Pre-install Zig 0.14.1 — tigerbeetle-unofficial 0.14.28 honours ZIG_PATH,
 # which bypasses zig/download.sh entirely and removes any network dependency
 # from the cargo build step.
-# NOTE: Zig tarball is pre-downloaded in CI and copied to build context.
-# For local builds, download manually or use curl fallback.
-COPY zig-x86_64-linux-0.14.1.tar.xz* /tmp/ 2>/dev/null || true
-RUN if [ -f /tmp/zig-x86_64-linux-0.14.1.tar.xz ]; then \
-        echo "Using pre-downloaded Zig from build context"; \
-        tar -xJf /tmp/zig-x86_64-linux-0.14.1.tar.xz -C /usr/local; \
-    else \
-        echo "Downloading Zig (fallback for local builds)"; \
-        curl -fsSL --retry 3 --retry-delay 3 --connect-timeout 30 --max-time 60 \
-            -o /tmp/zig.tar.xz \
-            https://ziglang.org/download/0.14.1/zig-x86_64-linux-0.14.1.tar.xz \
-        && tar -xJf /tmp/zig.tar.xz -C /usr/local; \
-    fi \
-    && rm -f /tmp/zig*.tar.xz
+# In CI: Zig is pre-downloaded and cached, then copied to build context.
+# For local builds: Download Zig manually and place in infra/docker/, or
+#                   comment out COPY and use curl fallback below.
+COPY zig-x86_64-linux-0.14.1.tar.xz /tmp/
+RUN tar -xJf /tmp/zig-x86_64-linux-0.14.1.tar.xz -C /usr/local \
+    && rm -f /tmp/zig-x86_64-linux-0.14.1.tar.xz
 ENV ZIG_PATH=/usr/local/zig-x86_64-linux-0.14.1/zig
 
 COPY . .
