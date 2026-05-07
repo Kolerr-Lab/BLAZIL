@@ -34,6 +34,8 @@
 //!
 //! If `BLAZIL_TB_ADDRESS` is not set, all tests are skipped.
 
+#![cfg(feature = "tigerbeetle-client")]
+
 use blazil_common::amount::Amount;
 use blazil_common::currency::parse_currency;
 use blazil_common::error::BlazerError;

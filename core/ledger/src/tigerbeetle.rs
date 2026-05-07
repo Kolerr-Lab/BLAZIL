@@ -53,10 +53,12 @@ use tigerbeetle_unofficial as tb;
 ///
 /// ```rust,no_run
 /// use blazil_ledger::tigerbeetle::TigerBeetleClient;
+/// use blazil_ledger::LedgerMetrics;
 ///
 /// #[tokio::main]
 /// async fn main() {
-///     let client = TigerBeetleClient::connect("127.0.0.1:3000", 0).await.unwrap();
+///     let metrics = LedgerMetrics::new();
+///     let client = TigerBeetleClient::connect("127.0.0.1:3000", 0, metrics).await.unwrap();
 /// }
 /// ```
 pub struct TigerBeetleClient {
