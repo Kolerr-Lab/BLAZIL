@@ -315,7 +315,26 @@ impl LedgerClient for TigerBeetleClient {
             }
         }
 
-        results.into_iter().map(|r| r.unwrap()).collect()
+        // Convert Vec<Option<Result>> to Vec<Result>.
+        // Every index must have been populated by either:
+        // 1. domain_transfer_to_tb validation error (line ~229)
+        // 2. TB success/failure in one of the match arms above
+        // If any Option is None, it indicates a logic bug in this function.
+        results
+            .into_iter()
+            .enumerate()
+            .map(|(i, opt)| {
+                opt.unwrap_or_else(|| {
+                    tracing::error!(
+                        index = i,
+                        "LOGIC BUG: transfer result not populated in create_transfers_batch"
+                    );
+                    Err(BlazerError::Ledger(
+                        "internal error: transfer result not set".to_owned(),
+                    ))
+                })
+            })
+            .collect()
     }
 
     #[instrument(skip(self))]
