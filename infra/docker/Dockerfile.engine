@@ -28,7 +28,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # which bypasses zig/download.sh entirely and removes any network dependency
 # from the cargo build step.
 # NOTE: Using ziglang.org directly (pkg.machengine.org redirect times out).
-RUN curl -fsSL https://ziglang.org/download/0.14.1/zig-x86_64-linux-0.14.1.tar.xz \
+RUN curl -fsSL --retry 5 --retry-delay 5 --max-time 120 \
+        https://ziglang.org/download/0.14.1/zig-x86_64-linux-0.14.1.tar.xz \
     | tar -xJ -C /usr/local
 ENV ZIG_PATH=/usr/local/zig-x86_64-linux-0.14.1/zig
 
