@@ -52,7 +52,8 @@ fn tb_address() -> Option<String> {
 
 /// Connects to TigerBeetle using the provided address.
 async fn connect_tb(address: &str) -> TigerBeetleClient {
-    TigerBeetleClient::connect(address, 0)
+    let metrics = blazil_ledger::LedgerMetrics::new();
+    TigerBeetleClient::connect(address, 0, metrics)
         .await
         .expect("failed to connect to TigerBeetle")
 }

@@ -68,7 +68,8 @@ async fn try_connect_tb(
         // Skip the TCP probe: tb::Client::new() is lazy and returns Ok before
         // the VSR handshake completes. Connect then send a real probe operation
         // (lookup account 0) to confirm the cluster is actually ready.
-        match TigerBeetleClient::connect(addr, 0).await {
+        let metrics = blazil_ledger::LedgerMetrics::new();
+        match TigerBeetleClient::connect(addr, 0, metrics).await {
             Ok(client) => match client.probe().await {
                 Ok(()) => {
                     info!("✅ TigerBeetle connected ({})", addr);

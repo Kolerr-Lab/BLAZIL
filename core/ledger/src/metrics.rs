@@ -59,57 +59,83 @@ impl LedgerMetrics {
 
     // Account metrics
     pub fn inc_accounts_created(&self) {
-        self.inner.accounts_created_total.fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .accounts_created_total
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn inc_accounts_created_errors(&self) {
-        self.inner.accounts_created_errors.fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .accounts_created_errors
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn inc_account_lookups(&self) {
-        self.inner.account_lookups_total.fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .account_lookups_total
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn inc_account_lookups_errors(&self) {
-        self.inner.account_lookups_errors.fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .account_lookups_errors
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     // Transfer metrics
     pub fn inc_transfers_created(&self) {
-        self.inner.transfers_created_total.fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .transfers_created_total
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn inc_transfers_created_errors(&self) {
-        self.inner.transfers_created_errors.fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .transfers_created_errors
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn inc_transfers_batch(&self, count: u64) {
-        self.inner.transfers_batch_total.fetch_add(count, Ordering::Relaxed);
+        self.inner
+            .transfers_batch_total
+            .fetch_add(count, Ordering::Relaxed);
     }
 
     pub fn inc_transfers_batch_partial_failures(&self) {
-        self.inner.transfers_batch_partial_failures.fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .transfers_batch_partial_failures
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn inc_transfers_batch_transport_errors(&self) {
-        self.inner.transfers_batch_transport_errors.fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .transfers_batch_transport_errors
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn inc_transfer_lookups(&self) {
-        self.inner.transfer_lookups_total.fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .transfer_lookups_total
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn inc_transfer_lookups_errors(&self) {
-        self.inner.transfer_lookups_errors.fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .transfer_lookups_errors
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     // Batch metrics
     pub fn inc_batch_account_lookups(&self, count: u64) {
-        self.inner.batch_account_lookups_total.fetch_add(count, Ordering::Relaxed);
+        self.inner
+            .batch_account_lookups_total
+            .fetch_add(count, Ordering::Relaxed);
     }
 
     pub fn inc_batch_account_lookups_errors(&self) {
-        self.inner.batch_account_lookups_errors.fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .batch_account_lookups_errors
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     // Getters for monitoring/export
@@ -142,11 +168,15 @@ impl LedgerMetrics {
     }
 
     pub fn transfers_batch_partial_failures(&self) -> u64 {
-        self.inner.transfers_batch_partial_failures.load(Ordering::Relaxed)
+        self.inner
+            .transfers_batch_partial_failures
+            .load(Ordering::Relaxed)
     }
 
     pub fn transfers_batch_transport_errors(&self) -> u64 {
-        self.inner.transfers_batch_transport_errors.load(Ordering::Relaxed)
+        self.inner
+            .transfers_batch_transport_errors
+            .load(Ordering::Relaxed)
     }
 
     pub fn transfer_lookups_total(&self) -> u64 {
@@ -158,11 +188,15 @@ impl LedgerMetrics {
     }
 
     pub fn batch_account_lookups_total(&self) -> u64 {
-        self.inner.batch_account_lookups_total.load(Ordering::Relaxed)
+        self.inner
+            .batch_account_lookups_total
+            .load(Ordering::Relaxed)
     }
 
     pub fn batch_account_lookups_errors(&self) -> u64 {
-        self.inner.batch_account_lookups_errors.load(Ordering::Relaxed)
+        self.inner
+            .batch_account_lookups_errors
+            .load(Ordering::Relaxed)
     }
 
     /// Returns a snapshot of all metrics as key-value pairs.
@@ -177,12 +211,24 @@ impl LedgerMetrics {
             ("transfers_created_total", self.transfers_created_total()),
             ("transfers_created_errors", self.transfers_created_errors()),
             ("transfers_batch_total", self.transfers_batch_total()),
-            ("transfers_batch_partial_failures", self.transfers_batch_partial_failures()),
-            ("transfers_batch_transport_errors", self.transfers_batch_transport_errors()),
+            (
+                "transfers_batch_partial_failures",
+                self.transfers_batch_partial_failures(),
+            ),
+            (
+                "transfers_batch_transport_errors",
+                self.transfers_batch_transport_errors(),
+            ),
             ("transfer_lookups_total", self.transfer_lookups_total()),
             ("transfer_lookups_errors", self.transfer_lookups_errors()),
-            ("batch_account_lookups_total", self.batch_account_lookups_total()),
-            ("batch_account_lookups_errors", self.batch_account_lookups_errors()),
+            (
+                "batch_account_lookups_total",
+                self.batch_account_lookups_total(),
+            ),
+            (
+                "batch_account_lookups_errors",
+                self.batch_account_lookups_errors(),
+            ),
         ]
     }
 }
@@ -235,13 +281,15 @@ mod tests {
         let metrics = LedgerMetrics::new();
         metrics.inc_accounts_created();
         metrics.inc_transfers_batch(5);
-        
+
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.len(), 13);
-        
-        let accounts_created = snapshot.iter().find(|(k, _)| *k == "accounts_created_total");
+
+        let accounts_created = snapshot
+            .iter()
+            .find(|(k, _)| *k == "accounts_created_total");
         assert_eq!(accounts_created.map(|(_, v)| *v), Some(1));
-        
+
         let batch_total = snapshot.iter().find(|(k, _)| *k == "transfers_batch_total");
         assert_eq!(batch_total.map(|(_, v)| *v), Some(5));
     }
@@ -250,10 +298,10 @@ mod tests {
     fn clone_shares_state() {
         let metrics1 = LedgerMetrics::new();
         let metrics2 = metrics1.clone();
-        
+
         metrics1.inc_accounts_created();
         assert_eq!(metrics2.accounts_created_total(), 1);
-        
+
         metrics2.inc_accounts_created();
         assert_eq!(metrics1.accounts_created_total(), 2);
     }

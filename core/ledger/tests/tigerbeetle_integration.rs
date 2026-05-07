@@ -65,7 +65,8 @@ macro_rules! require_tb {
 async fn connect_tb() -> TigerBeetleClient {
     let address =
         env::var("BLAZIL_TB_ADDRESS").expect("BLAZIL_TB_ADDRESS must be set (e.g. 127.0.0.1:3000)");
-    TigerBeetleClient::connect(&address, 0)
+    let metrics = blazil_ledger::LedgerMetrics::new();
+    TigerBeetleClient::connect(&address, 0, metrics)
         .await
         .expect("failed to connect to TigerBeetle")
 }

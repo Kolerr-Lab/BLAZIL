@@ -53,6 +53,7 @@ use blazil_common::ids::{AccountId, TransferId};
 use crate::account::Account;
 use crate::client::LedgerClient;
 use crate::double_entry;
+use crate::metrics::LedgerMetrics;
 use crate::transfer::Transfer;
 
 // ── InMemoryLedgerClient ──────────────────────────────────────────────────────
@@ -77,6 +78,7 @@ pub struct InMemoryLedgerClient {
     /// When `true`, `create_transfer` skips all validation and balance updates.
     /// **Benchmark-only behaviour** — do not use in production or test code.
     unbounded: bool,
+    metrics: LedgerMetrics,
 }
 
 impl InMemoryLedgerClient {
@@ -93,6 +95,7 @@ impl InMemoryLedgerClient {
             accounts: Arc::new(RwLock::new(HashMap::new())),
             transfers: Arc::new(RwLock::new(HashMap::new())),
             unbounded: false,
+            metrics: LedgerMetrics::new(),
         }
     }
 
@@ -106,6 +109,7 @@ impl InMemoryLedgerClient {
             accounts: Arc::new(RwLock::new(HashMap::new())),
             transfers: Arc::new(RwLock::new(HashMap::new())),
             unbounded: true,
+            metrics: LedgerMetrics::new(),
         }
     }
     ///
@@ -152,6 +156,7 @@ impl LedgerClient for InMemoryLedgerClient {
         let id = *account.id();
         let mut accounts = self.accounts.write().await;
         if accounts.contains_key(&id) {
+            self.metrics.inc_accounts_created_errors();
             return Err(BlazerError::Duplicate {
                 resource: "Account".to_owned(),
                 id: id.to_string(),
@@ -159,6 +164,7 @@ impl LedgerClient for InMemoryLedgerClient {
         }
         tracing::debug!(account_id = %id, "creating account");
         accounts.insert(id, account);
+        self.metrics.inc_accounts_created();
         tracing::info!(account_id = %id, "account created");
         Ok(id)
     }
@@ -183,6 +189,7 @@ impl LedgerClient for InMemoryLedgerClient {
 
         // Benchmark fast-path: skip all validation and balance updates.
         if self.unbounded {
+            self.metrics.inc_transfers_created();
             return Ok(transfer_id);
         }
 
@@ -191,7 +198,7 @@ impl LedgerClient for InMemoryLedgerClient {
         let mut accounts = self.accounts.write().await;
 
         // ── Validate (immutable borrows scoped to this block) ─────────────────
-        {
+        let validation_result = {
             let debit_account = accounts
                 .get(&debit_id)
                 .ok_or_else(|| BlazerError::NotFound {
@@ -204,21 +211,34 @@ impl LedgerClient for InMemoryLedgerClient {
                     resource: "Account".to_owned(),
                     id: credit_id.to_string(),
                 })?;
-            double_entry::validate_transfer(&transfer, debit_account, credit_account)?;
+            double_entry::validate_transfer(&transfer, debit_account, credit_account)
+        };
+
+        if let Err(e) = validation_result {
+            self.metrics.inc_transfers_created_errors();
+            return Err(e);
         }
 
         // ── Apply balance updates ─────────────────────────────────────────────
         let amount = transfer.amount().clone();
 
-        accounts
+        if let Err(e) = accounts
             .get_mut(&debit_id)
             .ok_or_else(|| BlazerError::Internal("debit account vanished under lock".to_owned()))?
-            .apply_debit(amount.clone())?;
+            .apply_debit(amount.clone())
+        {
+            self.metrics.inc_transfers_created_errors();
+            return Err(e);
+        }
 
-        accounts
+        if let Err(e) = accounts
             .get_mut(&credit_id)
             .ok_or_else(|| BlazerError::Internal("credit account vanished under lock".to_owned()))?
-            .apply_credit(amount)?;
+            .apply_credit(amount)
+        {
+            self.metrics.inc_transfers_created_errors();
+            return Err(e);
+        }
 
         drop(accounts);
 
@@ -226,6 +246,7 @@ impl LedgerClient for InMemoryLedgerClient {
         let mut transfers = self.transfers.write().await;
         transfers.insert(transfer_id, transfer);
 
+        self.metrics.inc_transfers_created();
         tracing::info!(transfer_id = %transfer_id, "transfer committed");
         Ok(transfer_id)
     }
@@ -233,34 +254,47 @@ impl LedgerClient for InMemoryLedgerClient {
     /// Returns a clone of the account, or [`BlazerError::NotFound`].
     #[instrument(skip(self))]
     async fn get_account(&self, id: &AccountId) -> BlazerResult<Account> {
-        self.accounts
-            .read()
-            .await
-            .get(id)
-            .cloned()
-            .ok_or_else(|| BlazerError::NotFound {
-                resource: "Account".to_owned(),
-                id: id.to_string(),
-            })
+        self.metrics.inc_account_lookups();
+        let result =
+            self.accounts
+                .read()
+                .await
+                .get(id)
+                .cloned()
+                .ok_or_else(|| BlazerError::NotFound {
+                    resource: "Account".to_owned(),
+                    id: id.to_string(),
+                });
+        if result.is_err() {
+            self.metrics.inc_account_lookups_errors();
+        }
+        result
     }
 
     /// Returns a clone of the transfer, or [`BlazerError::NotFound`].
     #[instrument(skip(self))]
     async fn get_transfer(&self, id: &TransferId) -> BlazerResult<Transfer> {
-        self.transfers
-            .read()
-            .await
-            .get(id)
-            .cloned()
-            .ok_or_else(|| BlazerError::NotFound {
-                resource: "Transfer".to_owned(),
-                id: id.to_string(),
-            })
+        self.metrics.inc_transfer_lookups();
+        let result =
+            self.transfers
+                .read()
+                .await
+                .get(id)
+                .cloned()
+                .ok_or_else(|| BlazerError::NotFound {
+                    resource: "Transfer".to_owned(),
+                    id: id.to_string(),
+                });
+        if result.is_err() {
+            self.metrics.inc_transfer_lookups_errors();
+        }
+        result
     }
 
     /// Batch-fetches accounts; silently skips missing IDs.
     #[instrument(skip(self, ids), fields(count = ids.len()))]
     async fn get_account_balances(&self, ids: &[AccountId]) -> BlazerResult<Vec<Account>> {
+        self.metrics.inc_batch_account_lookups(ids.len() as u64);
         let accounts = self.accounts.read().await;
         let result = ids
             .iter()

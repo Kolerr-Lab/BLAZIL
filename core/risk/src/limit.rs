@@ -14,15 +14,15 @@ pub struct RiskLimit {
     /// Maximum absolute position size (in units)
     /// None = unlimited
     pub max_position_size: Option<Decimal>,
-    
+
     /// Maximum notional exposure per instrument (in base currency)
     /// None = unlimited
     pub max_notional_per_instrument: Option<Decimal>,
-    
+
     /// Maximum total notional exposure across all instruments
     /// None = unlimited
     pub max_total_notional: Option<Decimal>,
-    
+
     /// Maximum order size (single order, in units)
     /// None = unlimited
     pub max_order_size: Option<Decimal>,
@@ -75,10 +75,10 @@ impl RiskLimit {
     /// Suitable for retail clients with limited capital.
     pub fn retail() -> Self {
         Self {
-            max_position_size: Some(Decimal::new(1_000, 0)),    // 1K units
+            max_position_size: Some(Decimal::new(1_000, 0)), // 1K units
             max_notional_per_instrument: Some(Decimal::new(50_000, 0)), // $50K
             max_total_notional: Some(Decimal::new(200_000, 0)), // $200K
-            max_order_size: Some(Decimal::new(100, 0)),         // 100 units
+            max_order_size: Some(Decimal::new(100, 0)),      // 100 units
         }
     }
 
@@ -87,10 +87,10 @@ impl RiskLimit {
     /// Suitable for professional traders and institutions.
     pub fn institutional() -> Self {
         Self {
-            max_position_size: Some(Decimal::new(100_000, 0)),   // 100K units
+            max_position_size: Some(Decimal::new(100_000, 0)), // 100K units
             max_notional_per_instrument: Some(Decimal::new(10_000_000, 0)), // $10M
             max_total_notional: Some(Decimal::new(50_000_000, 0)), // $50M
-            max_order_size: Some(Decimal::new(10_000, 0)),       // 10K units
+            max_order_size: Some(Decimal::new(10_000, 0)),     // 10K units
         }
     }
 }
@@ -119,7 +119,10 @@ mod tests {
     fn retail_has_conservative_limits() {
         let limit = RiskLimit::retail();
         assert_eq!(limit.max_position_size, Some(Decimal::new(1_000, 0)));
-        assert_eq!(limit.max_notional_per_instrument, Some(Decimal::new(50_000, 0)));
+        assert_eq!(
+            limit.max_notional_per_instrument,
+            Some(Decimal::new(50_000, 0))
+        );
         assert_eq!(limit.max_total_notional, Some(Decimal::new(200_000, 0)));
         assert_eq!(limit.max_order_size, Some(Decimal::new(100, 0)));
     }
@@ -128,7 +131,10 @@ mod tests {
     fn institutional_has_higher_limits() {
         let limit = RiskLimit::institutional();
         assert_eq!(limit.max_position_size, Some(Decimal::new(100_000, 0)));
-        assert_eq!(limit.max_notional_per_instrument, Some(Decimal::new(10_000_000, 0)));
+        assert_eq!(
+            limit.max_notional_per_instrument,
+            Some(Decimal::new(10_000_000, 0))
+        );
         assert_eq!(limit.max_total_notional, Some(Decimal::new(50_000_000, 0)));
         assert_eq!(limit.max_order_size, Some(Decimal::new(10_000, 0)));
     }
@@ -149,7 +155,10 @@ mod tests {
             Some(Decimal::new(50, 0)),
         );
         assert_eq!(limit.max_position_size, Some(Decimal::new(500, 0)));
-        assert_eq!(limit.max_notional_per_instrument, Some(Decimal::new(25_000, 0)));
+        assert_eq!(
+            limit.max_notional_per_instrument,
+            Some(Decimal::new(25_000, 0))
+        );
         assert!(limit.max_total_notional.is_none());
         assert_eq!(limit.max_order_size, Some(Decimal::new(50, 0)));
     }

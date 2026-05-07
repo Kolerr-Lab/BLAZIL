@@ -182,7 +182,8 @@ pub mod inner {
             #[cfg(feature = "tigerbeetle-client")]
             {
                 println!("[diag] calling TigerBeetleClient::connect...");
-                let tb_client = TigerBeetleClient::connect(addr, 0)
+                let metrics = blazil_ledger::LedgerMetrics::new();
+                let tb_client = TigerBeetleClient::connect(addr, 0, metrics)
                     .await
                     .expect("TigerBeetle connect");
                 println!("[diag] connect OK — calling run_with_ledger...");

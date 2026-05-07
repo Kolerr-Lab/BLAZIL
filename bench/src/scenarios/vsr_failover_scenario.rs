@@ -201,13 +201,15 @@ pub mod inner {
         // (tb_addr_2, dual_cluster, half_shards are already bound above)
 
         println!("[diag] connecting to TigerBeetle @ {tb_addr}...");
-        let setup_client = TigerBeetleClient::connect(&tb_addr, 0)
+        let metrics = blazil_ledger::LedgerMetrics::new();
+        let setup_client = TigerBeetleClient::connect(&tb_addr, 0, metrics)
             .await
             .expect("TigerBeetle setup connect (cluster 0)");
 
         let setup_client_2 = if let Some(ref addr2) = tb_addr_2 {
             println!("[diag] connecting to TigerBeetle cluster 1 @ {addr2}...");
-            let c = TigerBeetleClient::connect(addr2, 1)
+            let metrics2 = blazil_ledger::LedgerMetrics::new();
+            let c = TigerBeetleClient::connect(addr2, 1, metrics2)
                 .await
                 .expect("TigerBeetle setup connect (cluster 1)");
             println!("[diag] cluster 1 setup client connected");
@@ -245,7 +247,8 @@ pub mod inner {
         let mut cluster0_clients: Vec<Arc<TigerBeetleClient>> =
             Vec::with_capacity(clients_per_cluster);
         for i in 0..clients_per_cluster {
-            let c = TigerBeetleClient::connect(&tb_addr, 0)
+            let m = blazil_ledger::LedgerMetrics::new();
+            let c = TigerBeetleClient::connect(&tb_addr, 0, m)
                 .await
                 .unwrap_or_else(|e| panic!("TB cluster0 pool client {i} connect: {e}"));
             cluster0_clients.push(Arc::new(c));
@@ -256,7 +259,8 @@ pub mod inner {
             Vec::with_capacity(clients_per_cluster);
         if let Some(ref addr2) = tb_addr_2 {
             for i in 0..clients_per_cluster {
-                let c = TigerBeetleClient::connect(addr2, 1)
+                let m = blazil_ledger::LedgerMetrics::new();
+                let c = TigerBeetleClient::connect(addr2, 1, m)
                     .await
                     .unwrap_or_else(|e| panic!("TB cluster1 pool client {i} connect: {e}"));
                 cluster1_clients.push(Arc::new(c));

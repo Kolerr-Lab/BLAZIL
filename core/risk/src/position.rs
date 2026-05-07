@@ -46,7 +46,12 @@ impl Position {
     /// );
     /// assert_eq!(pos.quantity(), &Decimal::new(100, 0));
     /// ```
-    pub fn new(instrument: String, quantity: Decimal, notional: Decimal, avg_price: Decimal) -> Self {
+    pub fn new(
+        instrument: String,
+        quantity: Decimal,
+        notional: Decimal,
+        avg_price: Decimal,
+    ) -> Self {
         Self {
             instrument,
             quantity,
@@ -117,7 +122,9 @@ impl Position {
             self.quantity = Decimal::ZERO;
             self.notional = Decimal::ZERO;
             self.avg_price = Decimal::ZERO;
-        } else if self.quantity.is_zero() || (self.quantity > Decimal::ZERO) == (quantity_delta > Decimal::ZERO) {
+        } else if self.quantity.is_zero()
+            || (self.quantity > Decimal::ZERO) == (quantity_delta > Decimal::ZERO)
+        {
             // New position or adding to existing position
             let total_notional = self.notional + trade_notional;
             self.quantity = new_quantity;
@@ -197,10 +204,10 @@ mod tests {
             Decimal::new(150, 0),
         );
         pos.update(Decimal::new(50, 0), Decimal::new(160, 0));
-        
+
         assert_eq!(pos.quantity(), &Decimal::new(150, 0));
         assert_eq!(pos.notional(), &Decimal::new(23000, 0)); // 15000 + (50*160)
-        // avg price = 23000 / 150 = 153.33...
+                                                             // avg price = 23000 / 150 = 153.33...
         assert!(pos.avg_price() > &Decimal::new(153, 0) && pos.avg_price() < &Decimal::new(154, 0));
     }
 
@@ -213,7 +220,7 @@ mod tests {
             Decimal::new(150, 0),
         );
         pos.update(Decimal::new(-30, 0), Decimal::new(160, 0));
-        
+
         assert_eq!(pos.quantity(), &Decimal::new(70, 0));
         assert_eq!(pos.avg_price(), &Decimal::new(150, 0)); // avg price unchanged on reduce
     }
@@ -227,7 +234,7 @@ mod tests {
             Decimal::new(150, 0),
         );
         pos.update(Decimal::new(-100, 0), Decimal::new(155, 0));
-        
+
         assert!(pos.is_flat());
         assert_eq!(pos.quantity(), &Decimal::ZERO);
         assert_eq!(pos.notional(), &Decimal::ZERO);
@@ -238,7 +245,7 @@ mod tests {
     fn update_opens_new_position_from_flat() {
         let mut pos = Position::zero("AAPL".to_string());
         pos.update(Decimal::new(100, 0), Decimal::new(150, 0));
-        
+
         assert!(pos.is_long());
         assert_eq!(pos.quantity(), &Decimal::new(100, 0));
         assert_eq!(pos.notional(), &Decimal::new(15000, 0));

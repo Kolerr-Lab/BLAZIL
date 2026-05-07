@@ -144,8 +144,9 @@ pub mod inner {
         // Each shard gets its own dedicated TB client + ledger runtime below.
         // This shared client is only used to create accounts before bench start.
         println!("[diag] connecting to TigerBeetle @ {tb_addr} (setup client)...");
+        let metrics = blazil_ledger::LedgerMetrics::new();
         let setup_client = Arc::new(
-            TigerBeetleClient::connect(&tb_addr, 0)
+            TigerBeetleClient::connect(&tb_addr, 0, metrics)
                 .await
                 .expect("TigerBeetle connect"),
         );
@@ -182,8 +183,9 @@ pub mod inner {
             println!("[diag] shard {shard_id} accounts: debit={debit_id} credit={credit_id}");
 
             // Dedicated TB client per shard — no cross-shard VSR queue contention.
+            let m = blazil_ledger::LedgerMetrics::new();
             let tb_client = Arc::new(
-                TigerBeetleClient::connect(&tb_addr, 0)
+                TigerBeetleClient::connect(&tb_addr, 0, m)
                     .await
                     .unwrap_or_else(|e| panic!("shard {shard_id} TB client: {e}")),
             );

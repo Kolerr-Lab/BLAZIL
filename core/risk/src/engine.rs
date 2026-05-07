@@ -16,17 +16,11 @@ use thiserror::Error;
 pub enum RiskError {
     /// Order size exceeds maximum allowed per order
     #[error("order size {order_size} exceeds limit {limit}")]
-    OrderSizeLimitExceeded {
-        order_size: Decimal,
-        limit: Decimal,
-    },
+    OrderSizeLimitExceeded { order_size: Decimal, limit: Decimal },
 
     /// Position size would exceed maximum after order
     #[error("position size {new_size} would exceed limit {limit}")]
-    PositionSizeLimitExceeded {
-        new_size: Decimal,
-        limit: Decimal,
-    },
+    PositionSizeLimitExceeded { new_size: Decimal, limit: Decimal },
 
     /// Notional exposure per instrument would exceed maximum
     #[error("notional {new_notional} for {instrument} would exceed limit {limit}")]
@@ -38,10 +32,7 @@ pub enum RiskError {
 
     /// Total notional exposure across all instruments would exceed maximum
     #[error("total notional {new_total} would exceed limit {limit}")]
-    TotalNotionalLimitExceeded {
-        new_total: Decimal,
-        limit: Decimal,
-    },
+    TotalNotionalLimitExceeded { new_total: Decimal, limit: Decimal },
 
     /// Account not found in risk engine
     #[error("account {0} not registered in risk engine")]
@@ -219,7 +210,7 @@ impl RiskEngine for InMemoryRiskEngine {
 
     async fn update_position(&self, order: &OrderRequest) {
         let key = (order.account_id.clone(), order.instrument.clone());
-        
+
         self.positions
             .entry(key.clone())
             .and_modify(|pos| pos.update(order.quantity, order.price))
@@ -293,7 +284,9 @@ mod tests {
     #[tokio::test]
     async fn check_order_rejects_oversized_order() {
         let engine = InMemoryRiskEngine::new();
-        engine.register_account(account(), RiskLimit::retail()).await;
+        engine
+            .register_account(account(), RiskLimit::retail())
+            .await;
 
         let order = OrderRequest::new(
             account(),
@@ -302,13 +295,18 @@ mod tests {
             Decimal::new(150, 0),
         );
         let result = engine.check_order(&order).await;
-        assert!(matches!(result, Err(RiskError::OrderSizeLimitExceeded { .. })));
+        assert!(matches!(
+            result,
+            Err(RiskError::OrderSizeLimitExceeded { .. })
+        ));
     }
 
     #[tokio::test]
     async fn check_order_allows_valid_order() {
         let engine = InMemoryRiskEngine::new();
-        engine.register_account(account(), RiskLimit::retail()).await;
+        engine
+            .register_account(account(), RiskLimit::retail())
+            .await;
 
         let order = OrderRequest::new(
             account(),
@@ -328,9 +326,9 @@ mod tests {
             Decimal::new(100, 0),
             Decimal::new(150, 0),
         );
-        
+
         engine.update_position(&order).await;
-        
+
         let pos = engine.get_position(&account(), "AAPL").await.unwrap();
         assert_eq!(pos.quantity(), &Decimal::new(100, 0));
         assert_eq!(pos.instrument(), "AAPL");
@@ -339,7 +337,7 @@ mod tests {
     #[tokio::test]
     async fn update_position_modifies_existing_position() {
         let engine = InMemoryRiskEngine::new();
-        
+
         let order1 = OrderRequest::new(
             account(),
             "AAPL".to_string(),
@@ -355,7 +353,7 @@ mod tests {
             Decimal::new(160, 0),
         );
         engine.update_position(&order2).await;
-        
+
         let pos = engine.get_position(&account(), "AAPL").await.unwrap();
         assert_eq!(pos.quantity(), &Decimal::new(150, 0));
     }
@@ -363,7 +361,7 @@ mod tests {
     #[tokio::test]
     async fn get_account_positions_returns_all_positions() {
         let engine = InMemoryRiskEngine::new();
-        
+
         let order1 = OrderRequest::new(
             account(),
             "AAPL".to_string(),
@@ -379,7 +377,7 @@ mod tests {
             Decimal::new(200, 0),
         );
         engine.update_position(&order2).await;
-        
+
         let positions = engine.get_account_positions(&account()).await;
         assert_eq!(positions.len(), 2);
     }
@@ -387,7 +385,7 @@ mod tests {
     #[tokio::test]
     async fn get_total_notional_sums_all_positions() {
         let engine = InMemoryRiskEngine::new();
-        
+
         let order1 = OrderRequest::new(
             account(),
             "AAPL".to_string(),
@@ -403,7 +401,7 @@ mod tests {
             Decimal::new(200, 0),
         );
         engine.update_position(&order2).await;
-        
+
         let total = engine.get_total_notional(&account()).await;
         assert_eq!(total, Decimal::new(25_000, 0)); // 15000 + 10000
     }
@@ -437,6 +435,9 @@ mod tests {
             Decimal::new(150, 0),
         );
         let result = engine.check_order(&order2).await;
-        assert!(matches!(result, Err(RiskError::PositionSizeLimitExceeded { .. })));
+        assert!(matches!(
+            result,
+            Err(RiskError::PositionSizeLimitExceeded { .. })
+        ));
     }
 }

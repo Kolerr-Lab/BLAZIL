@@ -46,7 +46,8 @@ pub async fn run(events: u64) -> Option<BenchmarkResult> {
             .expect("tokio runtime"),
     );
 
-    let tb = match rt.block_on(TigerBeetleClient::connect(&addr, 0)) {
+    let metrics = blazil_ledger::LedgerMetrics::new();
+    let tb = match rt.block_on(TigerBeetleClient::connect(&addr, 0, metrics)) {
         Ok(c) => Arc::new(c),
         Err(e) => {
             println!("  TigerBeetle: SKIPPED (connect failed: {e})");

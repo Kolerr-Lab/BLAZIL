@@ -35,6 +35,7 @@ use blazil_common::ids::{AccountId, TransferId};
 use crate::account::{Account, AccountFlags};
 use crate::client::LedgerClient;
 use crate::convert;
+use crate::metrics::LedgerMetrics;
 use crate::transfer::Transfer;
 
 // Pull in the TB re-exports from the crate root
@@ -61,6 +62,7 @@ use tigerbeetle_unofficial as tb;
 pub struct TigerBeetleClient {
     inner: tb::Client,
     address: String,
+    metrics: LedgerMetrics,
 }
 
 // ── Address resolution ────────────────────────────────────────────────────────
@@ -111,13 +113,19 @@ impl TigerBeetleClient {
     ///
     /// ```rust,no_run
     /// use blazil_ledger::tigerbeetle::TigerBeetleClient;
+    /// use blazil_ledger::LedgerMetrics;
     ///
     /// #[tokio::main]
     /// async fn main() {
-    ///     let client = TigerBeetleClient::connect("127.0.0.1:3000", 0).await.unwrap();
+    ///     let metrics = LedgerMetrics::new();
+    ///     let client = TigerBeetleClient::connect("127.0.0.1:3000", 0, metrics).await.unwrap();
     /// }
     /// ```
-    pub async fn connect(address: &str, cluster_id: u128) -> BlazerResult<Self> {
+    pub async fn connect(
+        address: &str,
+        cluster_id: u128,
+        metrics: LedgerMetrics,
+    ) -> BlazerResult<Self> {
         // TigerBeetle's Zig-based client (v0.14) only accepts IP:port, not
         // DNS hostnames.  Resolve here so callers can use container names.
         let resolved = resolve_tb_address(address).await?;
@@ -126,6 +134,7 @@ impl TigerBeetleClient {
         Ok(Self {
             inner,
             address: address.to_owned(),
+            metrics,
         })
     }
 
@@ -158,6 +167,7 @@ impl LedgerClient for TigerBeetleClient {
     #[instrument(skip(self, account), fields(account_id = %account.id()))]
     async fn create_account(&self, account: Account) -> BlazerResult<AccountId> {
         let id = *account.id();
+        self.metrics.inc_account_lookups(); // Count the operation
         tracing::debug!(account_id = %id, "submitting create_account to TigerBeetle");
 
         let tb_id = convert::account_id_to_u128(&id);
@@ -179,12 +189,23 @@ impl LedgerClient for TigerBeetleClient {
             .with_user_data_32(u32::from(account.currency().numeric()));
 
         let t0 = Instant::now();
-        self.inner
+        let result = self
+            .inner
             .create_accounts(vec![tb_account])
             .await
-            .map_err(|e| BlazerError::Ledger(format!("create_accounts failed: {e}")))?;
-        tracing::info!(account_id = %id, elapsed_ms = t0.elapsed().as_millis(), "account created in TigerBeetle");
-        Ok(id)
+            .map_err(|e| BlazerError::Ledger(format!("create_accounts failed: {e}")));
+
+        match &result {
+            Ok(_) => {
+                self.metrics.inc_accounts_created();
+                tracing::info!(account_id = %id, elapsed_ms = t0.elapsed().as_millis(), "account created in TigerBeetle");
+            }
+            Err(_) => {
+                self.metrics.inc_accounts_created_errors();
+            }
+        }
+
+        result.map(|_| id)
     }
 
     #[instrument(skip(self, transfer), fields(transfer_id = %transfer.id()))]
@@ -195,12 +216,23 @@ impl LedgerClient for TigerBeetleClient {
         let tb_transfer = domain_transfer_to_tb(&transfer)?;
 
         let t0 = Instant::now();
-        self.inner
+        let result = self
+            .inner
             .create_transfers(vec![tb_transfer])
             .await
-            .map_err(|e| BlazerError::Ledger(format!("create_transfers failed: {e}")))?;
-        tracing::info!(transfer_id = %transfer_id, elapsed_ms = t0.elapsed().as_millis(), "transfer committed to TigerBeetle");
-        Ok(transfer_id)
+            .map_err(|e| BlazerError::Ledger(format!("create_transfers failed: {e}")));
+
+        match &result {
+            Ok(_) => {
+                self.metrics.inc_transfers_created();
+                tracing::info!(transfer_id = %transfer_id, elapsed_ms = t0.elapsed().as_millis(), "transfer committed to TigerBeetle");
+            }
+            Err(_) => {
+                self.metrics.inc_transfers_created_errors();
+            }
+        }
+
+        result.map(|_| transfer_id)
     }
 
     async fn create_transfers_batch(
@@ -231,6 +263,7 @@ impl LedgerClient for TigerBeetleClient {
 
         if !tb_transfers.is_empty() {
             let submitted = tb_transfers.len();
+            self.metrics.inc_transfers_batch(submitted as u64);
             let t0 = Instant::now();
             match self.inner.create_transfers(tb_transfers).await {
                 Ok(()) => {
@@ -293,6 +326,7 @@ impl LedgerClient for TigerBeetleClient {
                         elapsed_ms = t0.elapsed().as_millis(),
                         "batch create_transfers partial failure"
                     );
+                    self.metrics.inc_transfers_batch_partial_failures();
                 }
                 Err(e) => {
                     // Wholesale transport failure (session closed, timeout, connection
@@ -301,6 +335,7 @@ impl LedgerClient for TigerBeetleClient {
                     // (LedgerHandler) must retry the same batch; idempotent transfer
                     // IDs ensure at-most-once semantics even if the batch was partially
                     // committed before the interruption.
+                    self.metrics.inc_transfers_batch_transport_errors();
                     for &orig_i in &tb_to_orig {
                         results[orig_i] = Some(Err(BlazerError::LedgerTransient(format!(
                             "create_transfers transport error (retryable): {e}"
@@ -339,44 +374,62 @@ impl LedgerClient for TigerBeetleClient {
 
     #[instrument(skip(self))]
     async fn get_account(&self, id: &AccountId) -> BlazerResult<Account> {
+        self.metrics.inc_account_lookups();
         tracing::debug!(account_id = %id, "looking up account in TigerBeetle");
 
         let tb_id = convert::account_id_to_u128(id);
         let t0 = Instant::now();
-        let mut results = self
+        let result = self
             .inner
             .lookup_accounts(vec![tb_id])
             .await
-            .map_err(|e| BlazerError::Ledger(format!("lookup_accounts failed: {e}")))?;
+            .map_err(|e| BlazerError::Ledger(format!("lookup_accounts failed: {e}")));
+
         tracing::debug!(account_id = %id, elapsed_ms = t0.elapsed().as_millis(), "lookup_accounts completed");
 
-        let tb_account = results.pop().ok_or_else(|| BlazerError::NotFound {
-            resource: "Account".to_owned(),
-            id: id.to_string(),
-        })?;
-
-        tb_account_to_blazil(tb_account)
+        match result {
+            Ok(mut results) => {
+                let tb_account = results.pop().ok_or_else(|| BlazerError::NotFound {
+                    resource: "Account".to_owned(),
+                    id: id.to_string(),
+                })?;
+                tb_account_to_blazil(tb_account)
+            }
+            Err(e) => {
+                self.metrics.inc_account_lookups_errors();
+                Err(e)
+            }
+        }
     }
 
     #[instrument(skip(self))]
     async fn get_transfer(&self, id: &TransferId) -> BlazerResult<Transfer> {
+        self.metrics.inc_transfer_lookups();
         tracing::debug!(transfer_id = %id, "looking up transfer in TigerBeetle");
 
         let tb_id = convert::transfer_id_to_u128(id);
         let t0 = Instant::now();
-        let mut results = self
+        let result = self
             .inner
             .lookup_transfers(vec![tb_id])
             .await
-            .map_err(|e| BlazerError::Ledger(format!("lookup_transfers failed: {e}")))?;
+            .map_err(|e| BlazerError::Ledger(format!("lookup_transfers failed: {e}")));
+
         tracing::debug!(transfer_id = %id, elapsed_ms = t0.elapsed().as_millis(), "lookup_transfers completed");
 
-        let tb_transfer = results.pop().ok_or_else(|| BlazerError::NotFound {
-            resource: "Transfer".to_owned(),
-            id: id.to_string(),
-        })?;
-
-        tb_transfer_to_blazil(tb_transfer)
+        match result {
+            Ok(mut results) => {
+                let tb_transfer = results.pop().ok_or_else(|| BlazerError::NotFound {
+                    resource: "Transfer".to_owned(),
+                    id: id.to_string(),
+                })?;
+                tb_transfer_to_blazil(tb_transfer)
+            }
+            Err(e) => {
+                self.metrics.inc_transfer_lookups_errors();
+                Err(e)
+            }
+        }
     }
 
     #[instrument(skip(self, ids), fields(count = ids.len()))]
@@ -384,23 +437,30 @@ impl LedgerClient for TigerBeetleClient {
         if ids.is_empty() {
             return Ok(vec![]);
         }
+        self.metrics.inc_batch_account_lookups(ids.len() as u64);
         let tb_ids: Vec<u128> = ids.iter().map(convert::account_id_to_u128).collect();
         let t0 = Instant::now();
-        let tb_accounts = self
+        let result = self
             .inner
             .lookup_accounts(tb_ids)
             .await
-            .map_err(|e| BlazerError::Ledger(format!("lookup_accounts (batch) failed: {e}")))?;
+            .map_err(|e| BlazerError::Ledger(format!("lookup_accounts (batch) failed: {e}")));
         tracing::debug!(
             count = ids.len(),
             elapsed_ms = t0.elapsed().as_millis(),
             "batch lookup_accounts completed"
         );
 
-        tb_accounts
-            .into_iter()
-            .map(tb_account_to_blazil)
-            .collect::<BlazerResult<Vec<_>>>()
+        match result {
+            Ok(tb_accounts) => tb_accounts
+                .into_iter()
+                .map(tb_account_to_blazil)
+                .collect::<BlazerResult<Vec<_>>>(),
+            Err(e) => {
+                self.metrics.inc_batch_account_lookups_errors();
+                Err(e)
+            }
+        }
     }
 }
 
