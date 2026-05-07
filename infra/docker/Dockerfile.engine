@@ -29,7 +29,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # from the cargo build step.
 # NOTE: Using ziglang.org directly (pkg.machengine.org redirect times out).
 # Download to file first, verify, then extract (safer than piping).
-RUN curl -fsSL --retry 5 --retry-delay 5 --max-time 120 \
+# Reduced retries (3) and timeout (60s) to fail faster on persistent network issues.
+RUN curl -fsSL --retry 3 --retry-delay 3 --connect-timeout 30 --max-time 60 \
         -o /tmp/zig.tar.xz \
         https://ziglang.org/download/0.14.1/zig-x86_64-linux-0.14.1.tar.xz \
     && test -f /tmp/zig.tar.xz \
