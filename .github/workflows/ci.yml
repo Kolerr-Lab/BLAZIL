@@ -183,7 +183,7 @@ jobs:
         run: |
           docker compose \
             -f infra/docker/docker-compose.demo.yml \
-            build
+            build --no-cache
 
       - name: Validate compose config
         run: |
