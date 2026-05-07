@@ -11,3 +11,9 @@ serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 anyhow = { workspace = true }
+rust_decimal = { version = "1", features = ["serde"] }
+dashmap = "6.1"
+async-trait = "0.1"
+
+[dev-dependencies]
+tokio-test = "0.4"
