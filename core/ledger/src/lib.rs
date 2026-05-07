@@ -8,6 +8,7 @@ pub mod account;
 pub mod client;
 pub mod convert;
 pub mod double_entry;
+pub mod metrics;
 pub mod mock;
 pub mod transfer;
 
@@ -16,5 +17,6 @@ pub mod tigerbeetle;
 
 pub use account::{Account, AccountFlags};
 pub use client::LedgerClient;
+pub use metrics::LedgerMetrics;
 pub use mock::InMemoryLedgerClient;
 pub use transfer::{Transfer, TransferFlags};
