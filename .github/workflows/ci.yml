@@ -177,6 +177,26 @@ jobs:
       - name: Set up Docker Buildx (enables BuildKit cache mounts)
         uses: docker/setup-buildx-action@v3
 
+      - name: Cache Zig binary
+        id: cache-zig
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/zig
+          key: zig-0.14.1-linux-x86_64
+
+      - name: Download Zig (if not cached)
+        if: steps.cache-zig.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/.cache/zig
+          curl -fsSL --retry 5 --retry-delay 10 --connect-timeout 60 --max-time 300 \
+            -o ~/.cache/zig/zig-x86_64-linux-0.14.1.tar.xz \
+            https://ziglang.org/download/0.14.1/zig-x86_64-linux-0.14.1.tar.xz
+          echo "Zig tarball size: $(stat -c%s ~/.cache/zig/zig-x86_64-linux-0.14.1.tar.xz) bytes"
+
+      - name: Copy Zig to Docker build context
+        run: |
+          cp ~/.cache/zig/zig-x86_64-linux-0.14.1.tar.xz infra/docker/
+
       - name: Build demo stack
         env:
           DOCKER_BUILDKIT: "1"
