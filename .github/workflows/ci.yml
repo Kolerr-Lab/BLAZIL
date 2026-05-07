@@ -195,9 +195,9 @@ jobs:
 
       - name: Copy Zig to Docker build context
         run: |
-          cp ~/.cache/zig/zig-x86_64-linux-0.14.1.tar.xz infra/docker/
-          ls -lh infra/docker/zig-x86_64-linux-0.14.1.tar.xz
-          echo "Zig tarball ready for Docker build"
+          cp ~/.cache/zig/zig-x86_64-linux-0.14.1.tar.xz ./zig-x86_64-linux-0.14.1.tar.xz
+          ls -lh ./zig-x86_64-linux-0.14.1.tar.xz
+          echo "Zig tarball ready for Docker build (project root)"
 
       - name: Build demo stack
         env:
