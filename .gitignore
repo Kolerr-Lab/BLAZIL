@@ -101,3 +101,7 @@ target/criterion/**/*.csv
 # Pre-built stresstest binaries (cross-compiled locally, not committed)
 tools/stresstest/stresstest-linux
 tools/stresstest/stresstest-linux-arm64
+
+# Next.js build artifacts
+tools/ai-dashboard/.next/
+tools/bench-dashboard/.next/
