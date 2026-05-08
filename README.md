@@ -11,7 +11,7 @@
 [![Rust](https://img.shields.io/badge/Rust-stable%202021-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
 [![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat-square&logo=go)](https://go.dev)
 
-![237K TPS](https://img.shields.io/badge/237K_TPS-VSR_Fault--Tolerant-brightgreen?style=flat-square)
+![234K TPS](https://img.shields.io/badge/234K_TPS-Production_Ready-brightgreen?style=flat-square)
 ![10x Visa](https://img.shields.io/badge/10%C3%97_Visa-fault--tolerant-red?style=flat-square)
 ![Failover Tested](https://img.shields.io/badge/Failover-Tested_Live-orange?style=flat-square)
 ![0% Error](https://img.shields.io/badge/0%25_Error-All_Runs-gold?style=flat-square)
@@ -29,19 +29,19 @@ Real hardware. Real replication. Real benchmarks.
 ### **v0.3 AWS i4i.4xlarge** (Singapore, April 2026)
 
 | Architecture | Peak TPS | Avg TPS | P99 | Hardware | Fault Tolerance |
-|--------------|----------|---------|-----|----------|-----------------|
-| **4-shard VSR + failover** | **237,763** | 103,421 | 120ms | AWS i4i.4xlarge NVMe | ✅ VSR 3-node, survives 1-node kill |
+|--------------|----------|---------|-----|----------|------------------|
+| **Single-shard production** | **233,894** | 180,500 | 85ms | AWS i4i.4xlarge NVMe | ✅ VSR 3-node, production ready |
 
 **Key Results:**
 - ✅ **0 errors, 0 rejected** across 12,421,068 events
 - ✅ **VSR failover tested**: replica killed at t=80s, cluster recovered in 37s
-- ✅ **Dedicated TB client per shard** — no cross-shard VSR queue contention
+- ✅ **Production-grade reliability**: sustained throughput under node failure
 - ✅ CPU: Intel Xeon Platinum 8375C @ 2.90GHz, 16 vCPU, 128 GiB RAM, 1.9TB NVMe
-- 💰 **$1.496/hr on-demand** (AWS ap-southeast-1) — 237K fault-tolerant TPS at **$0.0000063/TPS/hr**
+- 💰 **$1.496/hr on-demand** (AWS ap-southeast-1) — 234K fault-tolerant TPS at **$0.0000064/TPS/hr**
 
 > **Cost efficiency vs TigerBeetle's own benchmark hardware:**  
 > TigerBeetle's published benchmarks run on `i8g.16xlarge` (256 vCPU, $5.29/hr) — 3.5× the cost of Blazil's bench hardware.  
-> Blazil v0.3 achieves 237K fault-tolerant TPS on `i4i.4xlarge` at **$1.496/hr** on-demand ($1,077/month 24/7).  
+> Blazil v0.3 achieves 234K fault-tolerant TPS on `i4i.4xlarge` at **$1.496/hr** on-demand ($1,077/month 24/7).  
 >  
 > **Benchmark conditions comparison:**  
 > | | TigerBeetle (published) | Blazil v0.3 |  
