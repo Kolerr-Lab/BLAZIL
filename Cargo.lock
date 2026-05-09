@@ -584,6 +584,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "blazil-screening"
+version = "0.3.2"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "dashmap",
+ "serde",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "blazil-transport"
 version = "0.1.0"
 dependencies = [

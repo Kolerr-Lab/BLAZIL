@@ -13,6 +13,7 @@ members = [
     "tools/ml-bench",
     "services/inference",
     "libs/audit",
+    "libs/screening",
 ]
 
 [workspace.package]
