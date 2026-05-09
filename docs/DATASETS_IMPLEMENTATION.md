@@ -314,7 +314,7 @@ Blazil's value proposition remains **transport speed** (io_uring + Aeron IPC), n
 ### Blazil Advantage
 - **Same transport speed** regardless of data type
 - **8-12× cheaper** than alternatives
-- **Proven performance:** 237K TPS (fintech), 1500-2000 RPS target (AI)
+- **Proven performance:** 234K TPS (fintech), 1500-2000 RPS target (AI)
 
 ## Future Enhancements
 

@@ -111,7 +111,7 @@ Real hardware. Real replication. Real benchmarks.
 | **Stripe** | ~5,000 (est.) | **87×** | Payment API provider |
 | **Blazil v0.2 (Sharded, DO)** | **436,351** | — | 3-node DO cluster, 0% error |
 | **Blazil v0.2 (VSR, DO)** | **130,998** | — | Fault-tolerant consensus |
-| **Blazil v0.3 (VSR, AWS i4i)** | **237,763** | — | 4-shard VSR + live failover, 0% error |
+| **Blazil v0.3 (VSR, AWS i4i)** | **233,894** | — | Single-shard production, VSR + live failover, 0% error |
 
 > All Blazil numbers: real hardware, real TigerBeetle consensus, real disk writes, 0% error rate.  
 > Competitors: published peak capacity (often marketing numbers, not sustained).
@@ -262,7 +262,7 @@ Grafana → `http://<node-1-ip>:3001` (admin / blazil)
 | Visa peak | ~24,000 | **18×** | Published peak |
 | **Blazil v0.2 (VSR, fault-tolerant)** | **130,998** | — | 3-node DO consensus, 0% error |
 | **Blazil v0.2 (Sharded, max throughput)** | **436,351** | — | 3× independent nodes, 0% error |
-| **Blazil v0.3 (VSR, AWS i4i)** | **237,763** | — | 4-shard VSR + failover, 0% error |
+| **Blazil v0.3 (VSR, AWS i4i)** | **233,894** | — | Single-shard production, VSR + failover, 0% error |
 
 > All Blazil v0.2 DO numbers: real TigerBeetle VSR replication, real O_DIRECT disk writes, real TCP transport.  
 > 3-node DO Premium AMD NVMe cluster (SGP1). 1M–3M events, 0 rejected, 0 errors.  
@@ -274,7 +274,7 @@ Grafana → `http://<node-1-ip>:3001` (admin / blazil)
 | v0.1 | 62,770 | — | 23ms | 2.6× | 62× | Tokio UDP, gRPC |
 | v0.2 Option A | **130,998** | 1,774ms | 2,747ms | **5.5×** | **131×** | VSR 3-replica, DO AMD ✅ |
 | v0.2 Option B | **436,351** | 1,803ms | 2,627ms | **18×** | **436×** | Sharded 3-node, DO AMD |
-| v0.3 VSR + failover | **237,763** peak | 80ms | 120ms | **10×** | **237×** | AWS i4i.4xlarge, 4-shard, VSR live failover ✅ |
+| v0.3 VSR + failover | **233,894** peak | 80ms | 85ms | **10×** | **234×** | AWS i4i.4xlarge, single-shard, VSR live failover ✅ |
 
 > Hardware: 3× DO Premium AMD NVMe (s-4vcpu-8gb-amd), Ubuntu 24.04, TigerBeetle 0.16.78.  
 > **0 errors, 0 rejected** across all runs.
@@ -302,7 +302,7 @@ ssh root@<node-1> './stresstest-linux -target=<private-ip>:50051 -duration=120s'
 ### Overview
 
 Blazil extends its high-performance transport infrastructure to AI workloads, providing:
-- **Same speed**: io_uring + Aeron IPC data pipeline (proven at 237K TPS fintech, targeting 1,500-2,000 RPS AI)
+- **Same speed**: io_uring + Aeron IPC data pipeline (proven at 234K TPS fintech, targeting 1,500-2,000 RPS AI)
 - **Data-agnostic**: Generic `Sample { data: Vec<u8> }` flows any data type through the pipeline
 - **Cost advantage**: 8-12× cheaper than NVIDIA Triton ($84/month DO vs $80K/month 8-GPU setup)
 - **Pure Rust stack**: Tract ONNX inference + io_uring dataloader (no Python, no PyTorch)
@@ -353,7 +353,7 @@ graph LR
 |--------|--------|----------|-------|
 | **Inference RPS** | 1,500-2,000 | DO Premium AMD (4 vCPU, 8GB, $84/month) | Tract ONNX, CPU-only |
 | **Cost per RPS** | **$0.042/RPS/month** | vs NVIDIA Triton: $266/RPS/month (8 GPUs, $80K/month, 300K RPS) | **8-12× cheaper** |
-| **Data throughput** | Same as fintech | io_uring zero-copy | Proven at 237K TPS |
+| **Data throughput** | Same as fintech | io_uring zero-copy | Proven at 234K TPS |
 
 **vs Competitors:**
 
@@ -413,7 +413,7 @@ graph LR
 |---------|--------|--------------|----------|
 | **v0.1** | ✅ Done | 62,770 TPS (DO, gRPC) | Core engine, VSR consensus, gRPC streaming |
 | **v0.2** | ✅ Done | 1.2M TPS local · **436K TPS DO (sharded)** · **131K TPS DO (VSR)** | Aeron IPC, io_uring, sharded-tb E2E, TigerBeetle VSR, 0% error |
-| **v0.3** | ✅ Done | **237K peak TPS** (AWS i4i.4xlarge VSR) | Dedicated TB client/shard, live VSR failover test, AWS NVMe, 0% error |
+| **v0.3** | ✅ Done | **234K peak TPS** (AWS i4i.4xlarge VSR) | Production-grade single-shard, live VSR failover test, AWS NVMe, 0% error |
 | **v0.3.1 AI** | ✅ Done | 1,500-2,000 RPS target (AI inference) | 5 production datasets, Tract ONNX, io_uring dataloader, 57 tests passing |
 | **v0.3.2 Priority** | ✅ Done | Same TPS, <1ms critical latency | Multi-stream priority routing (Critical/High/Normal), 429 tests, 0 Clippy warnings |
 | **v0.4** | 🔭 Future | est. 5-10M TPS | Bare-metal NVMe Gen4, XDP kernel bypass, larger ring buffer, multi-region |
