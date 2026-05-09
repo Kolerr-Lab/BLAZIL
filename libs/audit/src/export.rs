@@ -126,8 +126,8 @@ impl LogExporter {
     fn result_to_severity(result: &crate::AuditResult) -> u8 {
         match result {
             crate::AuditResult::Success => 5, // Informational
-            crate::AuditResult::Pending => 6,  // Informational
-            crate::AuditResult::Failure => 8,  // High severity
+            crate::AuditResult::Pending => 6, // Informational
+            crate::AuditResult::Failure => 8, // High severity
         }
     }
 }

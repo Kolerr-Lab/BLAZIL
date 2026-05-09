@@ -107,8 +107,8 @@ impl AuditLog {
         let filtered: Vec<&AuditEntry> = entries
             .iter()
             .filter(|e| {
-                let after_start = start.map_or(true, |s| e.sequence >= s);
-                let before_end = end.map_or(true, |e_val| e.sequence < e_val);
+                let after_start = start.is_none_or(|s| e.sequence >= s);
+                let before_end = end.is_none_or(|e_val| e.sequence < e_val);
                 after_start && before_end
             })
             .collect();

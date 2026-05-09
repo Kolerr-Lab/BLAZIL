@@ -160,18 +160,12 @@ async fn test_compliance_hold_and_release() {
     assert_eq!(events.len(), 4);
 
     // Find held and released events
-    let held = events.iter().find(|e| {
-        matches!(
-            e.event.action,
-            AuditAction::TransactionHeld
-        )
-    });
-    let released = events.iter().find(|e| {
-        matches!(
-            e.event.action,
-            AuditAction::TransactionReleased
-        )
-    });
+    let held = events
+        .iter()
+        .find(|e| matches!(e.event.action, AuditAction::TransactionHeld));
+    let released = events
+        .iter()
+        .find(|e| matches!(e.event.action, AuditAction::TransactionReleased));
 
     assert!(held.is_some());
     assert!(released.is_some());
@@ -201,10 +195,7 @@ async fn test_sar_generation() {
     assert_eq!(events.len(), 1);
 
     let sar_event = &events[0];
-    assert!(matches!(
-        sar_event.event.action,
-        AuditAction::SarGenerated
-    ));
+    assert!(matches!(sar_event.event.action, AuditAction::SarGenerated));
     assert!(sar_event.event.metadata.is_some());
 }
 
