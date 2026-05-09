@@ -160,7 +160,7 @@ TPS = TB_batch_size / VSR_RTT
 | Resulting ceiling | ~45,500 TPS | Math matches measurement |
 | Peak in healthy windows | 61,102–64,000 TPS | When VSR RTT drops to ~17ms |
 
-**Conclusion:** Blazil pipeline code is not the bottleneck. Ceiling is DO shared VM disk I/O → TigerBeetle VSR journal write latency. Bare-metal NVMe (VSR RTT ~7ms) projects to **1,170,000 TPS** (`8,190 / 0.007`).
+**Conclusion:** Blazil pipeline code is not the bottleneck. Ceiling is DO shared VM disk I/O → TigerBeetle VSR journal write latency. AWS i8g.16xlarge Graviton 4 with enterprise NVMe (VSR RTT ~7-10ms) projects to **1M+ TPS** with 4-node sharded cluster.
 
 ### Optimizations Shipped (April 11, 2026)
 

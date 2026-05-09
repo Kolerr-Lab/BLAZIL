@@ -76,7 +76,7 @@ Real hardware. Real replication. Real benchmarks.
 > **Bottleneck analysis:**  
 > p50/p99 latency dominated by disk I/O (TigerBeetle fsync 1-2s, DO throttles "Premium NVMe" at 100-127 MB/s).  
 > Ring buffer backpressure adds ~200-500ms when saturated.  
-> **On bare-metal NVMe Gen4**: estimated 5-10M TPS (Option B), 1-2M TPS (Option A) with <100ms latency.
+> **On AWS i8g.16xlarge Graviton 4 NVMe**: v0.4 targets 1M+ TPS with 4-node sharded VSR cluster and <100ms latency.
 >
 > **Full reports:**  
 > - [Option B Sharded Aggregate (436K TPS)](docs/runs/2026-04-13_option-b-sharded-aggregate.md)  
@@ -416,7 +416,8 @@ graph LR
 | **v0.3** | ✅ Done | **233,894 peak TPS** (AWS i4i.4xlarge VSR) | Production-grade single-shard, live VSR failover test, AWS NVMe, 0% error |
 | **v0.3.1 AI** | ✅ Done | 1,500-2,000 RPS target (AI inference) | 5 production datasets, Tract ONNX, io_uring dataloader, 57 tests passing |
 | **v0.3.2 Priority** | ✅ Done | Same TPS, <1ms critical latency | Multi-stream priority routing (Critical/High/Normal), 429 tests, 0 Clippy warnings |
-| **v0.4** | 🔭 Future | est. 5-10M TPS | Bare-metal NVMe Gen4, XDP kernel bypass, larger ring buffer, multi-region |
+| **v0.4 Fintech Scale** | 🔭 Future | 1M+ TPS target | 4× AWS i8g.16xlarge Graviton 4 sharded VSR cluster, production benchmark pending |
+| **v0.5 AI Production** | 🔭 Future | TBD RPS | AI inference production benchmark on AWS i4i.4xlarge, cost efficiency validation |
 
 ---
 
