@@ -302,9 +302,9 @@ ssh root@<node-1> './stresstest-linux -target=<private-ip>:50051 -duration=120s'
 ### Overview
 
 Blazil extends its high-performance transport infrastructure to AI workloads, providing:
-- **Same speed**: io_uring + Aeron IPC data pipeline (proven at 233,894 TPS fintech, targeting 1,500-2,000 RPS AI)
+- **Same speed**: io_uring + Aeron IPC data pipeline (proven at 233,894 TPS fintech, estimated 1,500-2,000 RPS AI)
 - **Data-agnostic**: Generic `Sample { data: Vec<u8> }` flows any data type through the pipeline
-- **Cost advantage**: 8-12× cheaper than NVIDIA Triton ($84/month DO vs $80K/month 8-GPU setup)
+- **Cost advantage**: Estimated 8-12× cheaper than NVIDIA Triton ($84/month DO vs $80K/month 8-GPU setup)
 - **Pure Rust stack**: Tract ONNX inference + io_uring dataloader (no Python, no PyTorch)
 
 ### Datasets (April 2026)
@@ -347,15 +347,15 @@ graph LR
 3. **Batch processing** — Accumulate samples, inference in batches
 4. **Same infrastructure** — Reuse proven fintech transport (Aeron IPC, io_uring)
 
-### Performance Target
+### Performance Estimates (Not Benchmarked)
 
-| Metric | Target | Hardware | Notes |
+| Metric | Estimate | Hardware | Notes |
 |--------|--------|----------|-------|
-| **Inference RPS** | 1,500-2,000 | DO Premium AMD (4 vCPU, 8GB, $84/month) | Tract ONNX, CPU-only |
-| **Cost per RPS** | **$0.042/RPS/month** | vs NVIDIA Triton: $266/RPS/month (8 GPUs, $80K/month, 300K RPS) | **8-12× cheaper** |
+| **Inference RPS** | 1,500-2,000 (estimate) | DO Premium AMD (4 vCPU, 8GB, $84/month) | Tract ONNX, CPU-only |
+| **Cost per RPS** | **~$0.042/RPS/month** | vs NVIDIA Triton: $266/RPS/month (8 GPUs, $80K/month, 300K RPS) | **Est. 8-12× cheaper** |
 | **Data throughput** | Same as fintech | io_uring zero-copy | Proven at 233,894 TPS |
 
-**vs Competitors:**
+**vs Competitors (Estimates):**
 
 | System | RPS | Hardware | Cost/month |
 |--------|-----|----------|------------|
@@ -363,9 +363,9 @@ graph LR
 | ONNX Runtime | 1,000-2,000 | CPU | Variable |
 | TensorFlow Serving | 100-500 | CPU | Variable |
 | PyTorch DataLoader | 10K-200K samples/sec | CPU | Variable |
-| **Blazil AI** | **1,500-2,000** | **DO Premium AMD** | **$84** |
+| **Blazil AI (est.)** | **1,500-2,000** | **DO Premium AMD** | **$84** |
 
-**Blazil advantage:** Same data transport speed regardless of workload (fintech or AI), proven infrastructure reuse, 8-12× cost efficiency.
+**Note:** AI inference has not been benchmarked yet. Numbers are theoretical estimates based on implementation. Production benchmark planned for v0.5 on AWS i4i.4xlarge.
 
 ### Use Cases by Dataset
 
@@ -414,7 +414,7 @@ graph LR
 | **v0.1** | ✅ Done | 62,770 TPS (DO, gRPC) | Core engine, VSR consensus, gRPC streaming |
 | **v0.2** | ✅ Done | 1.2M TPS local · **436K TPS DO (sharded)** · **131K TPS DO (VSR)** | Aeron IPC, io_uring, sharded-tb E2E, TigerBeetle VSR, 0% error |
 | **v0.3** | ✅ Done | **233,894 peak TPS** (AWS i4i.4xlarge VSR) | Production-grade single-shard, live VSR failover test, AWS NVMe, 0% error |
-| **v0.3.1 AI** | ✅ Done | 1,500-2,000 RPS target (AI inference) | 5 production datasets, Tract ONNX, io_uring dataloader, 57 tests passing |
+| **v0.3.1 AI** | 🔨 Implemented | No benchmark yet (1,500-2,000 RPS estimate) | 5 production datasets, Tract ONNX, io_uring dataloader, 57 tests passing |
 | **v0.3.2 Priority** | ✅ Done | Same TPS, <1ms critical latency | Multi-stream priority routing (Critical/High/Normal), 429 tests, 0 Clippy warnings |
 | **v0.4 Fintech Scale** | 🔭 Future | 1M+ TPS target | 4× AWS i8g.16xlarge Graviton 4 sharded VSR cluster, production benchmark pending |
 | **v0.5 AI Production** | 🔭 Future | TBD RPS | AI inference production benchmark on AWS i4i.4xlarge, cost efficiency validation |
