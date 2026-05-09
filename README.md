@@ -37,11 +37,11 @@ Real hardware. Real replication. Real benchmarks.
 - ✅ **VSR failover tested**: replica killed at t=80s, cluster recovered in 37s
 - ✅ **Production-grade reliability**: sustained throughput under node failure
 - ✅ CPU: Intel Xeon Platinum 8375C @ 2.90GHz, 16 vCPU, 128 GiB RAM, 1.9TB NVMe
-- 💰 **$1.496/hr on-demand** (AWS ap-southeast-1) — 234K fault-tolerant TPS at **$0.0000064/TPS/hr**
+- 💰 **$1.496/hr on-demand** (AWS ap-southeast-1) — 233,894 fault-tolerant TPS at **$0.0000064/TPS/hr**
 
 > **Cost efficiency vs TigerBeetle's own benchmark hardware:**  
 > TigerBeetle's published benchmarks run on `i8g.16xlarge` (256 vCPU, $5.29/hr) — 3.5× the cost of Blazil's bench hardware.  
-> Blazil v0.3 achieves 234K fault-tolerant TPS on `i4i.4xlarge` at **$1.496/hr** on-demand ($1,077/month 24/7).  
+> Blazil v0.3 achieves 233,894 fault-tolerant TPS on `i4i.4xlarge` at **$1.496/hr** on-demand ($1,077/month 24/7).  
 >  
 > **Benchmark conditions comparison:**  
 > | | TigerBeetle (published) | Blazil v0.3 |  
@@ -302,7 +302,7 @@ ssh root@<node-1> './stresstest-linux -target=<private-ip>:50051 -duration=120s'
 ### Overview
 
 Blazil extends its high-performance transport infrastructure to AI workloads, providing:
-- **Same speed**: io_uring + Aeron IPC data pipeline (proven at 234K TPS fintech, targeting 1,500-2,000 RPS AI)
+- **Same speed**: io_uring + Aeron IPC data pipeline (proven at 233,894 TPS fintech, targeting 1,500-2,000 RPS AI)
 - **Data-agnostic**: Generic `Sample { data: Vec<u8> }` flows any data type through the pipeline
 - **Cost advantage**: 8-12× cheaper than NVIDIA Triton ($84/month DO vs $80K/month 8-GPU setup)
 - **Pure Rust stack**: Tract ONNX inference + io_uring dataloader (no Python, no PyTorch)
@@ -353,7 +353,7 @@ graph LR
 |--------|--------|----------|-------|
 | **Inference RPS** | 1,500-2,000 | DO Premium AMD (4 vCPU, 8GB, $84/month) | Tract ONNX, CPU-only |
 | **Cost per RPS** | **$0.042/RPS/month** | vs NVIDIA Triton: $266/RPS/month (8 GPUs, $80K/month, 300K RPS) | **8-12× cheaper** |
-| **Data throughput** | Same as fintech | io_uring zero-copy | Proven at 234K TPS |
+| **Data throughput** | Same as fintech | io_uring zero-copy | Proven at 233,894 TPS |
 
 **vs Competitors:**
 
@@ -413,7 +413,7 @@ graph LR
 |---------|--------|--------------|----------|
 | **v0.1** | ✅ Done | 62,770 TPS (DO, gRPC) | Core engine, VSR consensus, gRPC streaming |
 | **v0.2** | ✅ Done | 1.2M TPS local · **436K TPS DO (sharded)** · **131K TPS DO (VSR)** | Aeron IPC, io_uring, sharded-tb E2E, TigerBeetle VSR, 0% error |
-| **v0.3** | ✅ Done | **234K peak TPS** (AWS i4i.4xlarge VSR) | Production-grade single-shard, live VSR failover test, AWS NVMe, 0% error |
+| **v0.3** | ✅ Done | **233,894 peak TPS** (AWS i4i.4xlarge VSR) | Production-grade single-shard, live VSR failover test, AWS NVMe, 0% error |
 | **v0.3.1 AI** | ✅ Done | 1,500-2,000 RPS target (AI inference) | 5 production datasets, Tract ONNX, io_uring dataloader, 57 tests passing |
 | **v0.3.2 Priority** | ✅ Done | Same TPS, <1ms critical latency | Multi-stream priority routing (Critical/High/Normal), 429 tests, 0 Clippy warnings |
 | **v0.4** | 🔭 Future | est. 5-10M TPS | Bare-metal NVMe Gen4, XDP kernel bypass, larger ring buffer, multi-region |
