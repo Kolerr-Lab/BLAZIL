@@ -79,17 +79,16 @@ impl LogExporter {
         let hash = &entry.entry_hash[..16]; // First 16 chars of hash
 
         let mut extensions = format!(
-            "rt={} src={} txId={} outcome={} seq={} hash={}",
-            timestamp, src, tx_id, outcome, seq, hash
+            "rt={timestamp} src={src} txId={tx_id} outcome={outcome} seq={seq} hash={hash}",
         );
 
         if let Some(latency_ns) = entry.event.latency_ns {
-            extensions.push_str(&format!(" latency={}", latency_ns));
+            extensions.push_str(&format!(" latency={latency_ns}"));
         }
 
         if let Some(ref metadata) = entry.event.metadata {
             if let Ok(meta_str) = serde_json::to_string(metadata) {
-                extensions.push_str(&format!(" metadata={}", meta_str));
+                extensions.push_str(&format!(" metadata={meta_str}"));
             }
         }
 
@@ -98,8 +97,7 @@ impl LogExporter {
         }
 
         format!(
-            "CEF:{}|{}|{}|{}|{}|{}|{}|{}",
-            version, vendor, product, product_version, signature_id, name, severity, extensions
+            "CEF:{version}|{vendor}|{product}|{product_version}|{signature_id}|{name}|{severity}|{extensions}",
         )
     }
 
@@ -210,7 +208,7 @@ mod tests {
 
         for i in 0..10 {
             let event = AuditEvent::new(
-                format!("tx_{}", i),
+                format!("tx_{i}"),
                 "actor_1".to_string(),
                 AuditAction::TransactionCreated,
             );

@@ -156,8 +156,8 @@ mod tests {
 
         for i in 0..10 {
             let event = AuditEvent::new(
-                format!("tx_{}", i),
-                format!("actor_{}", i),
+                format!("tx_{i}"),
+                format!("actor_{i}"),
                 AuditAction::TransactionCreated,
             );
             log.record(event).await;
@@ -231,8 +231,8 @@ mod tests {
 
         for i in 0..10 {
             let event = AuditEvent::new(
-                format!("tx_{}", i),
-                format!("actor_{}", i),
+                format!("tx_{i}"),
+                format!("actor_{i}"),
                 AuditAction::TransactionCreated,
             );
             log.record(event).await;
@@ -247,8 +247,8 @@ mod tests {
 
         for i in 0..10 {
             let event = AuditEvent::new(
-                format!("tx_{}", i),
-                format!("actor_{}", i),
+                format!("tx_{i}"),
+                format!("actor_{i}"),
                 AuditAction::TransactionCreated,
             );
             log.record(event).await;
@@ -289,8 +289,8 @@ mod tests {
             let log_clone = log.clone();
             let handle = tokio::spawn(async move {
                 let event = AuditEvent::new(
-                    format!("tx_{}", i),
-                    format!("actor_{}", i),
+                    format!("tx_{i}"),
+                    format!("actor_{i}"),
                     AuditAction::TransactionCreated,
                 );
                 log_clone.record(event).await;
