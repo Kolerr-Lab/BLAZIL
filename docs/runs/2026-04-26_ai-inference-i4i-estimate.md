@@ -311,4 +311,4 @@ Timeline: 3-6 months, requires CUDA/TensorRT integration
 - **ResNet-50:** 3K-8K RPS, cost $4K/month
 - **Latency:** P99 20-80ms (vs 312ms fintech)
 
-**Recommendation:** Production benchmark will validate actual performance on i4i.4xlarge. GPU acceleration (Phase 4+) needed to reach 200K-400K RPS target.
+**Recommendation:** Start validation on existing DO cluster (free), then scale to i4i.4xlarge if numbers look good. GPU acceleration (Phase 4) needed to reach 200K-400K RPS target.

@@ -8,7 +8,17 @@ This document tracks known performance baselines for AI inference workloads acro
 
 ## Hardware Profiles
 
-### AWS i4i.4xlarge (Production Target)
+### DO Premium AMD NVMe (Target for April 29, 2026 Benchmark)
+```
+Instance: s-4vcpu-8gb-amd
+CPU: 4 vCPU @ 2.0 GHz (AMD EPYC)
+RAM: 8 GB
+Storage: 160 GB NVMe SSD
+Network: 5 TB transfer
+Cost: $84/month ($0.125/hour)
+```
+
+### AWS i4i.4xlarge (Reference from docs)
 ```
 Instance: i4i.4xlarge
 CPU: 16 vCPU @ 2.9 GHz (Intel Ice Lake)
