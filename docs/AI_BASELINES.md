@@ -8,7 +8,7 @@ This document tracks known performance baselines for AI inference workloads acro
 
 ## Hardware Profiles
 
-### DO Premium AMD NVMe (Target for April 29, 2026 Benchmark)
+### DO Premium AMD NVMe (Historical Reference - Not Benchmarked)
 ```
 Instance: s-4vcpu-8gb-amd
 CPU: 4 vCPU @ 2.0 GHz (AMD EPYC)
@@ -16,9 +16,10 @@ RAM: 8 GB
 Storage: 160 GB NVMe SSD
 Network: 5 TB transfer
 Cost: $84/month ($0.125/hour)
+Note: Originally planned for April 29, 2026 benchmark (not conducted)
 ```
 
-### AWS i4i.4xlarge (Reference from docs)
+### AWS i4i.4xlarge (v0.5 Production Benchmark Target)
 ```
 Instance: i4i.4xlarge
 CPU: 16 vCPU @ 2.9 GHz (Intel Ice Lake)
@@ -26,6 +27,7 @@ RAM: 128 GB
 Storage: 1.9 TB NVMe (local)
 Network: Up to 12.5 Gbps
 Cost: ~$1.50/hour (~$1,080/month)
+Note: Target hardware for v0.5 AI production benchmark
 ```
 
 ### Local Development (MacBook Air M4)
@@ -180,13 +182,13 @@ Latency: P50 ~10ms, P99 ~20ms (SqueezeNet)
 
 ## Optimization Targets
 
-**Phase 1 (Current):**
+**Phase 1 (v0.3.1 - Implementation Complete):**
 - ✅ Core inference working (Tract)
 - ✅ Dataloader working (io_uring)
 - ✅ Benchmark tool (ml-bench)
-- 🎯 Establish baseline on DO hardware
+- ❌ Baseline benchmark not conducted (planned for v0.5 on AWS)
 
-**Phase 2 (Next week):**
+**Phase 2 (Future):**
 - 🎯 Adaptive batching (dynamic batch size)
 - 🎯 Worker pool optimization (thread pinning)
 - 🎯 Model caching (reduce load time)

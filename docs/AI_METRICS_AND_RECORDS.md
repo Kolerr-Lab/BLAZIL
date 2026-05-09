@@ -419,29 +419,29 @@ Cost: $0 (uses existing CPUs)
 > "Blazil xử lý **270,000 TPS** (proven) với VSR consensus - nhanh gấp 20 lần Visa, an toàn hơn blockchain. Chi phí chỉ $5K/tháng."
 
 ### AI Training Pitch
-> "Blazil đã chứng minh **130K-270K TPS fintech** với VSR consensus. AI dataloader (io_uring) đang trong quá trình benchmark, mục tiêu 30K-50K samples/sec. Pure CPU infrastructure."
+> "Blazil đã chứng minh **130K-270K TPS fintech** với VSR consensus. AI dataloader (io_uring) code complete, benchmark pending for v0.5. Mục tiêu 30K-50K samples/sec. Pure CPU infrastructure."
 
-### AI Inference Pitch (Phase 4+)
-> "Blazil inference đạt **300,000 RPS** với latency **P99 < 5ms** - ngang NVIDIA Triton nhưng nhanh gấp 4 lần, tiết kiệm 75% chi phí. Aeron IPC transport là bí kíp."
+### AI Inference Pitch (Phase 4+ Target)
+> "Blazil inference **targets 300,000 RPS** với latency **P99 < 5ms** - mục tiêu ngang NVIDIA Triton nhưng tiết kiệm chi phí. Aeron IPC transport là bí kíp. (Phase 4 target, not benchmarked)"
 
-### Unified Pitch (The Killer)
-> "Một hạ tầng Blazil → **270K TPS fintech** (proven VSR consensus) + **300K RPS AI inference** (Phase 4 target) + **dataloader in progress**. Không ai làm được dual-mode này với Aeron IPC. Total cost: $25K/tháng thay vì $100K+ trên AWS."
+### Unified Pitch (The Vision)
+> "Một hạ tầng Blazil → **270K TPS fintech** (proven VSR consensus) + **300K RPS AI inference** (Phase 4 target) + **dataloader code complete** (benchmark pending). Không ai làm được dual-mode này với Aeron IPC. Total estimated cost: $25K/tháng."
 
 ---
 
-## 🔥 Competitive Edge Summary
+## 🔥 Competitive Edge Summary (Target vs Current Industry)
 
-| Feature | NVIDIA Triton | Ray Serve | AWS SageMaker | Blazil |
-|---------|--------------|-----------|---------------|---------|
-| **RPS (4x A100)** | 150K | 50K | 30K | **300K** |
-| **Latency P99** | 20ms | 40ms | 100ms | **<5ms** |
-| **Cost/month** | $40K | $40K | $50K+ | **$20K** |
-| **Multi-model** | Limited | Good | Limited | **Excellent** |
+| Feature | NVIDIA Triton | Ray Serve | AWS SageMaker | Blazil (Target) |
+|---------|--------------|-----------|---------------|---------|  
+| **RPS (4x A100)** | 150K | 50K | 30K | **300K** (Phase 4 target) |
+| **Latency P99** | 20ms | 40ms | 100ms | **<5ms** (target) |
+| **Cost/month** | $40K | $40K | $50K+ | **$20K** (est.) |
+| **Multi-model** | Limited | Good | Limited | **Excellent** (planned) |
 | **Transport** | gRPC | HTTP | HTTP | **Aeron IPC** |
-| **Fintech mode** | ❌ | ❌ | ❌ | **✅ 270K TPS** |
-| **Training data** | ❌ | ❌ | ❌ | **⏳ Target 30-50K** |
+| **Fintech mode** | ❌ | ❌ | ❌ | **✅ 270K TPS** (proven) |
+| **Training data** | ❌ | ❌ | ❌ | **⏳ 30-50K target** (code complete) |
 
-**Winner: Blazil** - Only unified infrastructure for fintech + AI.
+**Note:** AI numbers are Phase 4+ targets based on estimates. Only fintech 270K TPS is proven.
 
 ---
 
