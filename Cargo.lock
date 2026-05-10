@@ -569,6 +569,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "blazil-mas-trm"
+version = "0.3.2"
+dependencies = [
+ "chrono",
+ "serde",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
 name = "blazil-risk"
 version = "0.1.0"
 dependencies = [
