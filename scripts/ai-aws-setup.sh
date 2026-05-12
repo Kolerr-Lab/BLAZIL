@@ -1,25 +1,22 @@
 #!/bin/bash
-# ai-do-setup.sh — Setup Blazil AI inference on DigitalOcean droplet
+# ai-aws-setup.sh — Setup Blazil AI inference on AWS EC2 instance
 #
 # Usage:
-#   ./scripts/ai-do-setup.sh [node-id]
+#   curl -fsSL https://raw.githubusercontent.com/Kolerr-Lab/BLAZIL/main/scripts/ai-aws-setup.sh | sudo bash
+#   # Or locally:
+#   sudo ./scripts/ai-aws-setup.sh
 #
-# Example:
-#   ./scripts/ai-do-setup.sh ai-node-1
+# Hardware: AWS i4i.4xlarge
+#   - 16 vCPU (Intel Ice Lake @ 3.5 GHz)
+#   - 128 GB RAM
+#   - 1× 1.9 TB NVMe SSD (instance store)
+#   - $1.248/hour
 #
-# Hardware: DO Premium AMD NVMe (s-4vcpu-8gb-amd)
-#   - 4 vCPU @ 2.0 GHz
-#   - 8 GB RAM
-#   - 160 GB NVMe SSD
-#   - $84/month ($0.125/hour)
-#
-# Run as root (or with sudo) on fresh Ubuntu 22.04 droplet.
+# Run as root (or with sudo) on fresh Ubuntu 24.04 LTS instance.
 set -e
 
-NODE_ID=${1:-"ai-node-1"}
-
 echo "═══════════════════════════════════════════════"
-echo " Blazil AI Node Setup: $NODE_ID"
+echo " Blazil AI Benchmark Setup (AWS i4i.4xlarge)"
 echo "═══════════════════════════════════════════════"
 
 # ── System packages ───────────────────────────────────────────────────────────
@@ -135,19 +132,20 @@ LOG_FILE="$RESULTS_DIR/ai-bench-$TIMESTAMP.log"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
 echo "╔══════════════════════════════════════════════════════════╗"
-echo "║   BLAZIL AI INFERENCE — DO BENCHMARK                    ║"
-echo "║   SqueezeNet 1.1 · 1M samples · synthetic dataset       ║"
+echo "║   BLAZIL AI INFERENCE — AWS BENCHMARK                   ║"
+echo "║   35-Minute Production Test (Dataloader + SqueezeNet + ResNet) ║"
 echo "╚══════════════════════════════════════════════════════════╝"
 echo ""
-echo "  Model     : SqueezeNet 1.1 (~5 MB)"
-echo "  Samples   : 1,000,000"
-echo "  Batch size: 64"
-echo "  Workers   : 4"
+echo "  Hardware  : AWS i4i.4xlarge (16 vCPU, 128 GB RAM)"
+echo "  Duration  : 35 minutes (10 + 10 + 15)"
+echo "  Models    : SqueezeNet 1.1 (~5 MB), ResNet-50 (~100 MB)"
+echo "  Batch     : Dataloader 256, SqueezeNet 64, ResNet 32"
+echo "  Workers   : 8-16 threads (scaled for 16 vCPU)"
 echo "  Log       : $LOG_FILE"
 echo ""
 
-# Dataloader benchmark
-echo "═══ Phase 1: Dataloader Throughput ═══"
+# Phase 1: Dataloader benchmark (10 min)
+echo "═══ Phase 1: Dataloader Throughput (600s) ═══"
 "$BLAZIL_ROOT/target/release/ml-bench" \
   --mode dataloader \
   --dataset synthetic \

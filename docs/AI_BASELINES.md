@@ -8,26 +8,15 @@ This document tracks known performance baselines for AI inference workloads acro
 
 ## Hardware Profiles
 
-### DO Premium AMD NVMe (Historical Reference - Not Benchmarked)
-```
-Instance: s-4vcpu-8gb-amd
-CPU: 4 vCPU @ 2.0 GHz (AMD EPYC)
-RAM: 8 GB
-Storage: 160 GB NVMe SSD
-Network: 5 TB transfer
-Cost: $84/month ($0.125/hour)
-Note: Originally planned for April 29, 2026 benchmark (not conducted)
-```
-
-### AWS i4i.4xlarge (v0.5 Production Benchmark Target)
+### AWS i4i.4xlarge (Production Benchmark Target)
 ```
 Instance: i4i.4xlarge
-CPU: 16 vCPU @ 2.9 GHz (Intel Ice Lake)
-RAM: 128 GB
-Storage: 1.9 TB NVMe (local)
-Network: Up to 12.5 Gbps
-Cost: ~$1.50/hour (~$1,080/month)
-Note: Target hardware for v0.5 AI production benchmark
+CPU: 16 vCPU @ 3.5 GHz (Intel Ice Lake)
+RAM: 128 GB DDR4
+Storage: 1× 1.9 TB NVMe SSD (instance store)
+Network: Up to 25 Gbps
+Cost: $1.248/hour (~$900/month spot)
+Note: Production benchmark target with enhanced networking
 ```
 
 ### Local Development (MacBook Air M4)
@@ -50,12 +39,12 @@ Latency: P50 ~6-10ms, P99 ~12-15ms
 Memory: 50-100 MB RSS
 ```
 
-**Multi-threaded (4 cores, batch=64):**
+**Multi-threaded (16 cores, batch=64, AWS i4i.4xlarge):**
 ```
-Throughput: 400-600 inferences/sec (DO 4 vCPU estimate)
-           1,600-2,400 inferences/sec (AWS 16 vCPU estimate)
-Latency: P50 ~10-15ms, P99 ~20-30ms (with batching)
+Throughput: 1,600-2,400 inferences/sec
+Latency: P50 ~8-12ms, P99 ~15-25ms (with batching)
 CPU util: 80-90% (compute-bound)
+Memory: 200-400 MB RSS total
 ```
 
 ### ResNet-50 (100 MB model)
@@ -67,12 +56,12 @@ Latency: P50 ~25-50ms, P99 ~60-100ms
 Memory: 200-400 MB RSS (model in RAM)
 ```
 
-**Multi-threaded (4 cores, batch=32):**
+**Multi-threaded (16 cores, batch=32, AWS i4i.4xlarge):**
 ```
-Throughput: 80-160 inferences/sec (DO 4 vCPU estimate)
-           320-640 inferences/sec (AWS 16 vCPU estimate)
-Latency: P50 ~30-50ms, P99 ~80-120ms (with batching)
+Throughput: 320-640 inferences/sec
+Latency: P50 ~25-40ms, P99 ~50-80ms (with batching)
 CPU util: 90-95% (memory bandwidth bottleneck)
+Memory: 500-800 MB RSS total
 ```
 
 ---
@@ -136,37 +125,42 @@ Source: Tract GitHub benchmarks
 
 ---
 
-## Expected DO Results (April 29, 2026)
+## Expected AWS Results (i4i.4xlarge, 16 vCPU, May 2026)
 
 ### Conservative (90% confidence)
 ```
-Dataloader: 500K-1M samples/sec
-SqueezeNet: 300-500 inferences/sec (4 vCPU)
-ResNet-50: 60-120 inferences/sec (4 vCPU)
-Latency: P50 ~15ms, P99 ~30ms (SqueezeNet)
-         P50 ~50ms, P99 ~100ms (ResNet-50)
+Dataloader: 1M-5M samples/sec (io_uring, sequential)
+           500K-1M samples/sec (with shuffle)
+SqueezeNet: 1,600-2,000 inferences/sec
+ResNet-50: 320-450 inferences/sec
+Latency: P50 ~8ms, P99 ~15ms (SqueezeNet)
+         P50 ~25ms, P99 ~50ms (ResNet-50)
 ```
 
-### Optimistic (50% confidence)
+### Optimistic (50% confidence - Blazil Track Record)
 ```
-Dataloader: 1M-2M samples/sec
-SqueezeNet: 500-700 inferences/sec
-ResNet-50: 120-180 inferences/sec
-Latency: P50 ~10ms, P99 ~20ms (SqueezeNet)
-         P50 ~35ms, P99 ~70ms (ResNet-50)
+Dataloader: 5M-10M+ samples/sec (sequential, zero-copy)
+           1M-2M samples/sec (shuffle, random access)
+SqueezeNet: 2,000-2,400 inferences/sec
+ResNet-50: 450-640 inferences/sec
+Latency: P50 ~6ms, P99 ~12ms (SqueezeNet)
+         P50 ~20ms, P99 ~40ms (ResNet-50)
+
+Note: Blazil Fintech proven 233,894 TPS with VSR overhead.
+      AI workload has NO consensus = potentially faster.
 ```
 
 ---
 
 ## Comparison with Fintech Workload
 
-| Metric | Fintech (Proven) | AI Inference (Estimate) | Ratio |
-|--------|------------------|-------------------------|-------|
-| **TPS/RPS** | 130K-270K TPS | 300-700 RPS | 185-900x lower |
-| **Latency** | P99 ~300ms | P99 ~20-30ms | 10-15x faster |
-| **Bottleneck** | VSR consensus | CPU compute | Different |
-| **Hardware** | 4 vCPU DO | 4 vCPU DO | Same |
-| **Workload** | I/O bound (batch) | CPU bound (per-request) | - |
+| Metric | Fintech (Proven) | AI Inference (Target) | Ratio |
+|--------|------------------|----------------------|-------|
+| **TPS/RPS** | 233,894 TPS | 1,600-2,400 RPS (SqueezeNet) | ~100-150x lower |
+| **Latency** | P99 ~300ms | P99 ~15ms | ~20x faster |
+| **Bottleneck** | VSR consensus | CPU/memory bandwidth | Different |
+| **Hardware** | AWS (Fintech) | AWS i4i.4xlarge 16 vCPU | - |
+| **Workload** | I/O bound (batch 8K) | CPU bound (batch 32-64) | - |
 
 **Why TPS is much lower:**
 - Fintech batches 8,190 transfers → amortize overhead
