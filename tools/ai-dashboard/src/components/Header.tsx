@@ -19,7 +19,7 @@ const STATUS_LABEL: Record<BenchStatus, string> = {
   connecting: "Connecting to ml-bench...",
   running: "RUNNING",
   completed: "COMPLETED",
-  error: "Connection failed (retrying with backoff)",
+  error: "Connection failed",
 };
 
 const STATUS_COLOR: Record<BenchStatus, string> = {

@@ -21,8 +21,8 @@ function initialState(): DashboardState {
     shards: new Map(),
     events: [],
     summary: null,
-    current_tps: 0,
-    peak_tps: 0,
+    current_rate: 0,
+    peak_rate: 0,
     total_committed: 0,
     total_rejected: 0,
     total_samples: 0,
@@ -50,7 +50,7 @@ export function useBenchWS(wsUrl: string) {
     pendingTicksRef.current.delete(t);
 
     setState((prev) => {
-      const aggTps = [...shardMap.values()].reduce((s, v) => s + v.tps, 0);
+      const aggRate = [...shardMap.values()].reduce((s, v) => s + v.tps, 0);
       const aggCommitted = [...shardMap.values()].reduce((s, v) => s + v.committed, 0);
       const aggRejected = [...shardMap.values()].reduce((s, v) => s + v.rejected, 0);
       const avgP50 = [...shardMap.values()].reduce((s, v) => s + v.p50_us, 0) / (shardMap.size || 1);
@@ -61,8 +61,8 @@ export function useBenchWS(wsUrl: string) {
 
       const snapshot: SecondSnapshot = {
         t,
-        tps: aggTps,
-        per_shard: [...shardMap.entries()].map(([id, d]) => ({ shard_id: id, tps: d.tps })),
+        rate: aggRate,
+        per_shard: [...shardMap.entries()].map(([id, d]) => ({ shard_id: id, rate: d.tps })),
         error_rate: errorRate,
         p50_us: Math.round(avgP50),
         p99_us: Math.round(avgP99),
@@ -71,18 +71,18 @@ export function useBenchWS(wsUrl: string) {
       };
 
       const newHistory = [...prev.history, snapshot].slice(-MAX_HISTORY);
-      const newPeak = Math.max(prev.peak_tps, aggTps);
+      const newPeak = Math.max(prev.peak_rate, aggRate);
 
       // Update per-shard state.
       const newShards = new Map(prev.shards);
       for (const [sid, d] of shardMap.entries()) {
         const existing = newShards.get(sid);
         const history = existing
-          ? [...existing.tps_history, d.tps].slice(-SPARKLINE_LEN)
+          ? [...existing.rate_history, d.tps].slice(-SPARKLINE_LEN)
           : [d.tps];
         newShards.set(sid, {
           shard_id: sid,
-          current_tps: d.tps,
+          current_rate: d.tps,
           committed_total: d.committed,
           rejected_total: d.rejected,
           inflight: d.inflight,
@@ -90,7 +90,7 @@ export function useBenchWS(wsUrl: string) {
           p50_us: d.p50_us,
           p99_us: d.p99_us,
           last_tick_t: t,
-          tps_history: history,
+          rate_history: history,
         });
       }
 
@@ -101,8 +101,8 @@ export function useBenchWS(wsUrl: string) {
         status: prev.status === "connecting" || prev.status === "idle" ? "running" : prev.status,
         history: newHistory,
         shards: newShards,
-        current_tps: aggTps,
-        peak_tps: newPeak,
+        current_rate: aggRate,
+        peak_rate: newPeak,
         total_committed: [...newShards.values()].reduce((s, v) => s + v.committed_total, 0),
         total_rejected: [...newShards.values()].reduce((s, v) => s + v.rejected_total, 0),
         current_p50_us: snapshot.p50_us,
@@ -179,10 +179,10 @@ export function useBenchWS(wsUrl: string) {
           // Use type narrowing with mode field
           if ('mode' in tick && tick.mode === 'dataloader') {
             setState((prev) => {
-              const tps = tick.samples_per_sec;
+              const rate = tick.samples_per_sec;
               const snapshot: SecondSnapshot = {
                 t,
-                tps,
+                rate,
                 per_shard: [],
                 error_rate: tick.total_errors / Math.max(tick.total_samples, 1) * 100,
                 p50_us: 0,
@@ -194,8 +194,8 @@ export function useBenchWS(wsUrl: string) {
                 ...prev,
                 elapsed_secs: t,
                 status: "running",
-                current_tps: tps,
-                peak_tps: Math.max(prev.peak_tps, tps),
+                current_rate: rate,
+                peak_rate: Math.max(prev.peak_rate, rate),
                 total_samples: tick.total_samples,
                 total_errors: tick.total_errors,
                 history: [...prev.history, snapshot].slice(-MAX_HISTORY),
@@ -203,10 +203,10 @@ export function useBenchWS(wsUrl: string) {
             });
           } else if ('mode' in tick && tick.mode === 'inference') {
             setState((prev) => {
-              const tps = tick.rps;
+              const rate = tick.rps;
               const snapshot: SecondSnapshot = {
                 t,
-                tps,
+                rate,
                 per_shard: [],
                 error_rate: tick.total_errors / Math.max(tick.total_samples, 1) * 100,
                 p50_us: 0,
@@ -218,8 +218,8 @@ export function useBenchWS(wsUrl: string) {
                 ...prev,
                 elapsed_secs: t,
                 status: "running",
-                current_tps: tps,
-                peak_tps: Math.max(prev.peak_tps, tps),
+                current_rate: rate,
+                peak_rate: Math.max(prev.peak_rate, rate),
                 total_samples: tick.total_samples,
                 total_predictions: tick.total_predictions,
                 total_errors: tick.total_errors,

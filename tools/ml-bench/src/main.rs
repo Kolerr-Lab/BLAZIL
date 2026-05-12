@@ -26,9 +26,11 @@
 //!   --metrics-port 9092
 //! ```
 
+mod health;
 #[cfg(feature = "metrics-ws")]
 mod ws_server;
 
+use health::{HealthTracker, SlaConfig};
 use blazil_dataloader::{datasets::ImageNetDataset, Dataset, DatasetConfig, Pipeline};
 use blazil_inference::{InferenceConfig, InferenceModel, InferencePipeline, OnnxModel};
 use clap::Parser;
@@ -42,7 +44,6 @@ use std::{
 };
 use tokio::time::timeout;
 
-#[cfg(feature = "metrics-ws")]
 use serde_json::json;
 
 // ─────────────────────────────────────────────
@@ -342,10 +343,33 @@ async fn main() -> anyhow::Result<()> {
         .with_env_filter(if args.verbose { "debug" } else { "info" })
         .init();
 
+    // Initialize health tracker with SLA requirements
+    let sla_config = SlaConfig {
+        max_error_rate: 0.01,        // 1% max error rate
+        max_p99_latency_us: 50_000,  // 50ms P99 latency
+        min_uptime_pct: 0.999,       // 99.9% uptime
+    };
+    let health_tracker = HealthTracker::new(sla_config);
+
+    // Setup graceful shutdown signal handler
+    let shutdown_flag = Arc::new(AtomicBool::new(false));
+    let shutdown_flag_handler = Arc::clone(&shutdown_flag);
+    tokio::spawn(async move {
+        match tokio::signal::ctrl_c().await {
+            Ok(()) => {
+                println!("\n[shutdown] Received Ctrl+C — initiating graceful shutdown...");
+                shutdown_flag_handler.store(true, Ordering::SeqCst);
+            }
+            Err(err) => {
+                eprintln!("[shutdown] Failed to listen for Ctrl+C: {err}");
+            }
+        }
+    });
+
     // Start WebSocket metrics server if --metrics-port provided
     #[cfg(feature = "metrics-ws")]
     let (metrics_tx, _cmd_rx, config_cache) = if let Some(port) = args.metrics_port {
-        let (tx, rx, cache) = ws_server::start(port);
+        let (tx, rx, cache) = ws_server::start(port, Arc::clone(&health_tracker));
         // Give server time to bind
         tokio::time::sleep(Duration::from_millis(100)).await;
         (Some(tx), Some(rx), Some(cache))
@@ -358,11 +382,51 @@ async fn main() -> anyhow::Result<()> {
     #[cfg(not(feature = "metrics-ws"))]
     let config_cache: Option<Arc<tokio::sync::RwLock<Option<String>>>> = None;
 
-    match args.mode.as_str() {
-        "dataloader" => run_dataloader_benchmark(args, metrics_tx, config_cache).await,
-        "inference" => run_inference_benchmark(args, metrics_tx, config_cache).await,
+    let result = match args.mode.as_str() {
+        "dataloader" => {
+            run_dataloader_benchmark(
+                args,
+                metrics_tx,
+                config_cache,
+                Arc::clone(&health_tracker),
+                Arc::clone(&shutdown_flag),
+            )
+            .await
+        }
+        "inference" => {
+            run_inference_benchmark(
+                args,
+                metrics_tx,
+                config_cache,
+                Arc::clone(&health_tracker),
+                Arc::clone(&shutdown_flag),
+            )
+            .await
+        }
         other => anyhow::bail!("Unknown mode '{other}'. Supported: dataloader, inference"),
+    };
+
+    // Always print final health status on exit
+    if shutdown_flag.load(Ordering::Relaxed) {
+        println!("\n[shutdown] Graceful shutdown complete");
+        println!("[health] Final status: {}", health_tracker.status().as_str());
+        println!("[health] Uptime: {}", health_tracker.uptime_iso8601());
+        println!(
+            "[health] Success rate: {:.2}%",
+            health_tracker.success_rate() * 100.0
+        );
+        println!("[health] P99 latency: {}µs", health_tracker.p99_latency_us());
+        println!(
+            "[health] SLA compliance: {}",
+            if health_tracker.meets_sla() {
+                "✓ PASS"
+            } else {
+                "✗ FAIL"
+            }
+        );
     }
+
+    result
 }
 
 // ─────────────────────────────────────────────
@@ -374,6 +438,8 @@ async fn run_dataloader_benchmark(
     args: Args,
     #[allow(unused_variables)] metrics_tx: Option<tokio::sync::broadcast::Sender<String>>,
     #[allow(unused_variables)] config_cache: Option<Arc<tokio::sync::RwLock<Option<String>>>>,
+    health_tracker: Arc<HealthTracker>,
+    shutdown_flag: Arc<AtomicBool>,
 ) -> anyhow::Result<()> {
     let config = DatasetConfig::default()
         .with_batch_size(args.batch_size)
@@ -406,6 +472,9 @@ async fn run_dataloader_benchmark(
 
     // ── Build pipeline ────────────────────────
     let pipeline = Pipeline::new(dataset, config);
+
+    // Mark dataloader as ready (no model in dataloader mode, but pipeline is active)
+    health_tracker.set_model_loaded(true);
 
     // Broadcast config to dashboard
     #[cfg(feature = "metrics-ws")]
@@ -461,6 +530,8 @@ async fn run_dataloader_benchmark(
             false,
             None,
             FaultState::new(),
+            Arc::clone(&health_tracker),
+            Arc::clone(&shutdown_flag),
         )
         .await?;
 
@@ -515,6 +586,17 @@ async fn run_dataloader_benchmark(
         args.fault_duration,
     );
 
+    // Track fault state in health tracker
+    let health_for_fault = Arc::clone(&health_tracker);
+    let fault_state_monitor = Arc::clone(&fault_state);
+    tokio::spawn(async move {
+        loop {
+            let active = fault_state_monitor.current() != FaultKind::None;
+            health_for_fault.set_fault_active(active);
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    });
+
     let (samples, batches, errors, latencies_us) = run_phase(
         &pipeline,
         Duration::from_secs(args.duration),
@@ -522,6 +604,8 @@ async fn run_dataloader_benchmark(
         true,
         metrics_tx.clone(),
         Arc::clone(&fault_state),
+        Arc::clone(&health_tracker),
+        Arc::clone(&shutdown_flag),
     )
     .await?;
 
@@ -595,6 +679,8 @@ async fn run_inference_benchmark(
     args: Args,
     #[allow(unused_variables)] metrics_tx: Option<tokio::sync::broadcast::Sender<String>>,
     #[allow(unused_variables)] config_cache: Option<Arc<tokio::sync::RwLock<Option<String>>>>,
+    health_tracker: Arc<HealthTracker>,
+    shutdown_flag: Arc<AtomicBool>,
 ) -> anyhow::Result<()> {
     let model_path = args
         .model
@@ -634,6 +720,9 @@ async fn run_inference_benchmark(
     let inference_config = InferenceConfig::new(model_path);
     let model = OnnxModel::load(inference_config)?;
     let model_load_ms = t_model.elapsed().as_millis();
+
+    // Mark model as successfully loaded
+    health_tracker.set_model_loaded(true);
 
     let input_shape = model.input_shape();
     let model_classes = model.num_classes();
@@ -695,6 +784,8 @@ async fn run_inference_benchmark(
             false,
             None,
             FaultState::new(),
+            Arc::clone(&health_tracker),
+            Arc::clone(&shutdown_flag),
         )
         .await?;
 
@@ -758,6 +849,17 @@ async fn run_inference_benchmark(
         args.fault_duration,
     );
 
+    // Track fault state in health tracker
+    let health_for_fault = Arc::clone(&health_tracker);
+    let fault_state_monitor = Arc::clone(&fault_state);
+    tokio::spawn(async move {
+        loop {
+            let active = fault_state_monitor.current() != FaultKind::None;
+            health_for_fault.set_fault_active(active);
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    });
+
     let (samples, batches, predictions, errors, latencies_us) = run_inference_phase(
         &data_pipeline,
         &inference_pipeline,
@@ -766,6 +868,8 @@ async fn run_inference_benchmark(
         true,
         metrics_tx.clone(),
         Arc::clone(&fault_state),
+        Arc::clone(&health_tracker),
+        Arc::clone(&shutdown_flag),
     )
     .await?;
 
@@ -838,6 +942,7 @@ async fn run_inference_benchmark(
 // ─────────────────────────────────────────────
 
 #[allow(unused_variables)]
+#[allow(clippy::too_many_arguments)]
 async fn run_phase(
     pipeline: &Pipeline<ImageNetDataset>,
     duration: Duration,
@@ -845,6 +950,8 @@ async fn run_phase(
     record: bool,
     #[allow(unused_variables)] metrics_tx: Option<tokio::sync::broadcast::Sender<String>>,
     fault_state: Arc<FaultState>,
+    health_tracker: Arc<HealthTracker>,
+    shutdown_flag: Arc<AtomicBool>,
 ) -> anyhow::Result<(u64, u64, u64, Vec<u64>)> {
     let metrics = Metrics::new();
     let mut latencies_us: Vec<u64> = Vec::new();
@@ -929,6 +1036,12 @@ async fn run_phase(
     };
 
     while Instant::now() < deadline {
+        // Check graceful shutdown signal
+        if shutdown_flag.load(Ordering::Relaxed) {
+            println!("  [shutdown] Graceful shutdown requested — draining dataloader pipeline...");
+            break;
+        }
+
         let batch_start = Instant::now();
 
         // Apply fault behavior
@@ -938,6 +1051,7 @@ async fn run_phase(
                 tokio::time::sleep(Duration::from_millis(200)).await;
                 if record {
                     metrics.total_errors.fetch_add(1, Ordering::Relaxed);
+                    health_tracker.record_failure();
                 }
                 continue;
             }
@@ -945,6 +1059,7 @@ async fn run_phase(
                 // Simulate I/O error — count as error, skip batch
                 if record {
                     metrics.total_errors.fetch_add(1, Ordering::Relaxed);
+                    health_tracker.record_failure();
                 }
                 tokio::time::sleep(Duration::from_millis(50)).await;
                 continue;
@@ -954,6 +1069,7 @@ async fn run_phase(
                 let _ = timeout(Duration::from_millis(100), rx.recv()).await;
                 if record {
                     metrics.total_errors.fetch_add(1, Ordering::Relaxed);
+                    health_tracker.record_failure();
                 }
                 continue;
             }
@@ -971,12 +1087,16 @@ async fn run_phase(
                 if record {
                     metrics.total_samples.fetch_add(n, Ordering::Relaxed);
                     metrics.total_batches.fetch_add(1, Ordering::Relaxed);
-                    latencies_us.push(batch_start.elapsed().as_micros() as u64);
+                    let lat_us = batch_start.elapsed().as_micros() as u64;
+                    latencies_us.push(lat_us);
+                    // Track success in health tracker
+                    health_tracker.record_success(lat_us);
                 }
             }
             Ok(Some(Err(e))) => {
                 if record {
                     metrics.total_errors.fetch_add(1, Ordering::Relaxed);
+                    health_tracker.record_failure();
                 }
                 tracing::warn!(error = %e, "batch error");
             }
@@ -992,6 +1112,7 @@ async fn run_phase(
                 // Timeout — pipeline starved (too few workers or slow disk).
                 if record {
                     metrics.total_errors.fetch_add(1, Ordering::Relaxed);
+                    health_tracker.record_failure();
                 }
                 tracing::debug!("receive timeout — pipeline stalled");
             }
@@ -1007,6 +1128,7 @@ async fn run_phase(
 }
 
 #[allow(unused_variables)]
+#[allow(clippy::too_many_arguments)]
 async fn run_inference_phase(
     data_pipeline: &Pipeline<ImageNetDataset>,
     inference_pipeline: &InferencePipeline<OnnxModel>,
@@ -1015,6 +1137,8 @@ async fn run_inference_phase(
     record: bool,
     #[allow(unused_variables)] metrics_tx: Option<tokio::sync::broadcast::Sender<String>>,
     fault_state: Arc<FaultState>,
+    health_tracker: Arc<HealthTracker>,
+    shutdown_flag: Arc<AtomicBool>,
 ) -> anyhow::Result<(u64, u64, u64, u64, Vec<u64>)> {
     let metrics = InferenceMetrics::new();
     let mut latencies_us: Vec<u64> = Vec::new();
@@ -1113,6 +1237,12 @@ async fn run_inference_phase(
     let mut inference_rx = inference_pipeline.stream(data_rx).await?;
 
     while Instant::now() < deadline {
+        // Check graceful shutdown signal
+        if shutdown_flag.load(Ordering::Relaxed) {
+            println!("  [shutdown] Graceful shutdown requested — draining inference pipeline...");
+            break;
+        }
+
         let batch_start = Instant::now();
 
         // Apply fault behavior
@@ -1121,6 +1251,7 @@ async fn run_inference_phase(
                 tokio::time::sleep(Duration::from_millis(200)).await;
                 if record {
                     metrics.total_errors.fetch_add(1, Ordering::Relaxed);
+                    health_tracker.record_failure();
                 }
                 continue;
             }
@@ -1128,6 +1259,7 @@ async fn run_inference_phase(
                 let _ = timeout(Duration::from_millis(100), inference_rx.recv()).await;
                 if record {
                     metrics.total_errors.fetch_add(1, Ordering::Relaxed);
+                    health_tracker.record_failure();
                 }
                 continue;
             }
@@ -1148,12 +1280,16 @@ async fn run_inference_phase(
                         .total_predictions
                         .fetch_add(n_predictions, Ordering::Relaxed);
                     metrics.total_batches.fetch_add(1, Ordering::Relaxed);
-                    latencies_us.push(batch_start.elapsed().as_micros() as u64);
+                    let lat_us = batch_start.elapsed().as_micros() as u64;
+                    latencies_us.push(lat_us);
+                    // Track success in health tracker
+                    health_tracker.record_success(lat_us);
                 }
             }
             Ok(Some(Err(e))) => {
                 if record {
                     metrics.total_errors.fetch_add(1, Ordering::Relaxed);
+                    health_tracker.record_failure();
                 }
                 tracing::warn!(error = %e, "inference error");
             }
@@ -1170,6 +1306,7 @@ async fn run_inference_phase(
                 // Timeout — pipeline stalled
                 if record {
                     metrics.total_errors.fetch_add(1, Ordering::Relaxed);
+                    health_tracker.record_failure();
                 }
                 tracing::debug!("receive timeout — pipeline stalled");
             }

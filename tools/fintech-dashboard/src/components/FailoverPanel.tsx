@@ -83,23 +83,23 @@ export function FailoverPanel({ state, sendCommand }: Props) {
       }
     }
 
-    // Compute TPS per node — distribute shards evenly across 3 nodes
-    const nodeTps = [0, 0, 0];
+    // Compute rate per node — distribute shards evenly across 3 nodes
+    const nodeRate = [0, 0, 0];
     for (const shard of state.shards.values()) {
       const nodeId =
         totalShards > 0
           ? Math.min(nodeCount - 1, Math.floor((shard.shard_id / totalShards) * nodeCount))
           : shard.shard_id % nodeCount;
-      nodeTps[nodeId] += shard.current_tps;
+      nodeRate[nodeId] += shard.current_rate;
     }
-    const maxNodeTps = Math.max(...nodeTps, 1);
+    const maxNodeRate = Math.max(...nodeRate, 1);
 
     return ([0, 1, 2] as const).map((id) => ({
       id,
       label: `Node ${id + 1}`,
       role: (id === 0 ? "primary" : "replica") as "primary" | "replica",
       status: nodeStatus.get(id) ?? "healthy",
-      tpsShare: Math.round((nodeTps[id] / maxNodeTps) * 100),
+      tpsShare: Math.round((nodeRate[id] / maxNodeRate) * 100),
     }));
   }, [state.events, state.shards, state.config]);
 
@@ -349,12 +349,12 @@ export function FailoverPanel({ state, sendCommand }: Props) {
                 : "var(--accent-green)";
               const statusText = isDown ? "DOWN" : isRecov ? "REJOINING" : "HEALTHY";
 
-              // Per-node TPS estimate: when a node is down, surviving nodes
+              // Per-node rate estimate: when a node is down, surviving nodes
               // show boosted numbers to demonstrate fault tolerance.
               const aliveCount = nodes.filter((n) => n.status !== "down").length || 1;
-              const perNodeTps = isDown
+              const perNodeRate = isDown
                 ? 0
-                : Math.round(state.current_tps / aliveCount);
+                : Math.round(state.current_rate / aliveCount);
 
               return (
                 <div
@@ -384,7 +384,7 @@ export function FailoverPanel({ state, sendCommand }: Props) {
                     {node.role}
                   </div>
 
-                  {/* TPS bar */}
+                  {/* Rate bar */}
                   <div>
                     <div
                       className="h-1 rounded-full w-full"
@@ -403,7 +403,7 @@ export function FailoverPanel({ state, sendCommand }: Props) {
                       className="text-[9px] font-mono mt-0.5"
                       style={{ color: isDown ? "var(--text-dim)" : "var(--text-muted)" }}
                     >
-                      {isDown ? "—" : fmtTps(perNodeTps)}
+                      {isDown ? "—" : fmtTps(perNodeRate)}
                     </div>
                   </div>
 

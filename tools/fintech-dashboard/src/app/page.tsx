@@ -10,8 +10,10 @@ import { FailoverPanel } from "@/components/FailoverPanel";
 import { ClusterInfo } from "@/components/ClusterInfo";
 import type { EventMessage } from "@/types/metrics";
 
-// Fintech bench: ws://13.229.63.205:9090/ws
-const DEFAULT_WS_URL = "ws://13.229.63.205:9090/ws";
+// ⚠️  UPDATE THIS WITH YOUR AWS/DO PUBLIC IP BEFORE DEPLOYMENT ⚠️
+// Fintech Backend: blazil-bench WebSocket server
+// Default: ws://localhost:9090/ws (port 9090 = fintech metrics)
+const DEFAULT_WS_URL = "ws://localhost:9090/ws";
 
 export default function DashboardPage() {
   const [wsUrl, setWsUrl] = useState(DEFAULT_WS_URL);
@@ -22,29 +24,23 @@ export default function DashboardPage() {
     el?.scrollIntoView({ behavior: "smooth" });
   }, []);
 
-  // Auto-connect on mount, then retry every 3s on error/disconnect.
-  useEffect(() => {
-    connect();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // Manual connect only - no auto-retry to avoid connection spam
 
+  // Browser title updates with live rate.
   useEffect(() => {
-    if (state.status !== "error" && state.status !== "idle") return;
-    const timer = setTimeout(() => connect(), 3_000);
-    return () => clearTimeout(timer);
-  }, [state.status, connect]);
-
-  // Browser title updates with live TPS.
-  useEffect(() => {
-    if (state.status === "running" && state.current_tps > 0) {
-      const tps =
-        state.current_tps >= 1_000_000
-          ? `${(state.current_tps / 1_000_000).toFixed(2)}M`
-          : `${(state.current_tps / 1_000).toFixed(0)}K`;
-      document.title = `${tps} TPS — Blazil Bench`;
+    if (state.status === "running" && state.current_rate > 0) {
+      const rate =
+        state.current_rate >= 1_000_000
+          ? `${(state.current_rate / 1_000_000).toFixed(2)}M`
+          : `${(state.current_rate / 1_000).toFixed(0)}K`;
+      const unit = state.mode === "fintech" ? "TPS" 
+        : state.mode === "dataloader" ? "samples/sec"
+        : "RPS";  // inference
+      document.title = `${rate} ${unit} — Blazil Fintech`;
     } else {
-      document.title = "Blazil Bench Dashboard";
+      document.title = "Blazil Fintech Dashboard";
     }
-  }, [state.current_tps, state.status]);
+  }, [state.current_rate, state.status, state.mode]);
 
   const perShard = [...state.shards.values()].sort((a, b) => a.shard_id - b.shard_id);
 
@@ -69,12 +65,13 @@ export default function DashboardPage() {
           <ClusterInfo />
         </div>
 
-        {/* TPS Chart + Latency side-by-side */}
+        {/* Rate Chart + Latency side-by-side */}
         <div className="mt-5 grid grid-cols-1 xl:grid-cols-3 gap-4">
           <div className="xl:col-span-2">
             <TPSChart
               history={state.history}
               duration_secs={state.config?.duration_secs ?? null}
+              mode={state.mode}
             />
           </div>
           <div className="xl:col-span-1">
@@ -94,7 +91,7 @@ export default function DashboardPage() {
                   s.committed_total + s.rejected_total > 0
                     ? (s.rejected_total / (s.committed_total + s.rejected_total)) * 100
                     : 0;
-                const sparkMax = Math.max(...s.tps_history, 1);
+                const sparkMax = Math.max(...s.rate_history, 1);
                 return (
                   <div
                     key={s.shard_id}
@@ -121,23 +118,23 @@ export default function DashboardPage() {
                       className="font-black text-lg tabular-nums"
                       style={{ color: "var(--accent-green)" }}
                     >
-                      {s.current_tps > 0
-                        ? s.current_tps >= 1_000
-                          ? `${(s.current_tps / 1_000).toFixed(0)}K`
-                          : s.current_tps.toLocaleString()
+                      {s.current_rate > 0
+                        ? s.current_rate >= 1_000
+                          ? `${(s.current_rate / 1_000).toFixed(0)}K`
+                          : s.current_rate.toLocaleString()
                         : "—"}
                     </div>
 
                     {/* Sparkline bars */}
                     <div className="flex items-end gap-px h-6">
-                      {s.tps_history.map((v, i) => (
+                      {s.rate_history.map((v, i) => (
                         <div
                           key={i}
                           className="flex-1 rounded-sm"
                           style={{
                             height: `${Math.max(8, (v / sparkMax) * 100)}%`,
                             background:
-                              i === s.tps_history.length - 1
+                              i === s.rate_history.length - 1
                                 ? "var(--accent-green)"
                                 : "var(--border-bright)",
                           }}

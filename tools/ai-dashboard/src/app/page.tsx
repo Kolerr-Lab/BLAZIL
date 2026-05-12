@@ -6,15 +6,13 @@ import { Header } from "@/components/Header";
 import { HeroMetrics } from "@/components/HeroMetrics";
 import { TPSChart } from "@/components/TPSChart";
 import { LatencyPanel } from "@/components/LatencyPanel";
+import { ClusterInfo } from "@/components/ClusterInfo";
 import type { EventMessage } from "@/types/metrics";
 
-// ═══════════════════════════════════════════════════════════════
-// BLAZIL AI INFERENCE BENCHMARK DASHBOARD
-// ═══════════════════════════════════════════════════════════════
-// Port: 3333 (different from fintech:3331)
-// WebSocket: ws://localhost:9092/ws (AI only, NOT fintech 9090)
-// Benchmark duration: 120s default
-// ═══════════════════════════════════════════════════════════════
+// ⚠️  UPDATE THIS WITH YOUR AWS i4i.4xlarge PUBLIC IP BEFORE DEPLOYMENT ⚠️
+// AI Benchmark Backend: ml-bench WebSocket server
+// Default: ws://localhost:9092/ws (port 9092 = AI metrics)
+// Supports: dataloader (samples/sec) + inference (RPS)
 const DEFAULT_WS_URL = "ws://localhost:9092/ws";
 
 export default function DashboardPage() {
@@ -26,18 +24,7 @@ export default function DashboardPage() {
     el?.scrollIntoView({ behavior: "smooth" });
   }, []);
 
-  // Auto-connect on mount
-  useEffect(() => {
-    connect();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Exponential backoff retry: delay doubles on each failure (5s → 10s → 20s → 40s → 60s max)
-  useEffect(() => {
-    if (state.status !== "error" && state.status !== "idle") return;
-    // Retry delay is managed in useBenchWS hook with exponential backoff
-    const timer = setTimeout(() => connect(), 5_000);
-    return () => clearTimeout(timer);
-  }, [state.status, connect]);
+  // Manual connect only - no auto-retry to avoid connection spam
 
   // Browser title updates with live throughput.
   useEffect(() => {
@@ -68,6 +55,11 @@ export default function DashboardPage() {
       <main className="flex-1 px-4 md:px-6 pb-8 pt-5 max-w-[1600px] mx-auto w-full">
         {/* Hero metrics row */}
         <HeroMetrics state={state} />
+
+        {/* Infra spec strip */}
+        <div className="mt-3">
+          <ClusterInfo />
+        </div>
 
         {/* Throughput Chart + Latency side-by-side */}
         <div className="mt-5 grid grid-cols-1 xl:grid-cols-3 gap-4">

@@ -161,8 +161,8 @@ export type BenchMessage =
 // Aggregated per-second snapshot (all shards combined).
 export interface SecondSnapshot {
   t: number;
-  tps: number;             // aggregate across all shards
-  per_shard: { shard_id: number; tps: number }[];
+  rate: number;            // TPS (fintech) | samples/sec (dataloader) | RPS (inference)
+  per_shard: { shard_id: number; rate: number }[];
   error_rate: number;
   p50_us: number;
   p99_us: number;
@@ -173,7 +173,7 @@ export interface SecondSnapshot {
 // Per-shard live state.
 export interface ShardState {
   shard_id: number;
-  current_tps: number;
+  current_rate: number;
   committed_total: number;
   rejected_total: number;
   inflight: number;
@@ -181,7 +181,7 @@ export interface ShardState {
   p50_us: number;
   p99_us: number;
   last_tick_t: number;
-  tps_history: number[]; // last 30 values for sparkline
+  rate_history: number[]; // last 30 values for sparkline
 }
 
 // Complete dashboard state.
@@ -195,8 +195,8 @@ export interface DashboardState {
   events: EventMessage[];
   summary: SummaryMessage | null;
   // Current metrics (latest second)
-  current_tps: number;            // TPS for fintech, samples/sec for dataloader, RPS for inference
-  peak_tps: number;               // Peak throughput
+  current_rate: number;           // TPS (fintech) | samples/sec (dataloader) | RPS (inference)
+  peak_rate: number;              // Peak throughput
   total_committed: number;        // Fintech: committed txns
   total_rejected: number;         // Fintech: rejected txns
   total_samples: number;          // AI: total samples processed

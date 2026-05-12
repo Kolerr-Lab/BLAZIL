@@ -1,12 +1,12 @@
 {
-  "name": "blazil-bench-dashboard",
+  "name": "blazil-fintech-dashboard",
   "version": "0.3.0",
   "private": true,
-  "description": "Real-time benchmark dashboard for Blazil — live TPS charts, latency panels, per-shard analytics",
+  "description": "Fintech Benchmark Dashboard for Blazil — VSR, TPS, TigerBeetle ledger analytics",
   "scripts": {
-    "dev": "next dev --port 3331",
+    "dev": "next dev --port 3330",
     "build": "next build",
-    "start": "next start --port 3331",
+    "start": "next start --port 3330",
     "lint": "next lint"
   },
   "dependencies": {

@@ -28,13 +28,14 @@ LOG_FILE="$RESULTS_DIR/ai-bench-$TIMESTAMP.log"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
 echo "╔══════════════════════════════════════════════════════════╗"
-echo "║   BLAZIL AI INFERENCE — COMPREHENSIVE BENCHMARK         ║"
+echo "║   BLAZIL AI INFERENCE — FULL PRODUCTION BENCHMARK       ║"
+echo "║   Profile: 35 minutes (10min + 10min + 15min)          ║"
 echo "║   Models: SqueezeNet 1.1, ResNet-50                     ║"
 echo "╚══════════════════════════════════════════════════════════╝"
 echo ""
 echo "  Samples       : $(printf "%'d" $SAMPLES)"
 echo "  Dataset       : Synthetic (generated on-the-fly)"
-echo "  Hardware      : DO Premium AMD NVMe (4 vCPU, 8GB RAM)"
+echo "  Hardware      : AWS i4i.4xlarge (16 vCPU, 32 GiB RAM, NVMe)"
 echo "  Timestamp     : $TIMESTAMP"
 echo "  Log           : $LOG_FILE"
 echo ""
@@ -62,7 +63,7 @@ echo ""
 echo "  Mode          : dataloader"
 echo "  Batch size    : 256"
 echo "  Workers       : 4"
-echo "  Duration      : 60 seconds"
+echo "  Duration      : 600 seconds (10 min — thermal stability + statistical significance)"
 echo ""
 
 "$BLAZIL_ROOT/target/release/ml-bench" \
@@ -71,8 +72,8 @@ echo ""
   --path "$DATA_DIR" \
   --batch-size 256 \
   --num-workers 4 \
-  --duration 60 \
-  --shuffle
+  --duration 600 \
+  --shuffle || { echo "[ERROR] Dataloader benchmark failed"; exit 1; }
 
 echo ""
 echo "────────────────────────────────────────────────────────────"
@@ -84,7 +85,7 @@ echo ""
 echo "  Model         : SqueezeNet 1.1 (~5 MB)"
 echo "  Batch size    : 64"
 echo "  Workers       : 4"
-echo "  Duration      : 120 seconds"
+echo "  Duration      : 600 seconds (10 min — sustained lightweight inference)"
 echo ""
 
 "$BLAZIL_ROOT/target/release/ml-bench" \
@@ -94,7 +95,7 @@ echo ""
   --path "$DATA_DIR" \
   --batch-size 64 \
   --inference-workers 4 \
-  --duration 120
+  --duration 600 || { echo "[ERROR] SqueezeNet benchmark failed"; exit 1; }
 
 echo ""
 echo "────────────────────────────────────────────────────────────"
@@ -106,7 +107,7 @@ echo ""
 echo "  Model         : ResNet-50 (~100 MB)"
 echo "  Batch size    : 32 (reduced for memory)"
 echo "  Workers       : 4"
-echo "  Duration      : 120 seconds"
+echo "  Duration      : 900 seconds (15 min — stress test heavy model)"
 echo ""
 
 "$BLAZIL_ROOT/target/release/ml-bench" \
@@ -116,7 +117,7 @@ echo ""
   --path "$DATA_DIR" \
   --batch-size 32 \
   --inference-workers 4 \
-  --duration 120
+  --duration 900 || { echo "[ERROR] ResNet-50 benchmark failed"; exit 1; }
 
 echo ""
 echo "────────────────────────────────────────────────────────────"

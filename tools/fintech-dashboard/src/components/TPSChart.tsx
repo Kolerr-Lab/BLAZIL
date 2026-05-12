@@ -15,9 +15,10 @@ import type { SecondSnapshot } from "@/types/metrics";
 interface Props {
   history: SecondSnapshot[];
   duration_secs: number | null;
+  mode: "fintech" | "dataloader" | "inference";  // Add mode prop
 }
 
-function formatTPS(v: number): string {
+function formatRate(v: number): string {
   if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
   if (v >= 1_000) return `${(v / 1_000).toFixed(0)}K`;
   return `${v}`;
@@ -28,17 +29,20 @@ interface TooltipPayloadEntry {
   dataKey: string;
 }
 
-function CustomTooltip({
-  active,
-  payload,
-  label,
-}: {
+function CustomTooltip(props: {
   active?: boolean;
-  payload?: TooltipPayloadEntry[];
+  payload?: any[];
   label?: number;
+  mode: "fintech" | "dataloader" | "inference";
 }) {
+  const { active, payload, label, mode } = props;
   if (!active || !payload?.length) return null;
-  const tps = payload[0]?.value ?? 0;
+  const rate = payload[0]?.value ?? 0;
+  const rateLabel = mode === "fintech" ? "TPS" 
+    : mode === "dataloader" ? "samples/sec"
+    : "RPS";
+  const showComparison = mode === "fintech" && rate > 0;
+  
   return (
     <div
       className="px-3 py-2 text-xs rounded-lg font-mono"
@@ -50,32 +54,39 @@ function CustomTooltip({
     >
       <div style={{ color: "var(--text-muted)" }}>t+{label}s</div>
       <div style={{ color: "var(--accent-green)", fontSize: 14, fontWeight: 700 }}>
-        {tps.toLocaleString()} TPS
+        {rate.toLocaleString()} {rateLabel}
       </div>
-      {tps > 0 && (
+      {showComparison && (
         <div style={{ color: "var(--text-muted)" }}>
-          {(tps / 24_000).toFixed(1)}× Visa
+          {(rate / 24_000).toFixed(1)}× Visa
         </div>
       )}
     </div>
   );
 }
 
-export function TPSChart({ history, duration_secs }: Props) {
-  const data = history.map((h) => ({ t: h.t, tps: h.tps }));
-  const maxTPS = Math.max(...data.map((d) => d.tps), 1);
+export function TPSChart({ history, duration_secs, mode }: Props) {
+  const data = history.map((h) => ({ t: h.t, rate: h.rate }));
+  const maxRate = Math.max(...data.map((d) => d.rate), 1);
   // Nice Y-axis ceiling
-  const yMax = Math.ceil((maxTPS * 1.15) / 100_000) * 100_000 || 100_000;
+  const yMax = Math.ceil((maxRate * 1.15) / 100_000) * 100_000 || 100_000;
+
+  const rateLabel = mode === "fintech" ? "TPS"
+    : mode === "dataloader" ? "Samples/sec"
+    : "RPS";
+  const subtitle = mode === "fintech" ? "Per-second, all shards combined"
+    : mode === "dataloader" ? "Dataset streaming throughput"
+    : "Inference requests per second";
 
   return (
     <div className="card p-5 flex flex-col gap-3">
       <div className="flex items-center justify-between">
         <div>
           <div className="font-semibold text-sm text-white">
-            Throughput — Aggregate TPS
+            Throughput — Aggregate {rateLabel}
           </div>
           <div className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
-            Per-second, all shards combined
+            {subtitle}
           </div>
         </div>
         {data.length > 0 && (
@@ -116,23 +127,25 @@ export function TPSChart({ history, duration_secs }: Props) {
                 minTickGap={60}
               />
               <YAxis
-                tickFormatter={formatTPS}
+                tickFormatter={formatRate}
                 domain={[0, yMax]}
                 width={48}
               />
-              <Tooltip content={<CustomTooltip />} />
-              {/* Visa peak reference line */}
-              <ReferenceLine
-                y={24_000}
-                stroke="rgba(239,68,68,0.4)"
-                strokeDasharray="4 4"
-                label={{
-                  value: "Visa peak",
-                  position: "insideTopRight",
-                  fontSize: 10,
-                  fill: "rgba(239,68,68,0.7)",
-                }}
-              />
+              <Tooltip content={(props) => <CustomTooltip {...props} mode={mode} />} />
+              {/* Visa peak reference line (fintech only) */}
+              {mode === "fintech" && (
+                <ReferenceLine
+                  y={24_000}
+                  stroke="rgba(239,68,68,0.4)"
+                  strokeDasharray="4 4"
+                  label={{
+                    value: "Visa peak",
+                    position: "insideTopRight",
+                    fontSize: 10,
+                    fill: "rgba(239,68,68,0.7)",
+                  }}
+                />
+              )}
               {/* 1M TPS reference */}
               {yMax >= 800_000 && (
                 <ReferenceLine

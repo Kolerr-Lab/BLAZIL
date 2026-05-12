@@ -82,36 +82,44 @@ function StatCard({ label, value, accent = "var(--text)" }: StatCardProps) {
 }
 
 export function HeroMetrics({ state }: Props) {
-  const { current_tps, peak_tps, total_committed, total_rejected, current_p50_us, current_p99_us, summary } = state;
+  const { mode, current_rate, peak_rate, total_committed, total_rejected, total_samples, total_errors, current_p50_us, current_p99_us, summary } = state;
 
-  const errorRate = total_committed + total_rejected > 0
-    ? (total_rejected / (total_committed + total_rejected)) * 100
-    : 0;
+  // Dynamic labels based on mode
+  const rateLabel = mode === "fintech" ? "TPS"
+    : mode === "dataloader" ? "Samples/sec"
+    : "RPS";  // inference
+
+  const errorRate = mode === "fintech"
+    ? (total_committed + total_rejected > 0 ? (total_rejected / (total_committed + total_rejected)) * 100 : 0)
+    : (total_samples + total_errors > 0 ? (total_errors / (total_samples + total_errors)) * 100 : 0);
+  
   const survivalRate = 100 - errorRate;
 
-  // Visa comparison
-  const visaMultiple = current_tps > 0 ? (current_tps / 24_000).toFixed(1) : "—";
+  // Benchmark-specific comparison (only for fintech)
+  const visaMultiple = mode === "fintech" && current_rate > 0 ? (current_rate / 24_000).toFixed(1) : null;
 
   return (
     <div className="flex flex-col gap-4">
       {/* Top row: big 3 */}
       <div className="flex gap-4">
         <BigCard
-          label="Current TPS"
-          value={current_tps > 0 ? fmtNum(current_tps) : "—"}
-          sub={current_tps > 0 ? `${visaMultiple}× Visa peak` : "Waiting for data…"}
-          glow={current_tps > 0}
+          label={`Current ${rateLabel}`}
+          value={current_rate > 0 ? fmtNum(current_rate) : "—"}
+          sub={visaMultiple ? `${visaMultiple}× Visa peak` : current_rate > 0 ? `Real-time throughput` : "Waiting for data…"}
+          glow={current_rate > 0}
         />
         <BigCard
-          label="Peak TPS"
-          value={peak_tps > 0 ? fmtNum(peak_tps) : "—"}
-          sub={peak_tps > 0 ? `Best second` : undefined}
+          label={`Peak ${rateLabel}`}
+          value={peak_rate > 0 ? fmtNum(peak_rate) : "—"}
+          sub={peak_rate > 0 ? `Best second` : undefined}
           accent="var(--accent-blue)"
         />
         <BigCard
-          label="Survival Rate"
-          value={total_committed > 0 ? `${survivalRate.toFixed(2)}%` : "—"}
-          sub={total_rejected > 0 ? `${total_rejected.toLocaleString()} rejected` : "0 rejections"}
+          label={mode === "fintech" ? "Survival Rate" : "Success Rate"}
+          value={current_rate > 0 ? `${survivalRate.toFixed(2)}%` : "—"}
+          sub={mode === "fintech" 
+            ? (total_rejected > 0 ? `${total_rejected.toLocaleString()} rejected` : "0 rejections")
+            : (total_errors > 0 ? `${total_errors.toLocaleString()} errors` : "0 errors")}
           accent={errorRate > 0.1 ? "var(--accent-amber)" : "var(--accent-green)"}
         />
       </div>
@@ -119,18 +127,20 @@ export function HeroMetrics({ state }: Props) {
       {/* Bottom row: stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-6 gap-3">
         <StatCard
-          label="Committed"
-          value={total_committed > 0 ? total_committed.toLocaleString() : "—"}
+          label={mode === "fintech" ? "Committed" : "Processed"}
+          value={mode === "fintech" 
+            ? (total_committed > 0 ? total_committed.toLocaleString() : "—")
+            : (total_samples > 0 ? total_samples.toLocaleString() : "—")}
           accent="var(--accent-green)"
         />
         <StatCard
-          label="Rejected"
-          value={total_rejected.toLocaleString()}
-          accent={total_rejected > 0 ? "var(--accent-red)" : "var(--text-muted)"}
+          label={mode === "fintech" ? "Rejected" : "Errors"}
+          value={mode === "fintech" ? total_rejected.toLocaleString() : total_errors.toLocaleString()}
+          accent={(mode === "fintech" ? total_rejected : total_errors) > 0 ? "var(--accent-red)" : "var(--text-muted)"}
         />
         <StatCard
           label="Error Rate"
-          value={total_committed > 0 ? `${errorRate.toFixed(3)}%` : "—"}
+          value={current_rate > 0 ? `${errorRate.toFixed(3)}%` : "—"}
           accent={errorRate > 0.01 ? "var(--accent-red)" : "var(--accent-green)"}
         />
         <StatCard
@@ -146,9 +156,9 @@ export function HeroMetrics({ state }: Props) {
         <StatCard
           label="Consistency"
           value={(summary && 'consistency' in summary) ? `${summary.consistency.toFixed(1)}%` : state.history.length > 10 ? (() => {
-            const tps = state.history.map(h => h.tps).filter(v => v > 0);
-            const min = Math.min(...tps);
-            const max = Math.max(...tps);
+            const rates = state.history.map(h => h.rate).filter(v => v > 0);
+            const min = Math.min(...rates);
+            const max = Math.max(...rates);
             return max > 0 ? `${(min / max * 100).toFixed(1)}%` : "—";
           })() : "—"}
           accent="var(--accent-purple)"

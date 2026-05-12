@@ -15,11 +15,11 @@ interface Props {
 }
 
 const STATUS_LABEL: Record<BenchStatus, string> = {
-  idle: '"Why big iron when you can Blazil-Beetle stack?"',
-  connecting: "CONNECTING",
+  idle: "Ready to connect",
+  connecting: "Connecting to blazil-bench...",
   running: "RUNNING",
   completed: "COMPLETED",
-  error: "ERROR",
+  error: "Connection failed",
 };
 
 const STATUS_COLOR: Record<BenchStatus, string> = {
@@ -76,7 +76,7 @@ export function Header({
             BLAZIL
           </div>
           <div className="text-[10px] text-[var(--text-muted)] -mt-0.5">
-            BENCH DASHBOARD
+            FINTECH DASHBOARD
           </div>
         </div>
 

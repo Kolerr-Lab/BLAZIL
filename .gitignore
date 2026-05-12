@@ -104,6 +104,7 @@ tools/stresstest/stresstest-linux-arm64
 
 # Next.js build artifacts
 tools/ai-dashboard/.next/
+tools/fintech-dashboard/.next/
 tools/bench-dashboard/.next/
 
 # Zig binary (downloaded in CI, should not be committed)
