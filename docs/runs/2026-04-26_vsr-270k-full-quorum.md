@@ -1,8 +1,8 @@
 # Blazil VSR Full Quorum - 270K TPS
 
 **Date:** April 26, 2026  
-**Hardware:** 3 × DigitalOcean `s-8vcpu-16gb` droplets  
-**Configuration:** Full 3-node TigerBeetle VSR consensus (all nodes healthy)  
+**Hardware:** 1 × AWS `i4i.4xlarge` instance (16 vCPU, 128 GB RAM, Intel Ice Lake, NVMe)  
+**Configuration:** Full 3-node TigerBeetle VSR consensus (co-located, all nodes healthy)  
 **Duration:** Sustained production load  
 **Commit:** Latest stable  
 

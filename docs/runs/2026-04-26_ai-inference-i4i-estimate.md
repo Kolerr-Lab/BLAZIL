@@ -1,10 +1,11 @@
-# Blazil AI Inference - i4i.4xlarge Cluster Estimate
+# Blazil AI Inference - Single-Node Benchmark Estimate
 
 **Date:** April 26, 2026  
-**Hardware:** AWS i4i.4xlarge instances (16 vCPU, Intel Ice Lake, 128GB RAM, NVMe)  
-**Configuration:** CPU-only inference (no GPU)  
+**Hardware:** 1× AWS i4i.4xlarge instance (16 vCPU, Intel Ice Lake, 128GB RAM, NVMe)  
+**Configuration:** CPU-only inference (no GPU), single-node baseline  
 **Transport:** Aeron IPC (same as fintech)  
 **Models:** SqueezeNet 1.1 (~5MB), ResNet-50 (~100MB)  
+**Benchmark Profile:** 35 minutes (Dataloader 10min, SqueezeNet 10min, ResNet-50 15min)  
 
 ---
 
@@ -12,19 +13,21 @@
 
 ### Fintech (Proven Results)
 ```
-Instance: DigitalOcean s-8vcpu-16gb (8 vCPU, 16GB RAM)
-Workload: VSR consensus + TigerBeetle (IO-bound)
-Results: 270K TPS (4 shards), P99 ~312ms
-Cost: ~$160/month/node
+Instance: AWS i4i.4xlarge (16 vCPU, 128 GB RAM, NVMe)
+Workload: VSR consensus + TigerBeetle (IO-bound, 3 replicas co-located)
+Results: 270K TPS, P99 ~312ms
+Cost: ~$900/month ($1.248/hour)
 ```
 
-### AI Inference (Target)
+### AI Inference (Benchmark Target)
 ```
-Instance: AWS i4i.4xlarge (16 vCPU, 128GB RAM, local NVMe)
+Instance: 1× AWS i4i.4xlarge (16 vCPU, 128GB RAM, local NVMe)
 Workload: Tract ONNX inference (CPU-bound)
-Estimate: 5K-12K RPS (single node, see below)
-Cost: ~$1,000/month/node (~$1.50/hour)
+Estimate: SqueezeNet 1,600-2,400 RPS | ResNet-50 320-640 RPS (single node)
+Cost: ~$900/month ($1.248/hour)
 ```
+
+**Note:** This file estimates **single-node baseline performance** for upcoming benchmark, matching fintech approach (1 instance = 270K TPS). Multi-node scaling is future work.
 
 **Key difference:** 
 - Fintech: IO-bound, batch processing (8,190 transfers/batch) → high TPS
@@ -97,50 +100,20 @@ Transport overhead: <1ms (Aeron IPC)
 
 ---
 
-## 4-Node Cluster Estimates (Sharded)
-
-### Configuration
-```
-Cluster: 4x i4i.4xlarge (64 vCPUs total)
-Sharding: Account-based routing (same as fintech)
-Load balancer: Round-robin or consistent hashing
-Transport: Aeron IPC intra-node, UDP inter-node
-```
-
-### SqueezeNet 1.1 (Aggregate)
-```
-Per-node: 4,000-8,000 RPS
-4 nodes: 16,000-32,000 RPS aggregate
-Latency: P50 ~10ms, P99 ~20-25ms
-Scaling efficiency: ~95% (minimal cross-node traffic)
-Cost: $4,000/month
-```
-
-### ResNet-50 (Aggregate)
-```
-Per-node: 800-2,000 RPS
-4 nodes: 3,200-8,000 RPS aggregate
-Latency: P50 ~30ms, P99 ~60-80ms
-Scaling efficiency: ~95%
-Cost: $4,000/month
-```
-
----
-
-## Comparison with Fintech
+## Comparison with Fintech (Single Node)
 
 | Metric | Fintech (Proven) | AI Inference (Estimate) | Ratio |
 |--------|------------------|-------------------------|-------|
-| **TPS/RPS** | 270,000 TPS | 16,000-32,000 RPS (SqueezeNet) | 8-17x lower |
-| | | 3,200-8,000 RPS (ResNet-50) | 34-84x lower |
-| **Latency P50** | 278ms | 10ms (SqueezeNet) | 28x faster |
-| | | 30ms (ResNet-50) | 9x faster |
-| **Latency P99** | 312ms | 20-25ms (SqueezeNet) | 12-15x faster |
-| | | 60-80ms (ResNet-50) | 4-5x faster |
+| **TPS/RPS** | 270,000 TPS | 1,600-2,400 RPS (SqueezeNet) | 113-169x lower |
+| | | 320-640 RPS (ResNet-50) | 422-844x lower |
+| **Latency P50** | 278ms | 8-12ms (SqueezeNet) | 23-35x faster |
+| | | 25-40ms (ResNet-50) | 7-11x faster |
+| **Latency P99** | 312ms | 15-25ms (SqueezeNet) | 12-21x faster |
+| | | 50-80ms (ResNet-50) | 4-6x faster |
 | **Bottleneck** | VSR batch consensus | CPU compute per request | Different |
-| **Hardware** | 4x 8-vCPU DO ($640/mo) | 4x 16-vCPU i4i ($4,000/mo) | 6.25x cost |
-| **Cost per RPS** | $0.0024/TPS | $0.125-$0.25/RPS (SqueezeNet) | 52-104x more |
-| | | $0.5-$1.25/RPS (ResNet-50) | 208-520x more |
+| **Hardware** | 1× 16-vCPU i4i ($900/mo) | 1× 16-vCPU i4i ($900/mo) | Same |
+| **Cost per unit** | $0.0033/TPS | $0.375-$0.563/RPS (SqueezeNet) | 114-171x more |
+| | | $1.406-$2.813/RPS (ResNet-50) | 426-853x more |
 
 **Why throughput is lower:**
 1. **Compute intensity:** Each inference = 10-50ms CPU compute vs VSR batch = <1ms disk write
@@ -155,35 +128,32 @@ Cost: $4,000/month
 
 ---
 
-## Realistic Target for Production
+## Benchmark Targets (Single Node)
 
 ### Conservative (90% confidence)
 ```
 Model: SqueezeNet 1.1
-Cluster: 4x i4i.4xlarge
-Aggregate RPS: 12,000-16,000 RPS
-Latency: P50 ~12ms, P99 ~25ms
-Cost: $4,000/month
-Cost per 1K RPS: $250-333/month
+Hardware: 1× i4i.4xlarge
+Target RPS: 1,600-2,000 RPS
+Latency: P50 ~10ms, P99 ~25ms
+Cost: $900/month
 ```
 
 ### Optimistic (50% confidence)
 ```
 Model: SqueezeNet 1.1  
-Cluster: 4x i4i.4xlarge
-Aggregate RPS: 20,000-28,000 RPS
-Latency: P50 ~10ms, P99 ~20ms
-Cost: $4,000/month
-Cost per 1K RPS: $143-200/month
+Hardware: 1× i4i.4xlarge
+Target RPS: 2,000-2,400 RPS
+Latency: P50 ~8ms, P99 ~20ms
+Cost: $900/month
 ```
 
 ### Heavy Model (ResNet-50)
 ```
-Cluster: 4x i4i.4xlarge
-Aggregate RPS: 3,000-5,000 RPS
-Latency: P50 ~35ms, P99 ~70ms
-Cost: $4,000/month
-Cost per 1K RPS: $800-1,333/month
+Hardware: 1× i4i.4xlarge
+Target RPS: 320-640 RPS
+Latency: P50 ~30ms, P99 ~60ms
+Cost: $900/month
 ```
 
 ---
@@ -262,30 +232,30 @@ Cost increase: +$2,000/month per A100
 
 ## Recommendations
 
-### Phase 2 Master Build
+### Phase 1: Single-Node Baseline (Current)
 ```
-Target: Prove CPU inference works on same infrastructure as fintech
-Hardware: Reuse DO cluster (8 vCPU) for initial validation
-Model: SqueezeNet 1.1 (lightweight, fast validation)
-Goal: 2K-5K RPS per node, P99 <25ms
-Cost: $0 (reuse existing cluster)
-Timeline: 1-2 weeks for benchmark + validation
+Target: Prove CPU inference works on same hardware as fintech
+Hardware: 1× AWS i4i.4xlarge (same as 270K TPS fintech benchmark)
+Model: SqueezeNet 1.1, ResNet-50
+Goal: 1,600-2,400 RPS (SqueezeNet), 320-640 RPS (ResNet-50)
+Cost: ~$0.73 (35-minute benchmark)
+Timeline: Ready to run (scripts/ai-benchmark.sh)
 ```
 
-### Phase 3 Production (i4i.4xlarge)
+### Phase 2: Horizontal Scaling (Future)
 ```
-Target: Production deployment with real traffic
-Hardware: 4x i4i.4xlarge (16 vCPU each)
+Target: Production deployment with sharding
+Hardware: 4× i4i.4xlarge (16 vCPU each)
 Model: SqueezeNet or custom lightweight model
-Goal: 12-20K RPS aggregate, P99 <25ms
-Cost: $4,000/month
-Timeline: 4-6 weeks after Phase 2 validation
+Goal: 6.4K-9.6K RPS aggregate (4× single-node)
+Cost: $3,600/month
+Timeline: After Phase 1 validation
 ```
 
-### Phase 4 Scale-up (GPU acceleration)
+### Phase 3: GPU Acceleration (Future)
 ```
 Target: Beat NVIDIA Triton on cost + latency
-Hardware: 4x i4i.4xlarge + 4x A100 GPUs
+Hardware: 4× i4i.4xlarge + 4× A100 GPUs
 Model: ResNet-50, BERT, multi-model serving
 Goal: 200K-400K RPS, P99 <5ms
 Cost: $20,000/month (vs $80K for Triton)
@@ -296,19 +266,18 @@ Timeline: 3-6 months, requires CUDA/TensorRT integration
 
 ## TL;DR
 
-**Same i4i.4xlarge cluster (16 vCPU):**
+**Single i4i.4xlarge instance (16 vCPU) - Baseline Benchmark:**
 
 | Workload | Throughput | Latency P99 | Why Different? |
 |----------|-----------|-------------|----------------|
 | **Fintech** | 270K TPS | ~312ms | Batch processing (8,190 transfers), VSR consensus, IO-bound |
-| **AI Inference (SqueezeNet)** | 5K-8K RPS | ~20ms | Per-request compute, CPU-bound, no batching delay |
-| **AI Inference (ResNet-50)** | 800-2K RPS | ~60ms | Heavy model, memory bandwidth bottleneck |
+| **AI SqueezeNet** | 1,600-2,400 RPS | ~20ms | Per-request compute, CPU-bound, no batching delay |
+| **AI ResNet-50** | 320-640 RPS | ~60ms | Heavy model, memory bandwidth bottleneck |
 
-**Key insight:** AI inference gets **17-34x lower throughput** but **12-28x better latency** than fintech on same hardware. Different bottlenecks (CPU compute vs IO/consensus), different optimization strategies.
+**Key insight:** AI inference gets **113-844x lower throughput** but **4-35x better latency** than fintech on same hardware. Different bottlenecks (CPU compute vs IO/consensus), different optimization strategies.
 
-**4-node cluster estimate:** 
-- **SqueezeNet:** 12K-28K RPS, cost $4K/month
-- **ResNet-50:** 3K-8K RPS, cost $4K/month
-- **Latency:** P99 20-80ms (vs 312ms fintech)
+**This benchmark validates single-node baseline** (matching fintech approach). Multi-node scaling is future work:
+- 4× nodes (horizontal): 6.4K-9.6K RPS SqueezeNet
+- GPU acceleration: 200K-400K RPS target
 
-**Recommendation:** Start validation on existing DO cluster (free), then scale to i4i.4xlarge if numbers look good. GPU acceleration (Phase 4) needed to reach 200K-400K RPS target.
+**Next step:** Run `scripts/ai-benchmark.sh` on AWS i4i.4xlarge, collect 35-minute profile, validate estimates.

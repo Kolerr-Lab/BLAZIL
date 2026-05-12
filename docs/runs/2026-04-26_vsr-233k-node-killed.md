@@ -1,8 +1,8 @@
 # Blazil VSR Fault Tolerance Test - 233K TPS
 
 **Date:** April 26, 2026  
-**Hardware:** 3 × DigitalOcean `s-8vcpu-16gb` droplets  
-**Configuration:** 3-node TigerBeetle VSR consensus with 1 node killed  
+**Hardware:** 1 × AWS `i4i.4xlarge` instance (16 vCPU, 128 GB RAM, Intel Ice Lake, NVMe)  
+**Configuration:** 3-node TigerBeetle VSR consensus (co-located) with 1 node killed  
 **Test Type:** Fault tolerance validation  
 **Commit:** Latest stable  
 
