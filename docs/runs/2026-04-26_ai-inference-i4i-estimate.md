@@ -15,7 +15,7 @@
 ```
 Instance: AWS i4i.4xlarge (16 vCPU, 128 GB RAM, NVMe)
 Workload: VSR consensus + TigerBeetle (IO-bound, 3 replicas co-located)
-Results: 270K TPS, P99 ~312ms
+Results: 269,600 TPS, P99 ~312ms
 Cost: ~$900/month ($1.248/hour)
 ```
 
@@ -27,7 +27,7 @@ Estimate: SqueezeNet 1,600-2,400 RPS | ResNet-50 320-640 RPS (single node)
 Cost: ~$900/month ($1.248/hour)
 ```
 
-**Note:** This file estimates **single-node baseline performance** for upcoming benchmark, matching fintech approach (1 instance = 270K TPS). Multi-node scaling is future work.
+**Note:** This file estimates **single-node baseline performance** for upcoming benchmark, matching fintech approach (1 instance = 269,600 TPS). Multi-node scaling is future work.
 
 **Key difference:** 
 - Fintech: IO-bound, batch processing (8,190 transfers/batch) → high TPS
@@ -104,7 +104,7 @@ Transport overhead: <1ms (Aeron IPC)
 
 | Metric | Fintech (Proven) | AI Inference (Estimate) | Ratio |
 |--------|------------------|-------------------------|-------|
-| **TPS/RPS** | 270,000 TPS | 1,600-2,400 RPS (SqueezeNet) | 113-169x lower |
+| **TPS/RPS** | 269,600 TPS | 1,600-2,400 RPS (SqueezeNet) | 112-168x lower |
 | | | 320-640 RPS (ResNet-50) | 422-844x lower |
 | **Latency P50** | 278ms | 8-12ms (SqueezeNet) | 23-35x faster |
 | | | 25-40ms (ResNet-50) | 7-11x faster |
@@ -235,7 +235,7 @@ Cost increase: +$2,000/month per A100
 ### Phase 1: Single-Node Baseline (Current)
 ```
 Target: Prove CPU inference works on same hardware as fintech
-Hardware: 1× AWS i4i.4xlarge (same as 270K TPS fintech benchmark)
+Hardware: 1× AWS i4i.4xlarge (same as 269,600 TPS fintech benchmark)
 Model: SqueezeNet 1.1, ResNet-50
 Goal: 1,600-2,400 RPS (SqueezeNet), 320-640 RPS (ResNet-50)
 Cost: ~$0.73 (35-minute benchmark)
@@ -270,7 +270,7 @@ Timeline: 3-6 months, requires CUDA/TensorRT integration
 
 | Workload | Throughput | Latency P99 | Why Different? |
 |----------|-----------|-------------|----------------|
-| **Fintech** | 270K TPS | ~312ms | Batch processing (8,190 transfers), VSR consensus, IO-bound |
+| **Fintech** | 269,600 TPS | ~312ms | Batch processing (8,190 transfers), VSR consensus, IO-bound |
 | **AI SqueezeNet** | 1,600-2,400 RPS | ~20ms | Per-request compute, CPU-bound, no batching delay |
 | **AI ResNet-50** | 320-640 RPS | ~60ms | Heavy model, memory bandwidth bottleneck |
 

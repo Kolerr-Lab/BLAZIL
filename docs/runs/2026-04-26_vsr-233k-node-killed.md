@@ -14,7 +14,7 @@
 
 | Metric | Value |
 |--------|-------|
-| **TPS** | **233,900** |
+| **TPS** | **233,894** |
 | **Duration** | Sustained (1 node down) |
 | **Nodes** | 2/3 healthy (1 killed) |
 | **Latency P50** | 297ms |
@@ -29,7 +29,7 @@
 
 ### Initial State
 ```
-3-node VSR cluster running at 270K TPS
+3-node VSR cluster running at 269,600 TPS
 All nodes healthy and responding
 Normal quorum: 2/3 achieved in ~2ms
 ```
@@ -39,14 +39,14 @@ Normal quorum: 2/3 achieved in ~2ms
 Time 0:00:00 - Kill node-3 (SIGKILL)
 Time 0:00:00.08 - VSR detects failure, reconfigures
 Time 0:00:00.09 - Cluster continues with 2/2 quorum
-Time 0:00:05 - Sustained operation at 233K TPS
+Time 0:00:05 - Sustained operation at 233,894 TPS
 ```
 
 ### Recovery Test
 ```
 Time 0:05:00 - Restart node-3
 Time 0:05:03 - Node-3 rejoins cluster, catches up
-Time 0:05:15 - Full quorum restored, TPS returns to 270K
+Time 0:05:15 - Full quorum restored, TPS returns to 269,600
 ```
 
 ---
@@ -76,7 +76,7 @@ Concurrent batches: 16
 
 ### Performance Degradation
 
-**233K TPS** (down from 270K) represents **86% of full-quorum performance** with one node killed.
+**233,894 TPS** (down from 269,600) represents **86.8% of full-quorum performance** with one node killed.
 
 Degradation factors:
 - VSR quorum requires 2/2 instead of 2/3 (no slack)
@@ -85,7 +85,7 @@ Degradation factors:
 
 ### Latency Impact
 
-| Percentile | Full Quorum (270K) | 1 Node Killed (233K) | Degradation |
+| Percentile | Full Quorum (269,600) | 1 Node Killed (233,894) | Degradation |
 |------------|--------------------|-----------------------|-------------|
 | P50 | 278ms | 297ms | +7% |
 | P95 | ~350ms | ~350ms | ~0% |
@@ -107,7 +107,7 @@ Degradation factors:
 
 | System | Config | Node Failure Impact |
 |--------|--------|---------------------|
-| **Blazil VSR** | 3-node | **86% performance retained** (270K → 233K) |
+| **Blazil VSR** | 3-node | **86.8% performance retained** (269,600 → 233,894) |
 | Cassandra | 3-node | ~70% (writes slower, reads ok) |
 | MongoDB replica | 3-node | ~60% (election + catchup overhead) |
 | CockroachDB | 3-node | ~50% (Raft overhead) |
@@ -122,15 +122,15 @@ Degradation factors:
 ### Capacity Planning
 
 For production deployments targeting **250K TPS sustained**, provision cluster for:
-- **Normal operation:** 270K TPS baseline (8% headroom)
-- **1-node failure:** 233K TPS degraded (still meets target)
+- **Normal operation:** 269,600 TPS baseline (8% headroom)
+- **1-node failure:** 233,894 TPS degraded (still meets target)
 - **Recommendation:** 3-node minimum, 5-node for <5% degradation
 
 ### SLA Guarantees
 
 With 3-node VSR cluster:
 - **Availability:** 99.99% (survives 1-node failure)
-- **Performance:** 233K-270K TPS (86-100% of baseline)
+- **Performance:** 233,894-269,600 TPS (86.8-100% of baseline)
 - **Latency:** P99 ~313ms (stable under failure)
 - **Recovery:** <100ms failover, <30s full recovery
 
@@ -138,12 +138,12 @@ With 3-node VSR cluster:
 
 ## Bottleneck Analysis
 
-At 233K TPS with 1 node killed:
+At 233,894 TPS with 1 node killed:
 ```
 Batch throughput = Batch_size / VSR_batch_time_degraded
                  = 8,190 / 0.035s
                  = 234,000 TPS theoretical
-                 ≈ 233K TPS measured (99.5% efficiency)
+                 ≈ 233,894 TPS measured (99.5% efficiency)
 
 End-to-end latency = P50 ~297ms, P99 ~313ms
   = Minimal degradation (+7% P50, +0.3% P99)
@@ -155,7 +155,7 @@ The system remains **highly efficient** even under node failure. Latency stabili
 
 ## Related Benchmarks
 
-- [Full quorum (270K TPS)](./2026-04-26_vsr-270k-full-quorum.md)
+- [Full quorum (269,600 TPS)](./2026-04-26_vsr-270k-full-quorum.md)
 - [3-shard aggregate (436K TPS, no consensus)](./2026-04-13_option-b-sharded-aggregate.md)
 - [Single-node baseline](./2026-04-13_option-b-node1-130k.md)
 
