@@ -30,10 +30,10 @@ mod health;
 #[cfg(feature = "metrics-ws")]
 mod ws_server;
 
-use health::{HealthTracker, SlaConfig};
 use blazil_dataloader::{datasets::ImageNetDataset, Dataset, DatasetConfig, Pipeline};
 use blazil_inference::{InferenceConfig, InferenceModel, InferencePipeline, OnnxModel};
 use clap::Parser;
+use health::{HealthTracker, SlaConfig};
 use std::{
     path::PathBuf,
     sync::{
@@ -345,9 +345,9 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize health tracker with SLA requirements
     let sla_config = SlaConfig {
-        max_error_rate: 0.01,        // 1% max error rate
-        max_p99_latency_us: 50_000,  // 50ms P99 latency
-        min_uptime_pct: 0.999,       // 99.9% uptime
+        max_error_rate: 0.01,       // 1% max error rate
+        max_p99_latency_us: 50_000, // 50ms P99 latency
+        min_uptime_pct: 0.999,      // 99.9% uptime
     };
     let health_tracker = HealthTracker::new(sla_config);
 
@@ -409,13 +409,19 @@ async fn main() -> anyhow::Result<()> {
     // Always print final health status on exit
     if shutdown_flag.load(Ordering::Relaxed) {
         println!("\n[shutdown] Graceful shutdown complete");
-        println!("[health] Final status: {}", health_tracker.status().as_str());
+        println!(
+            "[health] Final status: {}",
+            health_tracker.status().as_str()
+        );
         println!("[health] Uptime: {}", health_tracker.uptime_iso8601());
         println!(
             "[health] Success rate: {:.2}%",
             health_tracker.success_rate() * 100.0
         );
-        println!("[health] P99 latency: {}µs", health_tracker.p99_latency_us());
+        println!(
+            "[health] P99 latency: {}µs",
+            health_tracker.p99_latency_us()
+        );
         println!(
             "[health] SLA compliance: {}",
             if health_tracker.meets_sla() {

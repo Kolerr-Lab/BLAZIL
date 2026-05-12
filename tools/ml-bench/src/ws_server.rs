@@ -117,7 +117,11 @@ mod inner {
     ) -> Response {
         let status = health.status();
         let json = health.health_json();
-        (StatusCode::from_u16(status.http_code()).unwrap(), Json(json)).into_response()
+        (
+            StatusCode::from_u16(status.http_code()).unwrap(),
+            Json(json),
+        )
+            .into_response()
     }
 
     async fn metrics_handler(
