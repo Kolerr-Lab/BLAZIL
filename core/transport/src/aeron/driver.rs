@@ -186,7 +186,7 @@ impl EmbeddedAeronDriver {
                 BlazerError::Transport(format!("Failed to spawn aeron-driver thread: {e}"))
             })?;
 
-        *self.join_handle.lock().unwrap() = Some(join_handle);
+        *self.join_handle.lock().expect("join_handle lock poisoned") = Some(join_handle);
 
         // Allow the driver 100 ms to write its lock file before clients connect.
         std::thread::sleep(std::time::Duration::from_millis(100));
@@ -201,7 +201,12 @@ impl EmbeddedAeronDriver {
     /// been dropped.
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Release);
-        if let Some(handle) = self.join_handle.lock().unwrap().take() {
+        if let Some(handle) = self
+            .join_handle
+            .lock()
+            .expect("join_handle lock poisoned")
+            .take()
+        {
             let _ = handle.join();
         }
         tracing::info!("Aeron embedded driver stopped");

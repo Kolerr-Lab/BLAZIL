@@ -37,15 +37,24 @@ impl EllipticScreener {
 #[async_trait]
 impl TransactionScreener for EllipticScreener {
     async fn screen(&self, _tx: &TransactionEvent, _mode: ScreeningMode) -> ScreeningResult {
-        // TODO(elliptic): implement once API contract is signed.
+        // Integration status: pending API contract — see module-level docs.
         //
-        // Checklist:
+        // Implementation checklist (activate when contract is signed):
         //   [ ] Obtain API credentials from secrets manager.
         //   [ ] Implement HMAC-SHA256 request signing per Elliptic auth scheme.
         //   [ ] Implement `build_request` to map TransactionEvent → payload.
         //   [ ] Map risk score: ≥ 0.8 → Reject, ≥ 0.5 → Hold, ≥ 0.3 → Flag.
         //   [ ] Add integration tests against Elliptic sandbox.
-        todo!("Elliptic provider: pending API contract — see module docs")
+        //
+        // Safe-fail: hold the transaction pending manual compliance review.
+        // Clearing an unscreened transaction would violate AML obligations.
+        ScreeningResult::Hold {
+            reason: "Elliptic screening provider not yet configured \
+                     (pending API contract). \
+                     Transaction held for manual compliance review."
+                .to_owned(),
+            review_required: true,
+        }
     }
 
     fn provider_name(&self) -> &'static str {

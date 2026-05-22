@@ -555,7 +555,7 @@ impl IoUringUdpTransport {
     pub fn local_addr(&self) -> String {
         self.bound_addr
             .lock()
-            .unwrap()
+            .expect("bound_addr lock poisoned")
             .clone()
             .unwrap_or_else(|| self.addr.clone())
     }
@@ -564,7 +564,7 @@ impl IoUringUdpTransport {
     pub async fn local_addr_async(&self) -> String {
         loop {
             {
-                let guard = self.bound_addr.lock().unwrap();
+                let guard = self.bound_addr.lock().expect("bound_addr lock poisoned");
                 if let Some(ref a) = *guard {
                     return a.clone();
                 }
@@ -655,7 +655,7 @@ async fn uring_udp_recv_loop(
         .map_err(|e| BlazerError::Transport(format!("local_addr() failed: {e}")))?;
 
     {
-        let mut guard = bound_addr.lock().unwrap();
+        let mut guard = bound_addr.lock().expect("bound_addr lock poisoned");
         *guard = Some(local.to_string());
     }
 
@@ -780,7 +780,9 @@ async fn uring_udp_recv_loop(
         }
 
         // ── Deserialize ───────────────────────────────────────────────────
-        let sequence = u64::from_be_bytes(packet_bytes[0..8].try_into().unwrap());
+        // Safety: packet_bytes.len() == UDP_PACKET_SIZE is guaranteed by the guard above.
+        let sequence =
+            u64::from_be_bytes(packet_bytes[0..8].try_into().expect("length pre-validated"));
 
         let event = match udp_deserialize_event(&packet_bytes[UDP_HEADER_SIZE..UDP_PACKET_SIZE]) {
             Ok(e) => e,
@@ -854,13 +856,15 @@ fn udp_deserialize_event(bytes: &[u8]) -> BlazerResult<TransactionEvent> {
         )));
     }
 
-    let tx_id = u64::from_be_bytes(bytes[0..8].try_into().unwrap());
-    let debit_id = u64::from_be_bytes(bytes[8..16].try_into().unwrap());
-    let credit_id = u64::from_be_bytes(bytes[16..24].try_into().unwrap());
-    let amount = u64::from_be_bytes(bytes[24..32].try_into().unwrap());
-    let timestamp_nanos = u64::from_be_bytes(bytes[32..40].try_into().unwrap());
-    let ledger_u32 = u32::from_be_bytes(bytes[40..44].try_into().unwrap());
-    let code = u16::from_be_bytes(bytes[44..46].try_into().unwrap());
+    // Safety: bytes.len() == UDP_PAYLOAD_SIZE is guaranteed by the guard above.
+    let tx_id = u64::from_be_bytes(bytes[0..8].try_into().expect("length pre-validated"));
+    let debit_id = u64::from_be_bytes(bytes[8..16].try_into().expect("length pre-validated"));
+    let credit_id = u64::from_be_bytes(bytes[16..24].try_into().expect("length pre-validated"));
+    let amount = u64::from_be_bytes(bytes[24..32].try_into().expect("length pre-validated"));
+    let timestamp_nanos =
+        u64::from_be_bytes(bytes[32..40].try_into().expect("length pre-validated"));
+    let ledger_u32 = u32::from_be_bytes(bytes[40..44].try_into().expect("length pre-validated"));
+    let code = u16::from_be_bytes(bytes[44..46].try_into().expect("length pre-validated"));
     let flags_byte = bytes[46];
 
     let ledger_id = match ledger_u32 {

@@ -100,8 +100,10 @@ impl XSocket {
             BlazerError::Transport(format!("invalid if_name '{}': {e}", cfg.if_name))
         })?;
 
-        let rx_size = NonZeroU32::new(RX_RING_SIZE).unwrap();
-        let tx_size = NonZeroU32::new(TX_RING_SIZE).unwrap();
+        let rx_size = NonZeroU32::new(RX_RING_SIZE)
+            .expect("RX_RING_SIZE is a non-zero compile-time constant");
+        let tx_size = NonZeroU32::new(TX_RING_SIZE)
+            .expect("TX_RING_SIZE is a non-zero compile-time constant");
 
         let mut bind_flags = BindFlags::empty();
         if cfg.zero_copy {

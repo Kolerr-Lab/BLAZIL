@@ -106,7 +106,7 @@ impl UdpTransportServer {
     pub fn local_addr(&self) -> String {
         self.bound_addr
             .lock()
-            .unwrap()
+            .expect("bound_addr lock poisoned")
             .clone()
             .unwrap_or_else(|| "127.0.0.1:0".to_string())
     }
@@ -115,7 +115,7 @@ impl UdpTransportServer {
     pub async fn local_addr_async(&self) -> String {
         loop {
             {
-                let addr = self.bound_addr.lock().unwrap();
+                let addr = self.bound_addr.lock().expect("bound_addr lock poisoned");
                 if let Some(ref a) = *addr {
                     return a.clone();
                 }
@@ -159,7 +159,7 @@ impl UdpTransportServer {
             .map_err(|e| BlazerError::Internal(format!("Failed to get local address: {e}")))?;
 
         {
-            let mut addr = self.bound_addr.lock().unwrap();
+            let mut addr = self.bound_addr.lock().expect("bound_addr lock poisoned");
             *addr = Some(local_addr.to_string());
         }
 
@@ -218,7 +218,8 @@ impl UdpTransportServer {
                 continue;
             }
 
-            let sequence = u64::from_be_bytes(buf[0..8].try_into().unwrap());
+            // Safety: buf[0..8] is valid because len == PACKET_SIZE > 8.
+            let sequence = u64::from_be_bytes(buf[0..8].try_into().expect("length pre-validated"));
 
             let event = match Self::deserialize_event_static(&buf[HEADER_SIZE..PACKET_SIZE]) {
                 Ok(e) => e,
@@ -297,14 +298,17 @@ impl UdpTransportServer {
             )));
         }
 
-        // Extract fields with explicit bounds checking (network byte order)
-        let tx_id = u64::from_be_bytes(bytes[0..8].try_into().unwrap());
-        let debit_id = u64::from_be_bytes(bytes[8..16].try_into().unwrap());
-        let credit_id = u64::from_be_bytes(bytes[16..24].try_into().unwrap());
-        let amount = u64::from_be_bytes(bytes[24..32].try_into().unwrap());
-        let timestamp_nanos = u64::from_be_bytes(bytes[32..40].try_into().unwrap());
-        let ledger_u32 = u32::from_be_bytes(bytes[40..44].try_into().unwrap());
-        let code = u16::from_be_bytes(bytes[44..46].try_into().unwrap());
+        // Extract fields with explicit bounds checking (network byte order).
+        // Safety: bytes.len() == PAYLOAD_SIZE is guaranteed by the guard above.
+        let tx_id = u64::from_be_bytes(bytes[0..8].try_into().expect("length pre-validated"));
+        let debit_id = u64::from_be_bytes(bytes[8..16].try_into().expect("length pre-validated"));
+        let credit_id = u64::from_be_bytes(bytes[16..24].try_into().expect("length pre-validated"));
+        let amount = u64::from_be_bytes(bytes[24..32].try_into().expect("length pre-validated"));
+        let timestamp_nanos =
+            u64::from_be_bytes(bytes[32..40].try_into().expect("length pre-validated"));
+        let ledger_u32 =
+            u32::from_be_bytes(bytes[40..44].try_into().expect("length pre-validated"));
+        let code = u16::from_be_bytes(bytes[44..46].try_into().expect("length pre-validated"));
         let flags_byte = bytes[46];
 
         // Convert raw u32 to LedgerId

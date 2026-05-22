@@ -91,8 +91,14 @@ impl OwnedUmem {
 
         let config = UmemConfig::builder()
             .frame_size(FrameSize::TwoKiloBytes)
-            .fill_queue_size(NonZeroU32::new(FILL_RING_SIZE).unwrap())
-            .comp_queue_size(NonZeroU32::new(COMP_RING_SIZE).unwrap())
+            .fill_queue_size(
+                NonZeroU32::new(FILL_RING_SIZE)
+                    .expect("FILL_RING_SIZE is a non-zero compile-time constant"),
+            )
+            .comp_queue_size(
+                NonZeroU32::new(COMP_RING_SIZE)
+                    .expect("COMP_RING_SIZE is a non-zero compile-time constant"),
+            )
             .build()
             .map_err(|e| BlazerError::Transport(format!("UMEM config: {e}")))?;
 

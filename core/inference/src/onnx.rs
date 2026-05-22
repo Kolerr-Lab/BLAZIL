@@ -295,7 +295,10 @@ impl InferenceModel for OnnxModel {
                 let chunk_predictions = if chunk.len() < model_batch_size {
                     // Pad the last chunk by repeating the last sample
                     let mut padded_chunk: Vec<Sample> = chunk.to_vec();
-                    let last_sample = chunk.last().unwrap().clone();
+                    let last_sample = chunk
+                        .last()
+                        .expect("chunks() always yields non-empty slices")
+                        .clone();
                     while padded_chunk.len() < model_batch_size {
                         padded_chunk.push(last_sample.clone());
                     }

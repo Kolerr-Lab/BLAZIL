@@ -34,7 +34,7 @@ impl Prediction {
         let (class_id, confidence) = probabilities
             .iter()
             .enumerate()
-            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+            .max_by(|(_, a), (_, b)| a.total_cmp(b))
             .map(|(i, &p)| (i as u32, p))
             .unwrap_or((0, 0.0));
 

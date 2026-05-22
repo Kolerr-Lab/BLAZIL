@@ -37,15 +37,24 @@ impl ChainalysisScreener {
 #[async_trait]
 impl TransactionScreener for ChainalysisScreener {
     async fn screen(&self, _tx: &TransactionEvent, _mode: ScreeningMode) -> ScreeningResult {
-        // TODO(chainalysis): implement once API contract is signed.
+        // Integration status: pending API contract — see module-level docs.
         //
-        // Checklist:
+        // Implementation checklist (activate when contract is signed):
         //   [ ] Obtain API credentials from secrets manager.
         //   [ ] Implement `build_request` to map TransactionEvent → KYT payload.
         //   [ ] POST to `self.config.endpoint` with `Token {api_key}` header.
         //   [ ] Map KYT alert levels: SEVERE → Reject, HIGH → Hold, MEDIUM → Flag.
         //   [ ] Add integration tests against Chainalysis sandbox.
-        todo!("Chainalysis provider: pending API contract — see module docs")
+        //
+        // Safe-fail: hold the transaction pending manual compliance review.
+        // Clearing an unscreened transaction would violate AML obligations.
+        ScreeningResult::Hold {
+            reason: "Chainalysis KYT screening provider not yet configured \
+                     (pending API contract). \
+                     Transaction held for manual compliance review."
+                .to_owned(),
+            review_required: true,
+        }
     }
 
     fn provider_name(&self) -> &'static str {
