@@ -79,3 +79,6 @@ pub use afxdp::AfXdpTransportServer;
 
 #[cfg(all(target_os = "linux", feature = "af-xdp"))]
 pub use afxdp::AfXdpConfig;
+
+#[cfg(all(target_os = "linux", feature = "af-xdp"))]
+pub use afxdp::client::AfXdpClient;

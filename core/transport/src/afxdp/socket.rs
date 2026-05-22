@@ -96,8 +96,9 @@ impl XSocket {
     /// The caller must ensure `umem` outlives this socket (enforced by the
     /// `Arc<OwnedUmem>` ownership pattern in `AfXdpTransportServer`).
     pub fn new(cfg: &XSocketConfig, umem: &OwnedUmem) -> BlazerResult<Self> {
-        let if_name = InterfaceName::try_from(cfg.if_name.as_str())
-            .map_err(|e| BlazerError::Transport(format!("invalid if_name '{}': {e}", cfg.if_name)))?;
+        let if_name = InterfaceName::try_from(cfg.if_name.as_str()).map_err(|e| {
+            BlazerError::Transport(format!("invalid if_name '{}': {e}", cfg.if_name))
+        })?;
 
         let rx_size = NonZeroU32::new(RX_RING_SIZE).unwrap();
         let tx_size = NonZeroU32::new(TX_RING_SIZE).unwrap();
@@ -117,11 +118,12 @@ impl XSocket {
         // SAFETY: Socket::new creates AF_XDP fd, binds to interface/queue, and
         // maps ring memory.  We hold `umem` alive via Arc in the caller.
         let (socket, tx, rx, fq_cq) = unsafe {
-            Socket::new(socket_config, umem.inner(), &if_name, cfg.queue_id)
-                .map_err(|e| BlazerError::Transport(format!(
+            Socket::new(socket_config, umem.inner(), &if_name, cfg.queue_id).map_err(|e| {
+                BlazerError::Transport(format!(
                     "AF_XDP socket bind to {}@queue{}: {e}",
                     cfg.if_name, cfg.queue_id
-                )))?
+                ))
+            })?
         };
 
         // fq_cq is Some only for the *first* socket created on a UMEM.

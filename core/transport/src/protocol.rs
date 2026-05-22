@@ -252,6 +252,40 @@ pub fn deserialize_response(bytes: &[u8]) -> BlazerResult<TransactionResponse> {
         .map_err(|e| BlazerError::Transport(format!("response deserialization failed: {e}")))
 }
 
+// ── AF_XDP frame constants and helpers ────────────────────────────────────────
+
+/// Blazil AF_XDP magic bytes — identifies Blazil UDP payloads for XDP redirect.
+///
+/// Value: ASCII `"BLZL"` = `[0x42, 0x4C, 0x5A, 0x4C]`.
+///
+/// Checked by the eBPF program (`ebpf/blazil_xdp.bpf.c`) and the server-side
+/// RX cursor (`afxdp/rx.rs`) before MessagePack deserialization.
+pub const BLZL_MAGIC: [u8; 4] = [0x42, 0x4C, 0x5A, 0x4C];
+
+/// Default UDP port for Blazil AF_XDP traffic.
+///
+/// Must match `BLAZIL_UDP_PORT` in `ebpf/blazil_xdp.bpf.c` and the
+/// `AfXdpConfig::port` default.
+pub const BLZL_UDP_PORT: u16 = 7878;
+
+/// Encode a [`TransactionRequest`] as a BLZL-framed UDP payload.
+///
+/// Layout: `[BLZL_MAGIC 4B][MsgPack(TransactionRequest)]`
+///
+/// This is the wire format expected by the AF_XDP transport server's RX
+/// cursor and produced by the bench client.
+///
+/// # Errors
+///
+/// Returns [`BlazerError::Transport`] if MessagePack serialization fails.
+pub fn encode_blzl_frame(req: &TransactionRequest) -> BlazerResult<Vec<u8>> {
+    let payload = serialize_request(req)?;
+    let mut frame = Vec::with_capacity(BLZL_MAGIC.len() + payload.len());
+    frame.extend_from_slice(&BLZL_MAGIC);
+    frame.extend_from_slice(&payload);
+    Ok(frame)
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -404,5 +438,35 @@ mod tests {
         let result = deserialize_request(garbage);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), BlazerError::Transport(_)));
+    }
+
+    // ── BLZL frame tests ──────────────────────────────────────────────────────
+
+    #[test]
+    fn encode_blzl_frame_starts_with_magic() {
+        let req = sample_request();
+        let frame = encode_blzl_frame(&req).unwrap();
+        assert!(
+            frame.len() > BLZL_MAGIC.len(),
+            "frame must contain magic + payload"
+        );
+        assert_eq!(&frame[..BLZL_MAGIC.len()], &BLZL_MAGIC);
+    }
+
+    #[test]
+    fn encode_blzl_frame_payload_deserializes() {
+        let req = sample_request();
+        let frame = encode_blzl_frame(&req).unwrap();
+        let payload = &frame[BLZL_MAGIC.len()..];
+        let decoded = deserialize_request(payload).unwrap();
+        assert_eq!(decoded.request_id, req.request_id);
+        assert_eq!(decoded.amount, req.amount);
+        assert_eq!(decoded.currency, req.currency);
+    }
+
+    #[test]
+    fn blzl_magic_matches_bpf_constant() {
+        // ASCII "BLZL" = 0x424C5A4C (big-endian), matching ebpf/blazil_xdp.bpf.c
+        assert_eq!(BLZL_MAGIC, [0x42, 0x4C, 0x5A, 0x4C]);
     }
 }

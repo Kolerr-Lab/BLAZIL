@@ -178,7 +178,7 @@ pub mod inner {
 
         if let Some(ref addr) = tb_addr {
             println!("Ledger      : TigerBeetle @ {addr}");
-            println!("Window size : {} (TB mode)", WINDOW_SIZE_TB);
+            println!("Window size : {WINDOW_SIZE_TB} (TB mode)");
             #[cfg(feature = "tigerbeetle-client")]
             {
                 println!("[diag] calling TigerBeetleClient::connect...");
@@ -205,10 +205,7 @@ pub mod inner {
         if let Ok(delay_str) = std::env::var("BLAZIL_MOCK_DELAY_MS") {
             let delay_ms: u64 = delay_str.parse().unwrap_or(2);
             println!("Ledger      : [MOCK] DelayedMock @ {delay_ms}ms (isolation test)");
-            println!(
-                "Window size : {} (TB-mode window — same pipeline pressure)",
-                WINDOW_SIZE_TB
-            );
+            println!("Window size : {WINDOW_SIZE_TB} (TB-mode window — same pipeline pressure)");
             println!("BLAZIL_MOCK_DELAY_MS={delay_ms}: if TPS is flat → bottleneck is TB/DO.");
             println!("                              if TPS decays → bottleneck is Rust/Aeron.");
             return run_with_ledger(
@@ -223,7 +220,7 @@ pub mod inner {
         }
 
         println!("Ledger      : InMemory (set BLAZIL_TB_ADDRESS for real TB)");
-        println!("Window size : {} (InMemory mode)", WINDOW_SIZE_INMEM);
+        println!("Window size : {WINDOW_SIZE_INMEM} (InMemory mode)");
         run_with_ledger(
             events,
             payload_size,
@@ -271,7 +268,7 @@ pub mod inner {
         println!("[diag] credit account OK");
 
         // ── pipeline ──────────────────────────────────────────────────────────
-        println!("[diag] building pipeline (capacity={})...", CAPACITY);
+        println!("[diag] building pipeline (capacity={CAPACITY})...");
         let builder = PipelineBuilder::new().with_capacity(CAPACITY);
         let results = builder.results();
         let result_ring = builder.result_ring();
@@ -359,7 +356,7 @@ pub mod inner {
             // ── Aeron warmup ──────────────────────────────────────────────────
             // 2000 events: primes the IPC log buffer, Aeron flow-control,
             // and the ring-buffer shard worker threads.
-            println!("[diag] sending {} warmup events...", WARMUP_EVENTS);
+            println!("[diag] sending {WARMUP_EVENTS} warmup events...");
             let mut warmup_resp: Vec<Vec<u8>> = Vec::new();
             for i in 0..WARMUP_EVENTS {
                 let mut bytes = serialize_request(&make_request(i, &debit_id_str, &credit_id_str))
@@ -390,10 +387,7 @@ pub mod inner {
             warmup_resp.clear();
             // Let the pipeline drain and CPU frequency stabilize.
             std::thread::sleep(Duration::from_millis(50));
-            println!(
-                "[diag] starting main bench ({} events, window={})...",
-                total, window_size
-            );
+            println!("[diag] starting main bench ({total} events, window={window_size})...");
 
             // ── benchmark: window-based pipelined send/recv ────────────────
             let mut send_times = Vec::with_capacity(total as usize);
@@ -494,20 +488,9 @@ pub mod inner {
                         let offer_fail = serve_offer_fail.load(Ordering::Relaxed);
                         let vm_mb = vm_rss_mb();
                         println!(
-                            "[heartbeat] elapsed={:.1}s recv={}/{} committed={} \
-                             rejected={} sent={} active_tb={} pending={} \
-                             offer_fail={} vm_rss={}MB tps_avg={:.0}",
-                            elapsed,
-                            received,
-                            total_usize,
-                            committed,
-                            rejected,
-                            sent,
-                            active,
-                            pending_n,
-                            offer_fail,
-                            vm_mb,
-                            tps_avg
+                            "[heartbeat] elapsed={elapsed:.1}s recv={received}/{total_usize} committed={committed} \
+                             rejected={rejected} sent={sent} active_tb={active} pending={pending_n} \
+                             offer_fail={offer_fail} vm_rss={vm_mb}MB tps_avg={tps_avg:.0}"
                         );
                         last_heartbeat = Instant::now();
                     }
@@ -540,10 +523,7 @@ pub mod inner {
         } else {
             0.0
         };
-        println!(
-            "Committed : {} / Rejected : {} / Error rate : {:.2}%",
-            committed, rejected, error_rate,
-        );
+        println!("Committed : {committed} / Rejected : {rejected} / Error rate : {error_rate:.2}%");
 
         BenchmarkResult::new("Aeron IPC E2E", events, duration, &mut latencies)
             .with_counts(committed, rejected)

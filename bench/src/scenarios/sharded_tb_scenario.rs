@@ -551,7 +551,7 @@ pub mod inner {
         if !windowed_tps.is_empty() {
             println!("\n[per-second TPS breakdown]");
             for (sec, tps) in &windowed_tps {
-                println!("  t+{:3}s: {:>9} TPS", sec, tps);
+                println!("  t+{sec:3}s: {tps:>9} TPS");
             }
             let avg_tps = if !windowed_tps.is_empty() {
                 windowed_tps.values().sum::<u64>() / windowed_tps.len() as u64
@@ -560,10 +560,7 @@ pub mod inner {
             };
             let max_tps = windowed_tps.values().max().copied().unwrap_or(0);
             let min_tps = windowed_tps.values().min().copied().unwrap_or(0);
-            println!(
-                "  avg: {} TPS | max: {} TPS | min: {} TPS\n",
-                avg_tps, max_tps, min_tps
-            );
+            println!("  avg: {avg_tps} TPS | max: {max_tps} TPS | min: {min_tps} TPS\n");
         }
 
         // In duration-mode the pre-computed total_events may differ from what

@@ -57,7 +57,7 @@ use blazil_engine::event::{TransactionEvent, TransactionResult};
 use blazil_engine::pipeline::Pipeline;
 
 use crate::connection::build_response;
-use crate::protocol::{deserialize_request, serialize_response, TransactionResponse};
+use crate::protocol::{deserialize_request, serialize_response, TransactionResponse, BLZL_MAGIC};
 
 use super::socket::XSocket;
 use super::umem::OwnedUmem;
@@ -65,18 +65,15 @@ use super::umem::OwnedUmem;
 // ── Wire frame constants ──────────────────────────────────────────────────────
 
 /// Ethernet header size (bytes).
-const ETH_HDR:   usize = 14;
+const ETH_HDR: usize = 14;
 /// Minimum IPv4 header size (bytes). Variable if IHL > 5.
-const IPV4_HDR:  usize = 20;
+const IPV4_HDR: usize = 20;
 /// UDP header size (bytes).
-const UDP_HDR:   usize = 8;
+const UDP_HDR: usize = 8;
 /// Blazil magic word size (bytes).  Must be "BLZL" = 0x424C5A4C.
 const MAGIC_LEN: usize = 4;
 /// Minimum payload offset in a Blazil UDP frame.
 const PAYLOAD_OFFSET: usize = ETH_HDR + IPV4_HDR + UDP_HDR + MAGIC_LEN;
-
-/// Blazil magic in network byte order (big-endian).
-const BLAZIL_MAGIC: [u8; 4] = [0x42, 0x4C, 0x5A, 0x4C]; // "BLZL"
 
 /// How many RX descriptors to consume per poll iteration.  Matches the
 /// typical TB batch size so the pipeline sees full batches.
@@ -121,14 +118,16 @@ impl RxCursor {
         bind_addr: &str,
         stop: Arc<AtomicBool>,
     ) -> BlazerResult<Self> {
-        let response_sock = UdpSocket::bind(bind_addr)
-            .map_err(|e| blazil_common::error::BlazerError::Transport(
-                format!("RxCursor{shard_id} response socket bind: {e}")
-            ))?;
-        response_sock.set_nonblocking(true)
-            .map_err(|e| blazil_common::error::BlazerError::Transport(
-                format!("RxCursor{shard_id} set_nonblocking: {e}")
-            ))?;
+        let response_sock = UdpSocket::bind(bind_addr).map_err(|e| {
+            blazil_common::error::BlazerError::Transport(format!(
+                "RxCursor{shard_id} response socket bind: {e}"
+            ))
+        })?;
+        response_sock.set_nonblocking(true).map_err(|e| {
+            blazil_common::error::BlazerError::Transport(format!(
+                "RxCursor{shard_id} set_nonblocking: {e}"
+            ))
+        })?;
 
         Ok(Self {
             socket,
@@ -152,8 +151,7 @@ impl RxCursor {
         // SAFETY: descriptors are valid UMEM offsets from OwnedUmem::new().
         let produced = unsafe {
             // wakeup=true: NAPI poll trigger on kernel side.
-            self.socket.fill.produce_and_wakeup(&descs)
-                .unwrap_or(0)
+            self.socket.fill.produce_and_wakeup(&descs).unwrap_or(0)
         };
         debug!(
             shard_id = self.shard_id,
@@ -172,7 +170,7 @@ impl RxCursor {
         self.seed_fill_queue();
 
         let mut descs = vec![xsk_rs::FrameDesc::default(); CONSUME_BATCH];
-        let shard_id  = self.shard_id;
+        let shard_id = self.shard_id;
 
         debug!(shard_id, "AF_XDP RxCursor started");
 
@@ -184,9 +182,7 @@ impl RxCursor {
             // ── Consume RX ring ───────────────────────────────────────────────
             // SAFETY: `consume` writes valid frame descriptors into `descs`.
             // Each descriptor's addr is a valid offset into OwnedUmem.inner.
-            let n_recv = unsafe {
-                self.socket.rx.consume(&mut descs)
-            };
+            let n_recv = unsafe { self.socket.rx.consume(&mut descs) };
 
             if n_recv == 0 {
                 // Nothing in the ring — hint CPU and loop (busy-poll).
@@ -219,9 +215,7 @@ impl RxCursor {
             // ── Return descriptors to fill queue ──────────────────────────────
             // SAFETY: these descriptors were received from RX ring; returning
             // them to fill is the correct protocol.
-            let _ = unsafe {
-                self.socket.fill.produce_and_wakeup(&filled_back)
-            };
+            let _ = unsafe { self.socket.fill.produce_and_wakeup(&filled_back) };
 
             // ── Drain TX completion queue ─────────────────────────────────────
             // (If zero-copy TX is used, comp queue releases TX'd frames.)
@@ -241,14 +235,15 @@ impl RxCursor {
     fn process_frame(&self, frame: &[u8]) -> BlazerResult<()> {
         // ── Parse wire headers ────────────────────────────────────────────────
         if frame.len() < PAYLOAD_OFFSET + 1 {
-            return Err(blazil_common::error::BlazerError::Transport(
-                format!("frame too short: {} bytes", frame.len()),
-            ));
+            return Err(blazil_common::error::BlazerError::Transport(format!(
+                "frame too short: {} bytes",
+                frame.len()
+            )));
         }
 
         // Verify magic (the XDP program already checked this, but defence-in-depth).
         let magic = &frame[ETH_HDR + IPV4_HDR + UDP_HDR..ETH_HDR + IPV4_HDR + UDP_HDR + MAGIC_LEN];
-        if magic != BLAZIL_MAGIC {
+        if magic != BLZL_MAGIC {
             return Err(blazil_common::error::BlazerError::Transport(
                 "bad Blazil magic".into(),
             ));
@@ -256,14 +251,16 @@ impl RxCursor {
 
         // Extract source IPv4 address and UDP port for the response.
         // IPv4 src addr: bytes 12-15 of IPv4 header (after ETH 14B).
-        let ip_start  = ETH_HDR;
-        let src_ip    = &frame[ip_start + 12..ip_start + 16];
-        let ip_hlen   = ((frame[ip_start] & 0x0F) as usize) * 4;
+        let ip_start = ETH_HDR;
+        let src_ip = &frame[ip_start + 12..ip_start + 16];
+        let ip_hlen = ((frame[ip_start] & 0x0F) as usize) * 4;
         let udp_start = ip_start + ip_hlen;
         // UDP source port: bytes 0-1 of UDP header (network byte order).
-        let src_port  = u16::from_be_bytes([frame[udp_start], frame[udp_start + 1]]);
-        let src_addr  = std::net::SocketAddr::new(
-            std::net::IpAddr::V4(std::net::Ipv4Addr::new(src_ip[0], src_ip[1], src_ip[2], src_ip[3])),
+        let src_port = u16::from_be_bytes([frame[udp_start], frame[udp_start + 1]]);
+        let src_addr = std::net::SocketAddr::new(
+            std::net::IpAddr::V4(std::net::Ipv4Addr::new(
+                src_ip[0], src_ip[1], src_ip[2], src_ip[3],
+            )),
             src_port,
         );
 
@@ -278,7 +275,9 @@ impl RxCursor {
         let event = super::build_event_from_request(&req)?;
 
         // ── Publish into pipeline ─────────────────────────────────────────────
-        let seq = self.pipeline.try_publish_event(event)
+        let seq = self
+            .pipeline
+            .try_publish_event(event)
             .map_err(|_| blazil_common::error::BlazerError::Transport("pipeline full".into()))?;
 
         // ── Await result ──────────────────────────────────────────────────────
@@ -304,9 +303,7 @@ impl RxCursor {
             }
             if Instant::now() >= deadline {
                 return TransactionResult::Rejected {
-                    reason: blazil_common::error::BlazerError::Transport(
-                        "result timeout".into(),
-                    ),
+                    reason: blazil_common::error::BlazerError::Transport("result timeout".into()),
                 };
             }
             spins = spins.wrapping_add(1);

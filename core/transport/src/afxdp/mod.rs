@@ -47,6 +47,11 @@ use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+pub mod client;
+pub mod rx;
+pub mod socket;
+pub mod umem;
+
 use async_trait::async_trait;
 use tracing::{info, warn};
 
@@ -62,11 +67,9 @@ use blazil_engine::pipeline::Pipeline;
 use crate::protocol::TransactionRequest;
 use crate::server::TransportServer;
 
-use super::afxdp::{
-    rx::RxCursor,
-    socket::{XSocket, XSocketConfig},
-    umem::OwnedUmem,
-};
+use self::rx::RxCursor;
+use self::socket::{XSocket, XSocketConfig};
+use self::umem::OwnedUmem;
 use super::ebpf::XdpGatekeeper;
 
 // ── AfXdpConfig ───────────────────────────────────────────────────────────────
@@ -167,26 +170,27 @@ impl TransportServer for AfXdpTransportServer {
         info!(if_name = %self.cfg.if_name, "Loading XDP gatekeeper");
         let mut gatekeeper = XdpGatekeeper::attach(&self.cfg.if_name)?;
 
-        // ── Step 2: Allocate shared UMEM ──────────────────────────────────────
-        info!("Allocating AF_XDP UMEM (128 MiB, mlock pinned)");
-        let umem = Arc::new(OwnedUmem::new()?);
-        info!(
-            frames = super::afxdp::umem::FRAME_COUNT,
-            frame_size = super::afxdp::umem::FRAME_SIZE,
-            "UMEM allocated"
-        );
-
-        // ── Step 3: Create sockets + spawn RX cursor threads ─────────────────
+        // ── Step 2: Create sockets + spawn RX cursor threads ─────────────────
         let mut rx_threads = Vec::with_capacity(self.cfg.queue_ids.len());
 
         for (idx, &queue_id) in self.cfg.queue_ids.iter().enumerate() {
             let pipeline = Arc::clone(&self.pipelines[idx]);
             let results = Arc::clone(&self.results);
             let stop = Arc::clone(&self.stop);
-            let umem_arc = Arc::clone(&umem);
             let if_name = self.cfg.if_name.clone();
             let port = self.cfg.port;
             let zero_cp = self.cfg.zero_copy;
+
+            // Each queue gets its own dedicated UMEM (128 MiB, mlock'd).
+            // Sharing one UMEM across sockets requires careful fill/comp queue
+            // management that is deferred to a future optimisation.
+            let umem = OwnedUmem::new()?;
+            info!(
+                queue_id,
+                frames = umem::FRAME_COUNT,
+                frame_size = umem::FRAME_SIZE,
+                "UMEM allocated for queue"
+            );
 
             // Bind socket to queue.
             let sock_cfg = XSocketConfig {
@@ -203,6 +207,9 @@ impl TransportServer for AfXdpTransportServer {
             gatekeeper.register_socket(queue_id, socket_fd)?;
 
             info!(queue_id, socket_fd, shard = idx, "AF_XDP socket ready");
+
+            // Wrap UMEM in Arc so RxCursor can hold a shared reference.
+            let umem_arc = Arc::new(umem);
 
             // Bind address for UDP response socket.
             let bind_addr = format!("0.0.0.0:{}", port + idx as u16 + 1);

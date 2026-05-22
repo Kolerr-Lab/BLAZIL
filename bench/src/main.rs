@@ -49,8 +49,31 @@ async fn main() {
         .and_then(|w| w[1].parse().ok())
         .unwrap_or(2);
 
+    // --shards N  (for --scenario afxdp-e2e when not using tigerbeetle-client)
+    #[cfg(all(
+        target_os = "linux",
+        feature = "af-xdp",
+        not(feature = "tigerbeetle-client")
+    ))]
+    let shard_count: usize = args
+        .windows(2)
+        .find(|w| w[0] == "--shards")
+        .and_then(|w| w[1].parse().ok())
+        .unwrap_or(2);
+
     // --duration N  (seconds; time-based mode; when set --events is ignored)
     #[cfg(feature = "tigerbeetle-client")]
+    let duration_secs: Option<u64> = args
+        .windows(2)
+        .find(|w| w[0] == "--duration")
+        .and_then(|w| w[1].parse().ok());
+
+    // --duration N  (for --scenario afxdp-e2e when not using tigerbeetle-client)
+    #[cfg(all(
+        target_os = "linux",
+        feature = "af-xdp",
+        not(feature = "tigerbeetle-client")
+    ))]
     let duration_secs: Option<u64> = args
         .windows(2)
         .find(|w| w[0] == "--duration")
@@ -181,6 +204,38 @@ async fn main() {
         );
         let tb_addr = std::env::var("BLAZIL_TB_ADDRESS").ok();
         blazil_bench::report::save_run(&result, tb_addr.as_deref());
+        return;
+    }
+
+    // ── afxdp-e2e: client-only UDP bench against AfXdpTransportServer ─────────
+    #[cfg(all(target_os = "linux", feature = "af-xdp", feature = "metrics-ws"))]
+    if scenario_filter.as_deref() == Some("afxdp-e2e") {
+        use blazil_bench::scenarios::afxdp_e2e_scenario::AfXdpE2eConfig;
+
+        let (out_tx, _in_rx) = match (metrics_tx, cmd_rx) {
+            (Some(tx), Some(rx)) => (tx, rx),
+            _ => panic!(
+                "--scenario afxdp-e2e requires --metrics-port (and --features af-xdp,metrics-ws)"
+            ),
+        };
+
+        let cfg = AfXdpE2eConfig {
+            events,
+            shard_count,
+            duration_secs,
+            metrics_tx: out_tx,
+        };
+
+        let result = blazil_bench::scenarios::afxdp_e2e_scenario::run(cfg).await;
+        println!(
+            "      → {} TPS  (p50={} µs  p99={} µs  p99.9={} µs)",
+            blazil_bench::report::fmt_commas(result.tps),
+            blazil_bench::report::fmt_commas(result.p50_ns / 1_000),
+            blazil_bench::report::fmt_commas(result.p99_ns / 1_000),
+            blazil_bench::report::fmt_commas(result.p99_9_ns / 1_000),
+        );
+        let server_addr = std::env::var("BLAZIL_XDP_SERVER_ADDR").ok();
+        blazil_bench::report::save_run(&result, server_addr.as_deref());
         return;
     }
 

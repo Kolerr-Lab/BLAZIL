@@ -17,6 +17,7 @@ path = "src/main.rs"
 tigerbeetle-client = ["blazil-ledger/tigerbeetle-client"]
 aeron = ["blazil-transport/aeron"]
 io-uring = ["blazil-transport/io-uring"]
+af-xdp = ["blazil-transport/af-xdp"]
 # Embed a WebSocket metrics server in the bench binary for live dashboard.
 metrics-ws = ["axum", "tower-http"]
 

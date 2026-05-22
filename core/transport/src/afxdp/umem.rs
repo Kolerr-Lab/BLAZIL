@@ -87,8 +87,7 @@ impl OwnedUmem {
     /// - Kernel rejects the UMEM registration (needs kernel 4.18+
     ///   with `CONFIG_XDP_SOCKETS=y`)
     pub fn new() -> BlazerResult<Self> {
-        let frame_count = NonZeroU32::new(FRAME_COUNT)
-            .expect("FRAME_COUNT > 0");
+        let frame_count = NonZeroU32::new(FRAME_COUNT).expect("FRAME_COUNT > 0");
 
         let config = UmemConfig::builder()
             .frame_size(FrameSize::TwoKiloBytes)
