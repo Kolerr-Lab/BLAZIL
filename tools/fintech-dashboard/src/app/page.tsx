@@ -10,10 +10,9 @@ import { FailoverPanel } from "@/components/FailoverPanel";
 import { ClusterInfo } from "@/components/ClusterInfo";
 import type { EventMessage } from "@/types/metrics";
 
-// ⚠️  UPDATE THIS WITH YOUR AWS/DO PUBLIC IP BEFORE DEPLOYMENT ⚠️
-// Fintech Backend: blazil-bench WebSocket server
-// Default: ws://localhost:9090/ws (port 9090 = fintech metrics)
-const DEFAULT_WS_URL = "ws://localhost:9090/ws";
+// Default WS URL. Override at startup: NEXT_PUBLIC_WS_URL=ws://<ip>:9090/ws npm run dev
+const DEFAULT_WS_URL =
+  process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:9090/ws";
 
 export default function DashboardPage() {
   const [wsUrl, setWsUrl] = useState(DEFAULT_WS_URL);
@@ -62,7 +61,13 @@ export default function DashboardPage() {
 
         {/* Infra spec strip */}
         <div className="mt-3">
-          <ClusterInfo />
+          <ClusterInfo
+            windowPerShard={
+              state.config && "window_per_shard" in state.config
+                ? state.config.window_per_shard
+                : undefined
+            }
+          />
         </div>
 
         {/* Rate Chart + Latency side-by-side */}
