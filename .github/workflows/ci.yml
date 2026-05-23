@@ -68,30 +68,30 @@ jobs:
 
       - name: Build all services
         run: |
-          for svc in payments banking trading crypto; do
+          for svc in payments banking trading crypto gateway; do
             echo "Building $svc..."
             (cd services/$svc && GOWORK=off go build ./...)
           done
-          for lib in observability secrets auth policy discovery sharding; do
+          for lib in observability secrets auth policy discovery sharding metering; do
             echo "Building $lib..."
             (cd libs/$lib && GOWORK=off go build ./...)
           done
 
       - name: Test all services
         run: |
-          for svc in payments banking trading crypto; do
+          for svc in payments banking trading crypto gateway; do
             (cd services/$svc && GOWORK=off go test -race ./...)
           done
-          for lib in observability secrets auth policy discovery sharding; do
+          for lib in observability secrets auth policy discovery sharding metering; do
             (cd libs/$lib && GOWORK=off go test -race ./...)
           done
 
       - name: Vet
         run: |
-          for svc in payments banking trading crypto; do
+          for svc in payments banking trading crypto gateway; do
             (cd services/$svc && GOWORK=off go vet ./...)
           done
-          for lib in observability secrets auth policy discovery sharding; do
+          for lib in observability secrets auth policy discovery sharding metering; do
             (cd libs/$lib && GOWORK=off go vet ./...)
           done
 
