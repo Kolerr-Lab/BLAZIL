@@ -15,7 +15,7 @@ jobs:
     name: Rust CI
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -59,7 +59,7 @@ jobs:
     name: Go CI
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -100,7 +100,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [rust-ci, go-ci]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Zig
         uses: mlugg/setup-zig@v1
@@ -170,7 +170,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [rust-ci, go-ci]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -220,7 +220,7 @@ jobs:
     name: Aeron Transport (C FFI)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
