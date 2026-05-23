@@ -19,28 +19,40 @@ pub struct ServerConfig {
     #[serde(default = "default_aeron_dir")]
     pub aeron_dir: String,
 
-    /// Path to the ONNX model file.
-    pub model_path: PathBuf,
+    /// Optional default ONNX model file loaded at startup.
+    ///
+    /// When `None` (or omitted from config), the server starts with no built-in
+    /// model and relies on the model registry (tenants upload their own models).
+    #[serde(default)]
+    pub model_path: Option<PathBuf>,
 
     /// Number of inference worker threads (0 = auto).
     #[serde(default = "default_workers")]
     pub inference_workers: usize,
 
     /// Device: "cpu", "cuda", or "tensorrt".
-    #[serde(default)]
+    #[serde(default = "default_device")]
     pub device: String,
 
     /// Optimization level: "disable", "basic", "extended", "all".
     #[serde(default = "default_optimization")]
     pub optimization_level: String,
 
-    /// Enable Prometheus metrics HTTP server.
-    #[serde(default = "default_enable_metrics")]
-    pub enable_metrics: bool,
+    /// HTTP API + metrics server port (serves /v1/**, /metrics, /health).
+    #[serde(default = "default_http_port")]
+    pub http_port: u16,
 
-    /// Metrics HTTP server port.
-    #[serde(default = "default_metrics_port")]
-    pub metrics_port: u16,
+    /// Root directory for per-tenant model storage.
+    ///
+    /// Layout: `<model_dir>/<tenant_id>/<model_id>/<version>/model.onnx`
+    #[serde(default = "default_model_dir")]
+    pub model_dir: PathBuf,
+
+    /// API key for `Authorization: Bearer` auth on HTTP endpoints.
+    ///
+    /// If empty, read from `BLAZIL_INFERENCE_API_KEY` env var at startup.
+    #[serde(default)]
+    pub api_key: String,
 }
 
 impl Default for ServerConfig {
@@ -48,12 +60,13 @@ impl Default for ServerConfig {
         Self {
             channel: default_channel(),
             aeron_dir: default_aeron_dir(),
-            model_path: PathBuf::from("model.onnx"),
+            model_path: None,
             inference_workers: default_workers(),
-            device: "cpu".to_string(),
+            device: default_device(),
             optimization_level: default_optimization(),
-            enable_metrics: default_enable_metrics(),
-            metrics_port: default_metrics_port(),
+            http_port: default_http_port(),
+            model_dir: default_model_dir(),
+            api_key: String::new(),
         }
     }
 }
@@ -74,9 +87,11 @@ impl ServerConfig {
 
     /// Validate configuration.
     pub fn validate(&self) -> Result<()> {
-        // Check model file exists
-        if !self.model_path.exists() {
-            anyhow::bail!("Model file does not exist: {}", self.model_path.display());
+        // Default model is optional — only validate if provided.
+        if let Some(ref p) = self.model_path {
+            if !p.exists() {
+                anyhow::bail!("model_path does not exist: {}", p.display());
+            }
         }
 
         // Validate device
@@ -90,6 +105,18 @@ impl ServerConfig {
         }
 
         Ok(())
+    }
+
+    /// Resolve the effective API key: config field → env var fallback.
+    pub fn effective_api_key(&self) -> Result<String> {
+        if !self.api_key.is_empty() {
+            return Ok(self.api_key.clone());
+        }
+        std::env::var("BLAZIL_INFERENCE_API_KEY").map_err(|_| {
+            anyhow::anyhow!(
+                "No API key configured. Set BLAZIL_INFERENCE_API_KEY env var or api_key in config."
+            )
+        })
     }
 }
 
@@ -114,14 +141,18 @@ fn default_workers() -> usize {
     num_cpus::get()
 }
 
+fn default_device() -> String {
+    "cpu".to_string()
+}
+
 fn default_optimization() -> String {
     "basic".to_string()
 }
 
-fn default_enable_metrics() -> bool {
-    true
+fn default_http_port() -> u16 {
+    8090
 }
 
-fn default_metrics_port() -> u16 {
-    9091
+fn default_model_dir() -> PathBuf {
+    PathBuf::from("/opt/blazil/models")
 }

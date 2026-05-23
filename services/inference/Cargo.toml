@@ -42,10 +42,25 @@ toml = "0.8"
 # Metrics — default-features disabled to avoid pulling in protobuf@2 (RUSTSEC-2024-0437).
 # TextEncoder (text/plain format) does not need the protobuf feature.
 prometheus = { version = "0.13", default-features = false, features = ["process"] }
-warp = "0.3"
+
+# HTTP API server (replaces warp — single axum server for /metrics + /v1/**)
+axum = { version = "0.7", features = ["multipart"] }
+tower = { version = "0.4", features = ["util"] }
+tower-http = { version = "0.5", features = ["trace", "limit"] }
 
 # CLI
 clap = { version = "4.5", features = ["derive"] }
 
+# Model management
+uuid = { workspace = true, features = ["v4"] }
+sha2 = "0.10"
+hex = "0.4"
+base64 = "0.22"
+subtle = "2"
+
 # Utils
 num_cpus = "1.16"
+serde_json = "1.0"
+
+[dev-dependencies]
+tempfile = "3.10"
