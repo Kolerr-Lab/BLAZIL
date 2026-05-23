@@ -175,7 +175,7 @@ jobs:
           submodules: recursive
 
       - name: Set up Docker Buildx (enables BuildKit cache mounts)
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Cache Zig binary
         id: cache-zig
