@@ -13,8 +13,9 @@ blazil-common = { path = "../common" }
 blazil-dataloader = { path = "../dataloader" }
 
 # Inference engine - tract (pure Rust, production-stable)
-tract-onnx = "0.21"
-tract-core = "0.21"
+# 0.22.1: replaced paste (archived, RUSTSEC-2024-0436) with pastey (maintained fork)
+tract-onnx = "0.22"
+tract-core = "0.22"
 
 # Tensor operations
 ndarray = "0.16"
