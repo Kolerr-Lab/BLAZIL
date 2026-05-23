@@ -4,7 +4,7 @@ go 1.25.10
 
 require (
 	github.com/golang-jwt/jwt/v5 v5.3.1
-	google.golang.org/grpc v1.79.3
+	google.golang.org/grpc v1.81.1
 )
 
 require (
