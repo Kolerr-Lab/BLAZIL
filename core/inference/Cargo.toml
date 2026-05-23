@@ -13,7 +13,7 @@ blazil-common = { path = "../common" }
 blazil-dataloader = { path = "../dataloader" }
 
 # Inference engine - tract (pure Rust, production-stable)
-tract-onnx = "0.21"
+tract-onnx = "0.22"
 tract-core = "0.21"
 
 # Tensor operations
