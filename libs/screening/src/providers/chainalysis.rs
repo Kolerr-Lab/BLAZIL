@@ -48,7 +48,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument, warn};
 
-use crate::{ScreeningMode, ScreeningResult, RiskLevel, TransactionEvent, TransactionScreener};
+use crate::{RiskLevel, ScreeningMode, ScreeningResult, TransactionEvent, TransactionScreener};
 
 // ── Request / Response types ──────────────────────────────────────────────────
 
@@ -174,13 +174,14 @@ impl ChainalysisScreener {
     }
 
     /// Step 1 — register the transfer and return the `externalId`.
-    async fn register_transfer(
-        &self,
-        tx: &TransactionEvent,
-    ) -> Result<String, reqwest::Error> {
+    async fn register_transfer(&self, tx: &TransactionEvent) -> Result<String, reqwest::Error> {
         let network = tx.metadata.get("network").cloned().unwrap_or_default();
         let tx_hash = tx.metadata.get("tx_hash").cloned().unwrap_or_default();
-        let output_address = tx.metadata.get("output_address").cloned().unwrap_or_default();
+        let output_address = tx
+            .metadata
+            .get("output_address")
+            .cloned()
+            .unwrap_or_default();
 
         let url = format!("{}/api/kyt/v2/transfers", self.config.endpoint);
         let body = RegisterRequest {
@@ -248,8 +249,7 @@ impl ChainalysisScreener {
         // Timed out waiting for Chainalysis — hold for manual review.
         warn!(
             provider = "chainalysis",
-            tx_id,
-            "KYT assessment did not complete within polling budget — holding transaction",
+            tx_id, "KYT assessment did not complete within polling budget — holding transaction",
         );
         Ok(ScreeningResult::Hold {
             reason: "Chainalysis KYT assessment timed out. \
@@ -371,7 +371,10 @@ mod tests {
     fn map_severe_is_reject_with_sar() {
         assert!(matches!(
             map_alert_level(Some("SEVERE")),
-            ScreeningResult::Reject { sar_required: true, .. }
+            ScreeningResult::Reject {
+                sar_required: true,
+                ..
+            }
         ));
     }
 
@@ -379,7 +382,10 @@ mod tests {
     fn map_high_is_hold() {
         assert!(matches!(
             map_alert_level(Some("HIGH")),
-            ScreeningResult::Hold { review_required: true, .. }
+            ScreeningResult::Hold {
+                review_required: true,
+                ..
+            }
         ));
     }
 
@@ -387,7 +393,10 @@ mod tests {
     fn map_medium_is_flag_high() {
         assert!(matches!(
             map_alert_level(Some("MEDIUM")),
-            ScreeningResult::Flag { severity: RiskLevel::High, .. }
+            ScreeningResult::Flag {
+                severity: RiskLevel::High,
+                ..
+            }
         ));
     }
 
@@ -395,7 +404,10 @@ mod tests {
     fn map_low_is_flag_low() {
         assert!(matches!(
             map_alert_level(Some("LOW")),
-            ScreeningResult::Flag { severity: RiskLevel::Low, .. }
+            ScreeningResult::Flag {
+                severity: RiskLevel::Low,
+                ..
+            }
         ));
     }
 
@@ -416,7 +428,13 @@ mod tests {
             let tx = TransactionEvent::new("tx-001", 1_000, "BTC", "alice", "bob");
             let result = screener.screen(&tx, ScreeningMode::RealTime).await;
             // review_required=false because it will be re-screened in batch
-            assert!(matches!(result, ScreeningResult::Hold { review_required: false, .. }));
+            assert!(matches!(
+                result,
+                ScreeningResult::Hold {
+                    review_required: false,
+                    ..
+                }
+            ));
         });
     }
 
@@ -439,10 +457,7 @@ mod tests {
                 "tx_hash",
                 "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b",
             )
-            .with_metadata(
-                "output_address",
-                "1A1zP1eP5QGefi2DMPTfTL5SLmv7Divf Na",
-            );
+            .with_metadata("output_address", "1A1zP1eP5QGefi2DMPTfTL5SLmv7Divf Na");
         let result = screener.screen(&tx, ScreeningMode::Batch).await;
         println!("Live Chainalysis result: {result:?}");
         assert!(matches!(
@@ -454,4 +469,3 @@ mod tests {
         ));
     }
 }
-

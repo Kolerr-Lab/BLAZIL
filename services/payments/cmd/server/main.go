@@ -215,11 +215,11 @@ type paymentsServer struct {
 // backpressure when clients drain slower than the server produces.
 type responseRingBuffer struct {
 	buf     []*paymentsv1.ProcessPaymentResponse
-	head    int       // Next write position
-	tail    int       // Next read position
-	size    int       // Current number of entries
-	cap     int       // Maximum capacity
-	dropped int64     // Atomic counter for dropped messages
+	head    int   // Next write position
+	tail    int   // Next read position
+	size    int   // Current number of entries
+	cap     int   // Maximum capacity
+	dropped int64 // Atomic counter for dropped messages
 }
 
 func newResponseRingBuffer(capacity int) *responseRingBuffer {

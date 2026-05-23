@@ -102,7 +102,10 @@ struct EllipticResponse {
 fn map_elliptic_response(resp: &EllipticResponse) -> ScreeningResult {
     if resp.risk_score >= 0.80 {
         ScreeningResult::Reject {
-            reason: format!("Elliptic: high-risk address/tx (score={:.3})", resp.risk_score),
+            reason: format!(
+                "Elliptic: high-risk address/tx (score={:.3})",
+                resp.risk_score
+            ),
             sar_required: true,
         }
     } else if resp.risk_score >= 0.50 {
@@ -112,7 +115,10 @@ fn map_elliptic_response(resp: &EllipticResponse) -> ScreeningResult {
         }
     } else if resp.risk_score >= 0.30 {
         ScreeningResult::Flag {
-            reason: format!("Elliptic: suspicious indicators (score={:.3})", resp.risk_score),
+            reason: format!(
+                "Elliptic: suspicious indicators (score={:.3})",
+                resp.risk_score
+            ),
             severity: RiskLevel::High,
         }
     } else {
@@ -132,8 +138,8 @@ fn compute_hmac_hex(api_secret: &str, data: &str) -> String {
 
     type HmacSha256 = Hmac<Sha256>;
 
-    let mut mac = HmacSha256::new_from_slice(api_secret.as_bytes())
-        .expect("HMAC accepts keys of any length");
+    let mut mac =
+        HmacSha256::new_from_slice(api_secret.as_bytes()).expect("HMAC accepts keys of any length");
     mac.update(data.as_bytes());
     // Hex-encode without an external crate
     mac.finalize()
@@ -349,20 +355,29 @@ mod tests {
 
     fn make_crypto_tx() -> TransactionEvent {
         TransactionEvent::new("crypto-tx-001", 100_000, "ETH", "alice", "bob")
-            .with_metadata("blockchain_address", "0xde0B295669a9FD93d5F28D9Ec85E40f4cb697BAe")
+            .with_metadata(
+                "blockchain_address",
+                "0xde0B295669a9FD93d5F28D9Ec85E40f4cb697BAe",
+            )
             .with_metadata("blockchain", "ethereum")
             .with_metadata("asset", "ETH")
     }
 
     fn resp(score: f64) -> EllipticResponse {
-        EllipticResponse { risk_score: score, id: None }
+        EllipticResponse {
+            risk_score: score,
+            id: None,
+        }
     }
 
     #[test]
     fn map_high_risk_is_reject_with_sar() {
         assert!(matches!(
             map_elliptic_response(&resp(0.85)),
-            ScreeningResult::Reject { sar_required: true, .. }
+            ScreeningResult::Reject {
+                sar_required: true,
+                ..
+            }
         ));
     }
 
@@ -370,7 +385,10 @@ mod tests {
     fn map_elevated_is_hold() {
         assert!(matches!(
             map_elliptic_response(&resp(0.65)),
-            ScreeningResult::Hold { review_required: true, .. }
+            ScreeningResult::Hold {
+                review_required: true,
+                ..
+            }
         ));
     }
 
@@ -378,7 +396,10 @@ mod tests {
     fn map_suspicious_is_flag_high() {
         assert!(matches!(
             map_elliptic_response(&resp(0.40)),
-            ScreeningResult::Flag { severity: RiskLevel::High, .. }
+            ScreeningResult::Flag {
+                severity: RiskLevel::High,
+                ..
+            }
         ));
     }
 
@@ -428,7 +449,9 @@ mod tests {
         let api_secret = std::env::var("ELLIPTIC_API_SECRET").expect("ELLIPTIC_API_SECRET not set");
         let config = ProviderConfig::elliptic(Region::Apac, api_key, api_secret);
         let screener = EllipticScreener::new(config);
-        let result = screener.screen(&make_crypto_tx(), ScreeningMode::RealTime).await;
+        let result = screener
+            .screen(&make_crypto_tx(), ScreeningMode::RealTime)
+            .await;
         println!("Live Elliptic result: {result:?}");
         assert!(matches!(
             result,
@@ -439,4 +462,3 @@ mod tests {
         ));
     }
 }
-

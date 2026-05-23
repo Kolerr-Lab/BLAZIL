@@ -333,7 +333,10 @@ mod tests {
     fn map_high_risk_is_reject_with_sar() {
         assert!(matches!(
             map_sardine_response(&resp(0.92, "very_high")),
-            ScreeningResult::Reject { sar_required: true, .. }
+            ScreeningResult::Reject {
+                sar_required: true,
+                ..
+            }
         ));
     }
 
@@ -341,7 +344,10 @@ mod tests {
     fn map_elevated_risk_is_hold() {
         assert!(matches!(
             map_sardine_response(&resp(0.70, "high")),
-            ScreeningResult::Hold { review_required: true, .. }
+            ScreeningResult::Hold {
+                review_required: true,
+                ..
+            }
         ));
     }
 
@@ -349,13 +355,19 @@ mod tests {
     fn map_suspicious_is_flag_medium() {
         assert!(matches!(
             map_sardine_response(&resp(0.45, "medium")),
-            ScreeningResult::Flag { severity: RiskLevel::Medium, .. }
+            ScreeningResult::Flag {
+                severity: RiskLevel::Medium,
+                ..
+            }
         ));
     }
 
     #[test]
     fn map_low_risk_is_clear() {
-        assert_eq!(map_sardine_response(&resp(0.10, "low")), ScreeningResult::Clear);
+        assert_eq!(
+            map_sardine_response(&resp(0.10, "low")),
+            ScreeningResult::Clear
+        );
     }
 
     #[test]
@@ -395,4 +407,3 @@ mod tests {
         ));
     }
 }
-
