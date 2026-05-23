@@ -69,6 +69,17 @@ fn build_aeron_static(aeron_src: &std::path::Path) {
             "-DAERON_ENABLE_DRIVER_EXT=OFF",
             "-DAERON_BUILD_TOOLS=OFF",
             "-DBUILD_AERON_DRIVER=ON",
+            // SECURITY RATIONALE: AERON_DISABLE_BOUNDS_CHECKS removes the C
+            // client's ring-buffer length validation on every offer()/poll().
+            // This is intentional for the hot trading path (saves ~2–5 % CPU on
+            // the critical path) because:
+            //   1. All messages are sized at the Rust layer (bounded by the
+            //      `Protocol` type) before being passed to aeron_publication_offer.
+            //   2. Term buffer sizes (1 MB IPC / 1 MB UDP) are set in driver.rs
+            //      to be >4× the maximum allowed message size.
+            //   3. Aeron is internal IPC only — no untrusted data ever reaches
+            //      the Aeron ring buffers directly.
+            // Re-evaluate if Aeron is ever exposed to a public network boundary.
             "-DAERON_DISABLE_BOUNDS_CHECKS=ON",
             // Disable the archive API — avoids requiring a JDK on every build
             // machine.  Blazil only uses the C client and media driver.
