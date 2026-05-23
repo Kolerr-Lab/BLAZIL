@@ -3,7 +3,7 @@ module github.com/blazil/stresstest
 go 1.25.10
 
 require (
-	google.golang.org/grpc v1.79.3
+	google.golang.org/grpc v1.81.1
 	google.golang.org/protobuf v1.36.11
 )
 
