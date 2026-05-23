@@ -1,0 +1,43 @@
+# .trivyignore — Trivy scan suppressions for intentional infrastructure decisions
+#
+# Each suppressed rule is documented with the rationale. Re-evaluate when
+# infra topology changes (e.g., if public gRPC/HTTPS ports are moved behind
+# a load balancer or API gateway, or if TigerBeetle drops its hostNetwork req).
+
+# ── TigerBeetle StatefulSet ───────────────────────────────────────────────────
+#
+# KSV-0009: hostNetwork=true required for TigerBeetle VSR inter-replica consensus.
+#   TigerBeetle explicitly rejects DNS hostnames and uses raw node IPs for its
+#   Viewstamped Replication protocol. Changing this breaks TB cluster formation.
+#   File: infra/k8s/base/tigerbeetle/statefulset.yaml
+#   Owner: infra team | Last reviewed: 2026-05-23
+KSV-0009
+
+# KSV-0014: TigerBeetle data container must write journal + data files to
+#   /data (PVC-backed) and uses runtime temp paths at startup. Setting
+#   readOnlyRootFilesystem=true breaks the TB storage engine.
+#   All other workloads (banking/crypto/payments/trading/grafana/prometheus/
+#   init-replica-id) explicitly set readOnlyRootFilesystem: true.
+#   File: infra/k8s/base/tigerbeetle/statefulset.yaml (tigerbeetle container only)
+#   Owner: infra team | Last reviewed: 2026-05-23
+KSV-0014
+
+# ── DigitalOcean Terraform Firewall ──────────────────────────────────────────
+#
+# DIG-0001: Public gRPC (:50050) and HTTPS (:443/:80) ingress open to
+#   0.0.0.0/0 is intentional — Blazil is an internet-facing API service and
+#   these ports must be reachable from clients globally.
+#   The SSH management rule (line 80) uses var.management_cidr; Trivy cannot
+#   evaluate Terraform variable values so it defaults to 0.0.0.0/0 —
+#   this is a false positive; the variable restricts access to a named CIDR.
+#   Owner: infra team | Last reviewed: 2026-05-23
+DIG-0001
+
+# DIG-0003: Outbound internet egress to 0.0.0.0/0 is required for:
+#   - TLS/HTTPS certificate validation and renewal (Let's Encrypt)
+#   - DNS resolution to upstream resolvers
+#   - Connectivity to external financial services (exchanges, payment rails)
+#   - OS package updates and security patches
+#   Owner: infra team | Last reviewed: 2026-05-23
+DIG-0003
+

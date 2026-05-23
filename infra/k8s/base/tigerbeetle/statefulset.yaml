@@ -3,6 +3,15 @@ kind: StatefulSet
 metadata:
   name: tigerbeetle
   namespace: blazil
+  annotations:
+    # Trivy policy suppressions — intentional architectural decisions:
+    # KSV-0009: hostNetwork=true required for TigerBeetle VSR consensus;
+    #   TigerBeetle rejects DNS hostnames and requires raw node IPs for
+    #   inter-replica communication. This is an explicit design constraint.
+    # KSV-0014: TigerBeetle data container writes journal + data files to
+    #   the /data PVC and uses runtime paths at startup. readOnlyRootFilesystem
+    #   must remain false for the storage engine to function correctly.
+    trivy.aquasecurity.github.io/ignore-rules: "KSV-0009,KSV-0014"
   labels:
     app.kubernetes.io/name: tigerbeetle
     app.kubernetes.io/component: ledger
@@ -25,6 +34,13 @@ spec:
       # node IP via hostNetwork and binds on its corresponding port (3000/3001/3002).
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
+      securityContext:
+        # TigerBeetle requires root and Unconfined seccomp for io_uring syscalls.
+        # runAsNonRoot is explicitly false — do not change without TB team sign-off.
+        runAsNonRoot: false
+        seccompProfile:
+          type: Unconfined
+        fsGroup: 1000
 
       # Spread replicas across nodes — one TB replica per physical node
       affinity:
@@ -50,6 +66,13 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            seccompProfile:
+              type: RuntimeDefault
           volumeMounts:
             - name: shared-env
               mountPath: /shared

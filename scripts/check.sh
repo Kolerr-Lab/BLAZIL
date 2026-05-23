@@ -83,6 +83,26 @@ else
     echo "  Install with: cargo install cargo-audit"
 fi
 
+# Trivy vulnerability + secret + misconfig scan
+print_section "Trivy Security Scan"
+
+if command -v trivy &> /dev/null; then
+    print_info "Running trivy fs (HIGH + CRITICAL)..."
+    if trivy fs \
+        --scanners vuln,secret,misconfig \
+        --severity HIGH,CRITICAL \
+        --exit-code 1 \
+        --quiet \
+        .; then
+        print_status "Trivy: no HIGH/CRITICAL findings"
+    else
+        print_error "Trivy: HIGH or CRITICAL vulnerabilities found — fix before committing"
+    fi
+else
+    echo -e "${YELLOW}⚠${NC} trivy not installed. Skipping security scan."
+    echo "  Install with: brew install trivy"
+fi
+
 # Go checks
 print_section "Go Checks"
 

@@ -53,7 +53,10 @@ RUN --mount=type=cache,target=/root/.cargo/registry \
 # ─────────────────────────────────────────────────────────────────────────────
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd -r blazil \
+    && useradd --no-log-init -r -g blazil blazil
 COPY --from=builder /tmp/blazil-transport /usr/local/bin/blazil-transport
+USER blazil
 EXPOSE 7878 9090
 CMD ["blazil-transport"]

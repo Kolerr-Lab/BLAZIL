@@ -10,6 +10,9 @@ ENV GOWORK=off
 RUN go mod download && go build -o /loadgen .
 
 FROM alpine:3.19
-RUN apk add --no-cache ca-certificates
+RUN apk add --no-cache ca-certificates \
+    && addgroup -S blazil \
+    && adduser -S blazil -G blazil
 COPY --from=builder /loadgen /usr/local/bin/loadgen
+USER blazil
 CMD ["loadgen"]

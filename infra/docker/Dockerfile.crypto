@@ -7,7 +7,10 @@ ENV GOWORK=off
 RUN go mod download && go build -o /crypto .
 
 FROM alpine:3.19
-RUN apk add --no-cache ca-certificates
+RUN apk add --no-cache ca-certificates \
+    && addgroup -S blazil \
+    && adduser -S blazil -G blazil
 COPY --from=builder /crypto /usr/local/bin/crypto
+USER blazil
 EXPOSE 50054 9094
 CMD ["crypto"]

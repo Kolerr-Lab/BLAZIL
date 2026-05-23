@@ -33,6 +33,12 @@ spec:
         app: grafana
         app.kubernetes.io/name: grafana
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 472
+        fsGroup: 472
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: grafana
           image: grafana/grafana:10.4.0
@@ -58,6 +64,8 @@ spec:
               mountPath: /var/lib/grafana/dashboards
             - name: storage
               mountPath: /var/lib/grafana
+            - name: tmp
+              mountPath: /tmp
           resources:
             requests:
               cpu: "100m"
@@ -69,6 +77,7 @@ spec:
             runAsNonRoot: true
             runAsUser: 472  # grafana uid
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
           readinessProbe:
             httpGet:
               path: /api/health
@@ -92,6 +101,8 @@ spec:
           configMap:
             name: grafana-dashboards-data
         - name: storage
+          emptyDir: {}
+        - name: tmp
           emptyDir: {}
 ---
 # grafana-secrets must be created manually:
