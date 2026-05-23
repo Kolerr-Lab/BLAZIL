@@ -7,7 +7,7 @@ require (
 	github.com/blazil/crypto v0.0.0
 	github.com/blazil/services/payments v0.0.0
 	github.com/blazil/trading v0.0.0
-	google.golang.org/grpc v1.80.0
+	google.golang.org/grpc v1.81.1
 )
 
 require (
