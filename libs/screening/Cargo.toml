@@ -18,7 +18,7 @@ dashmap = "6.1"
 # HTTP client for live provider integrations (rustls only — no native-tls).
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 # HMAC-SHA256 request signing (Elliptic x-access-sign scheme).
-hmac = "0.12"
+hmac = "0.13"
 sha2 = "0.10"
 
 [dev-dependencies]
