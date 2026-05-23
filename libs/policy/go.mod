@@ -1,3 +1,3 @@
 module github.com/blazil/policy
 
-go 1.25.8
+go 1.25.10
