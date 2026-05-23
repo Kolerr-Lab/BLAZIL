@@ -32,6 +32,6 @@ pub mod traits;
 pub use amount::Amount;
 pub use currency::{parse_currency, Currency};
 pub use error::{BlazerError, BlazerResult};
-pub use ids::{AccountId, LedgerId, TransactionId, TransferId};
+pub use ids::{AccountId, ApiKeyId, LedgerId, TenantId, TransactionId, TransferId};
 pub use timestamp::Timestamp;
 pub use traits::{Identifiable, Validate};

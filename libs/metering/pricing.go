@@ -52,7 +52,7 @@ type WindowCount struct {
 
 // InvoiceLineItem represents one line on a billing invoice.
 type InvoiceLineItem struct {
-	TenantID      string
+	TenantID      TenantID
 	WindowStart   time.Time
 	TxCount       int64
 	PricePerTxµ   int64 // price per transaction in micro-USD
@@ -65,7 +65,7 @@ type InvoiceLineItem struct {
 // accumulates correctly for tier transitions.
 //
 // This function is pure (no I/O) and may be called from any goroutine.
-func CalculateInvoice(tenantID string, tier Tier, counts []WindowCount) []InvoiceLineItem {
+func CalculateInvoice(tenantID TenantID, tier Tier, counts []WindowCount) []InvoiceLineItem {
 	lines := make([]InvoiceLineItem, 0, len(counts))
 	var cumulative int64
 	for _, wc := range counts {

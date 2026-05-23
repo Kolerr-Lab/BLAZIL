@@ -120,7 +120,7 @@ func MeteringStreamInterceptor(rec metering.Recorder) grpc.StreamServerIntercept
 		err := handler(srv, ss)
 		if err == nil {
 			// Record usage only on clean success to avoid counting failed/aborted calls.
-			rec.Record(t.ID, 1)
+			rec.Record(metering.TenantID(t.ID), 1)
 		}
 		return err
 	}

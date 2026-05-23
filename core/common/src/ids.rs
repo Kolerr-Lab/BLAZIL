@@ -382,6 +382,36 @@ impl fmt::Display for LedgerId {
     }
 }
 
+// ── Cloud SaaS identity types ─────────────────────────────────────────────────
+//
+// These IDs belong to the control-plane domain (Sprint 2+).
+// Defined here so that all workspace crates share the same canonical types
+// and the compiler prevents accidental mixing (e.g. passing an ApiKeyId
+// where a TenantId is expected).
+
+define_id!(
+    /// Opaque identifier for a Blazil Cloud tenant.
+    ///
+    /// UUID v4 backed. Used as the primary key in the tenant control-plane
+    /// database and as the sharding key in the billing metering layer.
+    ///
+    /// Cannot be confused with [`ApiKeyId`], [`AccountId`], or any other
+    /// ID type at compile time.
+    TenantId
+);
+
+define_id!(
+    /// Opaque identifier for an API key *record* in the control-plane DB.
+    ///
+    /// This is the row ID — **not** the key material. The raw key is
+    /// returned to the caller exactly once and never stored. Only the
+    /// SHA-256 hash of the raw key is persisted.
+    ///
+    /// Cannot be confused with [`TenantId`] or any financial ID type
+    /// at compile time.
+    ApiKeyId
+);
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

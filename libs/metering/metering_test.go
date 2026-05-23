@@ -18,17 +18,17 @@ import (
 func TestRecorder_RecordAndSnapshot(t *testing.T) {
 	rec := metering.NewRecorder()
 
-	rec.Record("tenant-a", 3)
-	rec.Record("tenant-b", 1)
-	rec.Record("tenant-a", 2)
+	rec.Record(metering.TenantID("tenant-a"), 3)
+	rec.Record(metering.TenantID("tenant-b"), 1)
+	rec.Record(metering.TenantID("tenant-a"), 2)
 
 	snap := rec.Snapshot()
 
-	if snap["tenant-a"] != 5 {
-		t.Errorf("tenant-a: want 5, got %d", snap["tenant-a"])
+	if snap[metering.TenantID("tenant-a")] != 5 {
+		t.Errorf("tenant-a: want 5, got %d", snap[metering.TenantID("tenant-a")])
 	}
-	if snap["tenant-b"] != 1 {
-		t.Errorf("tenant-b: want 1, got %d", snap["tenant-b"])
+	if snap[metering.TenantID("tenant-b")] != 1 {
+		t.Errorf("tenant-b: want 1, got %d", snap[metering.TenantID("tenant-b")])
 	}
 
 	// Second snapshot must be empty (counters drained).
@@ -59,7 +59,7 @@ func TestRecorder_Concurrent(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < increments; j++ {
-				rec.Record("tenant-concurrent", 1)
+				rec.Record(metering.TenantID("tenant-concurrent"), 1)
 			}
 		}()
 	}
@@ -67,8 +67,8 @@ func TestRecorder_Concurrent(t *testing.T) {
 
 	snap := rec.Snapshot()
 	want := int64(goroutines * increments)
-	if snap["tenant-concurrent"] != want {
-		t.Errorf("concurrent: want %d, got %d", want, snap["tenant-concurrent"])
+	if snap[metering.TenantID("tenant-concurrent")] != want {
+		t.Errorf("concurrent: want %d, got %d", want, snap[metering.TenantID("tenant-concurrent")])
 	}
 }
 
@@ -77,14 +77,14 @@ func TestRecorder_ManyTenants(t *testing.T) {
 	// Ensure FNV-1a sharding distributes across all 64 shards.
 	const n = 256
 	for i := 0; i < n; i++ {
-		rec.Record(fmt.Sprintf("tenant-%03d", i), int64(i+1))
+		rec.Record(metering.TenantID(fmt.Sprintf("tenant-%03d", i)), int64(i+1))
 	}
 	snap := rec.Snapshot()
 	if len(snap) != n {
 		t.Errorf("expected %d tenants in snapshot, got %d", n, len(snap))
 	}
 	for i := 0; i < n; i++ {
-		key := fmt.Sprintf("tenant-%03d", i)
+		key := metering.TenantID(fmt.Sprintf("tenant-%03d", i))
 		if snap[key] != int64(i+1) {
 			t.Errorf("%s: want %d, got %d", key, i+1, snap[key])
 		}
@@ -94,10 +94,10 @@ func TestRecorder_ManyTenants(t *testing.T) {
 // ── Flusher ───────────────────────────────────────────────────────────────────
 
 type mockWriter struct {
-	mu     sync.Mutex
-	rows   []metering.UsageRow
-	err    error // if non-nil, UpsertUsage returns this error
-	calls  int
+	mu    sync.Mutex
+	rows  []metering.UsageRow
+	err   error // if non-nil, UpsertUsage returns this error
+	calls int
 }
 
 func (m *mockWriter) UpsertUsage(_ context.Context, rows []metering.UsageRow) error {
@@ -111,11 +111,11 @@ func (m *mockWriter) UpsertUsage(_ context.Context, rows []metering.UsageRow) er
 	return nil
 }
 
-func (m *mockWriter) MonthlyTotal(_ context.Context, _ string, _ time.Time) (int64, error) {
+func (m *mockWriter) MonthlyTotal(_ context.Context, _ metering.TenantID, _ time.Time) (int64, error) {
 	return 0, nil
 }
 
-func (m *mockWriter) WindowedUsage(_ context.Context, _ string, _, _ int) ([]metering.UsageRow, error) {
+func (m *mockWriter) WindowedUsage(_ context.Context, _ metering.TenantID, _, _ int) ([]metering.UsageRow, error) {
 	return nil, nil
 }
 
@@ -129,8 +129,8 @@ func (m *mockWriter) Rows() []metering.UsageRow {
 
 func TestFlusher_FlushWritesRows(t *testing.T) {
 	rec := metering.NewRecorder()
-	rec.Record("t1", 10)
-	rec.Record("t2", 20)
+	rec.Record(metering.TenantID("t1"), 10)
+	rec.Record(metering.TenantID("t2"), 20)
 
 	w := &mockWriter{}
 	f := metering.NewFlusher(rec, w, nopLogger())
@@ -154,7 +154,7 @@ func TestFlusher_FlushWritesRows(t *testing.T) {
 
 func TestFlusher_ReInjectsOnWriteFailure(t *testing.T) {
 	rec := metering.NewRecorder()
-	rec.Record("t1", 5)
+	rec.Record(metering.TenantID("t1"), 5)
 
 	w := &mockWriter{err: errors.New("db unavailable")}
 	f := metering.NewFlusher(rec, w, nopLogger())
@@ -164,8 +164,8 @@ func TestFlusher_ReInjectsOnWriteFailure(t *testing.T) {
 
 	// Count must be re-injected into the recorder.
 	snap := rec.Snapshot()
-	if snap["t1"] != 5 {
-		t.Errorf("expected re-injected count 5, got %d", snap["t1"])
+	if snap[metering.TenantID("t1")] != 5 {
+		t.Errorf("expected re-injected count 5, got %d", snap[metering.TenantID("t1")])
 	}
 }
 
@@ -219,7 +219,7 @@ func TestCalculateInvoice_TierTransition(t *testing.T) {
 		{WindowStart: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC), Count: 1_000_000},
 		{WindowStart: time.Date(2026, 6, 1, 0, 1, 0, 0, time.UTC), Count: 500_000},
 	}
-	lines := metering.CalculateInvoice("tenant-x", metering.TierCloudSaaS, counts)
+	lines := metering.CalculateInvoice(metering.TenantID("tenant-x"), metering.TierCloudSaaS, counts)
 	if len(lines) != 2 {
 		t.Fatalf("expected 2 lines, got %d", len(lines))
 	}
@@ -238,7 +238,7 @@ func TestCalculateInvoice_TierTransition(t *testing.T) {
 }
 
 func TestCalculateInvoice_EmptyIsNil(t *testing.T) {
-	lines := metering.CalculateInvoice("t", metering.TierCloudSaaS, nil)
+	lines := metering.CalculateInvoice(metering.TenantID("t"), metering.TierCloudSaaS, nil)
 	if len(lines) != 0 {
 		t.Errorf("expected empty lines for nil counts, got %d", len(lines))
 	}

@@ -225,7 +225,7 @@ func (w *pgUsageWriter) UpsertUsage(ctx context.Context, rows []metering.UsageRo
 }
 
 // MonthlyTotal returns the total transaction count for a tenant in the given month.
-func (w *pgUsageWriter) MonthlyTotal(ctx context.Context, tenantID string, t time.Time) (int64, error) {
+func (w *pgUsageWriter) MonthlyTotal(ctx context.Context, tenantID metering.TenantID, t time.Time) (int64, error) {
 	start := time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.UTC)
 	end := start.AddDate(0, 1, 0)
 	var total int64
@@ -235,7 +235,7 @@ func (w *pgUsageWriter) MonthlyTotal(ctx context.Context, tenantID string, t tim
 		WHERE tenant_id = $1
 		  AND window_start >= $2
 		  AND window_start < $3`,
-		tenantID, start, end,
+		string(tenantID), start, end,
 	).Scan(&total)
 	if err != nil {
 		return 0, fmt.Errorf("monthly total: %w", err)
@@ -245,7 +245,7 @@ func (w *pgUsageWriter) MonthlyTotal(ctx context.Context, tenantID string, t tim
 
 // WindowedUsage returns all usage rows for a tenant in the given year/month,
 // ordered by window_start ascending.
-func (w *pgUsageWriter) WindowedUsage(ctx context.Context, tenantID string, year, month int) ([]metering.UsageRow, error) {
+func (w *pgUsageWriter) WindowedUsage(ctx context.Context, tenantID metering.TenantID, year, month int) ([]metering.UsageRow, error) {
 	start := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC)
 	end := start.AddDate(0, 1, 0)
 	rows, err := w.db.Query(ctx, `
@@ -255,7 +255,7 @@ func (w *pgUsageWriter) WindowedUsage(ctx context.Context, tenantID string, year
 		  AND window_start >= $2
 		  AND window_start < $3
 		ORDER BY window_start ASC`,
-		tenantID, start, end,
+		string(tenantID), start, end,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("windowed usage: %w", err)
@@ -264,9 +264,11 @@ func (w *pgUsageWriter) WindowedUsage(ctx context.Context, tenantID string, year
 	var result []metering.UsageRow
 	for rows.Next() {
 		var r metering.UsageRow
-		if err := rows.Scan(&r.TenantID, &r.WindowStart, &r.WindowEnd, &r.TxCount); err != nil {
+		var tid string
+		if err := rows.Scan(&tid, &r.WindowStart, &r.WindowEnd, &r.TxCount); err != nil {
 			return nil, fmt.Errorf("scan usage row: %w", err)
 		}
+		r.TenantID = metering.TenantID(tid)
 		result = append(result, r)
 	}
 	return result, rows.Err()

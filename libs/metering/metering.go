@@ -27,17 +27,27 @@ import (
 // per (tenant_id, window_start) pair per flush cycle.
 const WindowSize = 60 * time.Second
 
+// TenantID is an opaque identifier for a Blazil Cloud tenant.
+//
+// Using a named type instead of bare string prevents accidentally passing
+// unrelated string values (e.g. a key hash, a user email) to billing-critical
+// hot-path functions. The compiler rejects any implicit string assignment.
+type TenantID string
+
+// String implements fmt.Stringer so TenantID prints cleanly in logs.
+func (t TenantID) String() string { return string(t) }
+
 // Recorder tracks per-tenant transaction counts in memory.
 // All methods are goroutine-safe.
 type Recorder interface {
 	// Record increments the tenant's counter by delta.
 	// delta must be > 0.
-	Record(tenantID string, delta int64)
+	Record(tenantID TenantID, delta int64)
 
 	// Snapshot atomically drains all non-zero counters and returns the deltas
 	// accumulated since the last Snapshot call.
 	// Tenants with a zero count are omitted from the returned map.
-	Snapshot() map[string]int64
+	Snapshot() map[TenantID]int64
 }
 
 // shardCount controls the number of lock stripes.
@@ -50,7 +60,7 @@ type tenantCounter struct {
 
 type shard struct {
 	mu       sync.RWMutex
-	counters map[string]*tenantCounter
+	counters map[TenantID]*tenantCounter
 }
 
 // atomicRecorder shards tenants across shardCount mutexes to reduce lock
@@ -63,13 +73,13 @@ type atomicRecorder struct {
 func NewRecorder() Recorder {
 	r := &atomicRecorder{}
 	for i := range r.shards {
-		r.shards[i].counters = make(map[string]*tenantCounter)
+		r.shards[i].counters = make(map[TenantID]*tenantCounter)
 	}
 	return r
 }
 
 // shardFor maps a tenantID to a shard index using FNV-1a hashing.
-func shardFor(tenantID string) int {
+func shardFor(tenantID TenantID) int {
 	var h uint32 = 2166136261
 	for i := 0; i < len(tenantID); i++ {
 		h ^= uint32(tenantID[i])
@@ -78,7 +88,7 @@ func shardFor(tenantID string) int {
 	return int(h) & (shardCount - 1)
 }
 
-func (r *atomicRecorder) Record(tenantID string, delta int64) {
+func (r *atomicRecorder) Record(tenantID TenantID, delta int64) {
 	s := &r.shards[shardFor(tenantID)]
 
 	// Fast path: counter already allocated.
@@ -100,12 +110,12 @@ func (r *atomicRecorder) Record(tenantID string, delta int64) {
 	c.v.Add(delta)
 }
 
-func (r *atomicRecorder) Snapshot() map[string]int64 {
-	result := make(map[string]int64, 64)
+func (r *atomicRecorder) Snapshot() map[TenantID]int64 {
+	result := make(map[TenantID]int64, 64)
 	for i := range r.shards {
 		s := &r.shards[i]
 		s.mu.RLock()
-		tenants := make([]string, 0, len(s.counters))
+		tenants := make([]TenantID, 0, len(s.counters))
 		counters := make([]*tenantCounter, 0, len(s.counters))
 		for t, c := range s.counters {
 			tenants = append(tenants, t)

@@ -1,0 +1,48 @@
+# ── Blazil git hooks (managed by Lefthook) ───────────────────────────────────
+#
+# Install once:  lefthook install
+# Skip a hook:   LEFTHOOK=0 git commit
+#
+# Design:
+#   pre-commit  — fast (<5s). Format drift + compile errors. Blocks commit.
+#   pre-push    — thorough (<45s). Full lint + go vet. Blocks push.
+#   CI          — authoritative. Full test suite. Never skipped.
+
+# ── pre-commit: fast gates ────────────────────────────────────────────────────
+pre-commit:
+  parallel: true
+  commands:
+    # Rust: reject any unformatted file before it enters git history.
+    rust-fmt:
+      glob: "**/*.rs"
+      run: cargo fmt --all -- --check
+      fail_text: "Run: cargo fmt --all"
+
+    # Rust: catch compile errors immediately (faster than clippy, no codegen).
+    rust-check:
+      glob: "**/*.rs"
+      run: cargo check --workspace
+      fail_text: "Fix compile errors shown above"
+
+    # Go: reject unformatted staged .go files.
+    # gofmt -l prints file names that need formatting; empty output = all good.
+    go-fmt:
+      glob: "**/*.go"
+      run: test -z "$(gofmt -l {staged_files})"
+      fail_text: "Run: gofmt -w <file> (files listed above)"
+
+# ── pre-push: full lint gates ─────────────────────────────────────────────────
+pre-push:
+  parallel: false
+  commands:
+    # Rust: full Clippy with -D warnings. Catches everything CI would reject.
+    # Slower than check (~30s) but runs only on push, not every commit.
+    rust-clippy:
+      glob: "**/*.rs"
+      run: cargo clippy --workspace --all-targets -- -D warnings
+      fail_text: "Fix Clippy warnings above before pushing"
+
+  scripts:
+    # Go: run go vet on all modules. Script handles the multi-module monorepo.
+    "go_vet.sh":
+      runner: bash

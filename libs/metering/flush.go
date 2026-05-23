@@ -10,7 +10,7 @@ import (
 
 // UsageRow represents a single metering record to be persisted.
 type UsageRow struct {
-	TenantID    string
+	TenantID    TenantID
 	WindowStart time.Time
 	WindowEnd   time.Time
 	TxCount     int64
@@ -25,11 +25,11 @@ type UsageWriter interface {
 
 	// MonthlyTotal returns the sum of confirmed tx counts for a tenant within
 	// the billing month that contains t (UTC). Used for pricing tier selection.
-	MonthlyTotal(ctx context.Context, tenantID string, t time.Time) (int64, error)
+	MonthlyTotal(ctx context.Context, tenantID TenantID, t time.Time) (int64, error)
 
 	// WindowedUsage returns ordered (window_start ASC) usage rows for a tenant
 	// within the calendar month of year/month (1-based). Used for invoice generation.
-	WindowedUsage(ctx context.Context, tenantID string, year, month int) ([]UsageRow, error)
+	WindowedUsage(ctx context.Context, tenantID TenantID, year, month int) ([]UsageRow, error)
 }
 
 // Flusher periodically drains the Recorder and writes deltas to a UsageWriter.

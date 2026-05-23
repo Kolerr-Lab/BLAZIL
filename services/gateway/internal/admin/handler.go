@@ -294,7 +294,7 @@ type usageResponse struct {
 func (h *Handler) getUsage(w http.ResponseWriter, r *http.Request) {
 	tenantID := chi.URLParam(r, "id")
 	now := time.Now().UTC()
-	windows, err := h.writer.WindowedUsage(r.Context(), tenantID, now.Year(), int(now.Month()))
+	windows, err := h.writer.WindowedUsage(r.Context(), metering.TenantID(tenantID), now.Year(), int(now.Month()))
 	if err != nil {
 		h.internalError(w, "getUsage", err)
 		return
@@ -312,7 +312,7 @@ func (h *Handler) getInvoice(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := time.Now().UTC()
-	windows, err := h.writer.WindowedUsage(r.Context(), tenantID, now.Year(), int(now.Month()))
+	windows, err := h.writer.WindowedUsage(r.Context(), metering.TenantID(tenantID), now.Year(), int(now.Month()))
 	if err != nil {
 		h.internalError(w, "getInvoice/windowedUsage", err)
 		return
@@ -326,7 +326,7 @@ func (h *Handler) getInvoice(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	lines := metering.CalculateInvoice(tenantID, metering.Tier(t.Tier), counts)
+	lines := metering.CalculateInvoice(metering.TenantID(tenantID), metering.Tier(t.Tier), counts)
 	total := metering.TotalInvoiceMicroUSD(lines)
 
 	jsonOK(w, map[string]interface{}{
@@ -387,5 +387,3 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst interface{}) bool {
 	}
 	return true
 }
-
-

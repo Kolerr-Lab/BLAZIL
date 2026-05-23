@@ -1,0 +1,16 @@
+# ── Blazil workspace Cargo configuration ─────────────────────────────────────
+#
+# These settings apply to every `cargo` invocation in the workspace,
+# making local builds identical to CI in terms of strictness.
+
+[build]
+# Warnings are compile errors — locally AND in CI.
+# "If it compiles without warnings, it passes clippy."
+# Eliminates the entire class of "passes local, fails CI clippy" bugs.
+rustflags = ["-D", "warnings"]
+
+[alias]
+# cargo lint  →  full clippy check (mirrors the CI lint step exactly)
+lint = "clippy --workspace --all-targets -- -D warnings"
+# cargo t     →  faster to type than `cargo test --workspace`
+t    = "test --workspace"
