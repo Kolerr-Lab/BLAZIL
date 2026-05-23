@@ -21,7 +21,7 @@ blazil-dataloader = { path = "../../core/dataloader" }
 blazil-inference = { path = "../../core/inference" }
 
 # Async runtime
-tokio = { version = "1.37", features = ["full"] }
+tokio = { version = "1.52", features = ["full"] }
 
 # CLI
 clap = { version = "4", features = ["derive"] }

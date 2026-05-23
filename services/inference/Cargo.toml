@@ -21,7 +21,7 @@ blazil-common = { path = "../../core/common" }
 blazil-aeron-sys = { path = "../../core/aeron-sys" }
 
 # Async runtime
-tokio = { version = "1.37", features = ["full"] }
+tokio = { version = "1.52", features = ["full"] }
 async-trait = "0.1"
 
 # Serialization (MessagePack for Aeron protocol)

@@ -12,7 +12,7 @@ rust-version.workspace = true
 blazil-common = { path = "../common" }
 
 # I/O
-tokio = { version = "1.37", features = ["full"] }
+tokio = { version = "1.52", features = ["full"] }
 memmap2 = "0.9"
 
 # Serialization
