@@ -2,7 +2,7 @@ module github.com/blazil/sharding
 
 go 1.25.10
 
-require google.golang.org/grpc v1.79.3
+require google.golang.org/grpc v1.81.1
 
 require (
 	golang.org/x/net v0.55.0 // indirect
