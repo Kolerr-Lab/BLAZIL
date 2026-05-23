@@ -30,6 +30,7 @@ import (
 	"github.com/blazil/metering"
 	"github.com/blazil/observability"
 	"github.com/blazil/services/gateway/internal/admin"
+	"github.com/blazil/services/gateway/internal/billing"
 	"github.com/blazil/services/gateway/internal/config"
 	"github.com/blazil/services/gateway/internal/middleware"
 	"github.com/blazil/services/gateway/internal/proxy"
@@ -84,6 +85,16 @@ func run(logger *zap.Logger) error {
 	// ── Tenant store ─────────────────────────────────────────────────────────
 	store := tenant.NewPGStore(db)
 
+	// ── Billing ───────────────────────────────────────────────────────────────
+	billingStore := billing.NewStore(db)
+	var stripeH *billing.StripeHandler
+	if cfg.StripeSecretKey != "" && cfg.StripeWebhookSecret != "" {
+		stripeH = billing.NewStripeHandler(cfg.StripeSecretKey, cfg.StripeWebhookSecret, billingStore, logger)
+		logger.Info("stripe integration enabled")
+	} else {
+		logger.Warn("stripe integration disabled — set STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET to enable")
+	}
+
 	// ── Metering ─────────────────────────────────────────────────────────────
 	recorder := metering.NewRecorder()
 	writer := &pgUsageWriter{db: db}
@@ -122,10 +133,19 @@ func run(logger *zap.Logger) error {
 	}
 
 	// ── Admin HTTP server ────────────────────────────────────────────────────
-	adminHandler := admin.New(store, writer, recorder, cfg.AdminToken, logger)
+	adminHandler := admin.New(store, writer, recorder, billingStore, stripeH, cfg.AdminToken, logger)
+
+	// Stripe webhook lives at /webhooks/stripe — outside admin auth, validated
+	// by Stripe-Signature header inside billing.StripeHandler.ServeHTTP.
+	adminMux := http.NewServeMux()
+	if stripeH != nil {
+		adminMux.Handle("POST /webhooks/stripe", stripeH)
+	}
+	adminMux.Handle("/", adminHandler.Routes())
+
 	adminServer := &http.Server{
 		Addr:         cfg.AdminAddr,
-		Handler:      adminHandler.Routes(),
+		Handler:      adminMux,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,

@@ -51,6 +51,15 @@ type Config struct {
 	// MaxRecvMsgSizeBytes is the maximum gRPC message size the gateway accepts.
 	// Default: 4MB
 	MaxRecvMsgSizeBytes int
+
+	// StripeSecretKey is the Stripe secret API key (sk_live_... or sk_test_...).
+	// Loaded from Vault secret/data/stripe key "secret_key", or STRIPE_SECRET_KEY.
+	// If empty, Stripe-backed features (customer creation, webhook) are disabled.
+	StripeSecretKey string
+
+	// StripeWebhookSecret is the Stripe webhook endpoint secret (whsec_...).
+	// Loaded from Vault secret/data/stripe key "webhook_secret", or STRIPE_WEBHOOK_SECRET.
+	StripeWebhookSecret string
 }
 
 // Route maps an incoming gRPC service name prefix to an upstream address.
@@ -72,6 +81,10 @@ func Load() Config {
 		"GATEWAY_DATABASE_URL", "")
 	adminToken := secrets.LoadOrEnv(ctx, vc, "secret/data/gateway", "admin_token",
 		"GATEWAY_ADMIN_TOKEN", "")
+	stripeKey := secrets.LoadOrEnv(ctx, vc, "secret/data/stripe", "secret_key",
+		"STRIPE_SECRET_KEY", "")
+	stripeWHSecret := secrets.LoadOrEnv(ctx, vc, "secret/data/stripe", "webhook_secret",
+		"STRIPE_WEBHOOK_SECRET", "")
 
 	return Config{
 		GRPCAddr:            envString("GATEWAY_GRPC_ADDR", ":50050"),
@@ -83,6 +96,8 @@ func Load() Config {
 		LogLevel:            envString("BLAZIL_LOG_LEVEL", "info"),
 		ShutdownTimeout:     envDuration("GATEWAY_SHUTDOWN_TIMEOUT", 30*time.Second),
 		MaxRecvMsgSizeBytes: envInt("GATEWAY_MAX_RECV_MSG_BYTES", 4*1024*1024),
+		StripeSecretKey:     stripeKey,
+		StripeWebhookSecret: stripeWHSecret,
 	}
 }
 

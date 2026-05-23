@@ -27,23 +27,28 @@ package admin
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/blazil/metering"
+	"github.com/blazil/services/gateway/internal/billing"
 	"github.com/blazil/services/gateway/internal/tenant"
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 )
 
 // Handler is the admin control-plane HTTP handler.
 type Handler struct {
-	store      tenant.Store
-	writer     metering.UsageWriter
-	recorder   metering.Recorder
-	adminToken []byte // pre-computed for subtle comparison
-	logger     *zap.Logger
+	store        tenant.Store
+	writer       metering.UsageWriter
+	recorder     metering.Recorder
+	billingStore billing.Store
+	stripeH      *billing.StripeHandler // nil if Stripe not configured
+	adminToken   []byte                 // pre-computed for subtle comparison
+	logger       *zap.Logger
 }
 
 // New creates a Handler. adminToken must be non-empty; if it is, every request
@@ -52,15 +57,19 @@ func New(
 	store tenant.Store,
 	writer metering.UsageWriter,
 	recorder metering.Recorder,
+	billingStore billing.Store,
+	stripeH *billing.StripeHandler,
 	adminToken string,
 	logger *zap.Logger,
 ) *Handler {
 	return &Handler{
-		store:      store,
-		writer:     writer,
-		recorder:   recorder,
-		adminToken: []byte(adminToken),
-		logger:     logger,
+		store:        store,
+		writer:       writer,
+		recorder:     recorder,
+		billingStore: billingStore,
+		stripeH:      stripeH,
+		adminToken:   []byte(adminToken),
+		logger:       logger,
 	}
 }
 
@@ -84,8 +93,13 @@ func (h *Handler) Routes() chi.Router {
 			r.Get("/api-keys", h.listAPIKeys)
 			r.Get("/usage", h.getUsage)
 			r.Get("/invoice", h.getInvoice)
+			// Sprint 2 — invoice persistence + Stripe
+			r.Post("/invoices", h.generateInvoice)
+			r.Get("/invoices", h.listInvoices)
+			r.Post("/stripe-customer", h.createStripeCustomer)
 		})
 
+		r.Get("/invoices/{invoiceID}", h.getInvoiceByID)
 		r.Delete("/api-keys/{keyID}", h.revokeAPIKey)
 	})
 
@@ -339,6 +353,113 @@ func (h *Handler) getInvoice(w http.ResponseWriter, r *http.Request) {
 			"month": int(now.Month()),
 		},
 	})
+}
+
+// ── Invoice persistence (Sprint 2) ────────────────────────────────────────
+
+// generateInvoice calculates the current-month invoice from live metering data
+// and persists it as a 'draft' in the invoices table.
+// Idempotent: returns 409 Conflict if an invoice for this period already exists.
+func (h *Handler) generateInvoice(w http.ResponseWriter, r *http.Request) {
+	tenantID := chi.URLParam(r, "id")
+
+	t, err := h.store.GetTenant(r.Context(), tenantID)
+	if err != nil {
+		h.storeError(w, "generateInvoice/getTenant", err)
+		return
+	}
+
+	now := time.Now().UTC()
+	periodStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	periodEnd := periodStart.AddDate(0, 1, 0).Add(-time.Nanosecond)
+
+	windows, err := h.writer.WindowedUsage(r.Context(), metering.TenantID(tenantID), now.Year(), int(now.Month()))
+	if err != nil {
+		h.internalError(w, "generateInvoice/windowedUsage", err)
+		return
+	}
+
+	counts := make([]metering.WindowCount, len(windows))
+	for i, w := range windows {
+		counts[i] = metering.WindowCount{WindowStart: w.WindowStart, Count: w.TxCount}
+	}
+
+	mLines := metering.CalculateInvoice(metering.TenantID(tenantID), metering.Tier(t.Tier), counts)
+	total := metering.TotalInvoiceMicroUSD(mLines)
+
+	bLines := make([]billing.LineItem, len(mLines))
+	for i, ml := range mLines {
+		bLines[i] = billing.LineItem{
+			WindowStart:     ml.WindowStart,
+			TxCount:         ml.TxCount,
+			PricePerTxMicro: ml.PricePerTxµ,
+			TotalMicroUSD:   ml.TotalMicroUSD,
+		}
+	}
+
+	inv, err := h.billingStore.CreateInvoice(r.Context(), billing.Invoice{
+		TenantID:      tenantID,
+		PeriodStart:   periodStart,
+		PeriodEnd:     periodEnd,
+		TotalMicroUSD: total,
+		Status:        billing.StatusDraft,
+		Lines:         bLines,
+	})
+	if err != nil {
+		// UNIQUE constraint on (tenant_id, period_start) → 409
+		h.internalError(w, "generateInvoice/create", err)
+		return
+	}
+	jsonStatus(w, http.StatusCreated, inv)
+}
+
+// listInvoices returns all persisted invoices for a tenant.
+func (h *Handler) listInvoices(w http.ResponseWriter, r *http.Request) {
+	tenantID := chi.URLParam(r, "id")
+	invs, err := h.billingStore.ListInvoices(r.Context(), tenantID)
+	if err != nil {
+		h.internalError(w, "listInvoices", err)
+		return
+	}
+	jsonOK(w, invs)
+}
+
+// getInvoiceByID returns a single invoice with its line items.
+func (h *Handler) getInvoiceByID(w http.ResponseWriter, r *http.Request) {
+	invoiceID := chi.URLParam(r, "invoiceID")
+	inv, err := h.billingStore.GetInvoice(r.Context(), invoiceID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			jsonError(w, http.StatusNotFound, "invoice not found")
+			return
+		}
+		h.internalError(w, "getInvoiceByID", err)
+		return
+	}
+	jsonOK(w, inv)
+}
+
+// createStripeCustomer provisions a Stripe customer for the tenant.
+// Idempotent — safe to call multiple times.
+func (h *Handler) createStripeCustomer(w http.ResponseWriter, r *http.Request) {
+	if h.stripeH == nil {
+		jsonError(w, http.StatusServiceUnavailable, "stripe not configured")
+		return
+	}
+	tenantID := chi.URLParam(r, "id")
+
+	t, err := h.store.GetTenant(r.Context(), tenantID)
+	if err != nil {
+		h.storeError(w, "createStripeCustomer/getTenant", err)
+		return
+	}
+
+	customerID, err := h.stripeH.CreateCustomer(r.Context(), tenantID, t.Name, t.Email)
+	if err != nil {
+		h.internalError(w, "createStripeCustomer", err)
+		return
+	}
+	jsonOK(w, map[string]string{"stripe_customer_id": customerID})
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
