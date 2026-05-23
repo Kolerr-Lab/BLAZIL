@@ -45,7 +45,7 @@ prometheus = { version = "0.13", default-features = false, features = ["process"
 warp = "0.3"
 
 # CLI
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4.6", features = ["derive"] }
 
 # Utils
 num_cpus = "1.16"
