@@ -1,0 +1,31 @@
+# dedicated-template — Inventory template for a single enterprise tenant's cluster
+#
+# DO NOT use this file directly. Let deploy-dedicated.sh generate a
+# per-tenant copy at infra/ansible/inventory/dedicated-<tenant_id>.
+#
+# Variables in {{ }} are substituted by deploy-dedicated.sh.
+
+[blazil_nodes]
+node-1  ansible_host={{ NODE_1_PUBLIC_IP }}  blazil_node_id=node-1  blazil_shard_id=0
+node-2  ansible_host={{ NODE_2_PUBLIC_IP }}  blazil_node_id=node-2  blazil_shard_id=1
+node-3  ansible_host={{ NODE_3_PUBLIC_IP }}  blazil_node_id=node-3  blazil_shard_id=2
+
+[blazil_nodes:vars]
+ansible_user=root
+ansible_ssh_private_key_file={{ SSH_KEY_PATH }}
+ansible_python_interpreter=/usr/bin/python3
+
+# Tenant-scoped overrides (merged with group_vars/all.yml at runtime).
+# These are written here so the inventory is self-contained — no need to
+# look up external state when re-running the playbook against an existing cluster.
+tenant_id={{ TENANT_ID }}
+tb_addresses={{ TB_ADDRESSES }}
+blazil_nodes={{ BLAZIL_NODES }}
+
+[monitor]
+# node-1 runs Prometheus + Grafana for this dedicated cluster.
+node-1
+
+[monitor:vars]
+ansible_user=root
+ansible_ssh_private_key_file={{ SSH_KEY_PATH }}

@@ -34,6 +34,8 @@ use blazil_transport::aeron_transport::{AeronTransportServer, DEFAULT_AERON_CHAN
 #[cfg(all(target_os = "linux", feature = "io-uring"))]
 use blazil_transport::io_uring_transport::IoUringTransportServer;
 use blazil_transport::metrics_server::MetricsServer;
+#[cfg(all(target_os = "linux", feature = "rdma"))]
+use blazil_transport::rdma_transport::RdmaTransportServer;
 use blazil_transport::server::TransportServer;
 use blazil_transport::tcp::TcpTransportServer;
 use tracing::{info, warn};
@@ -109,6 +111,7 @@ async fn try_connect_tb(
 ///   - `"aeron"`         — [`AeronTransportServer`] (requires `--features aeron`)
 ///   - `"io-uring"`      — [`IoUringTransportServer`] (Linux + `--features io-uring`)
 ///   - `"aeron+io-uring"` — Aeron UDP with io_uring TCP fallback (Linux + both features)
+///   - `"rdma"`          — [`RdmaTransportServer`] (Linux + `--features rdma`, IB/RoCE HCA)
 async fn run_pipeline<C: LedgerClient + 'static>(
     client: Arc<C>,
     bind_addr: String,
@@ -209,6 +212,31 @@ async fn run_pipeline<C: LedgerClient + 'static>(
         info!("blazil-engine ready");
         server.serve().await.expect("aeron server error");
         return;
+    }
+
+    // RDMA (InfiniBand / RoCEv2): Linux + ibverbs HCA only.
+    if transport == "rdma" {
+        #[cfg(all(target_os = "linux", feature = "rdma"))]
+        {
+            let device_name = std::env::var("BLAZIL_RDMA_DEVICE").ok();
+            let server = Arc::new(RdmaTransportServer::new(
+                &bind_addr,
+                Arc::clone(&pipeline),
+                Arc::clone(&results),
+                device_name,
+            ));
+            info!("🚀 RDMA transport active — InfiniBand/RoCEv2 kernel-bypass");
+            info!("blazil-engine ready");
+            server.serve().await.expect("rdma server error");
+            return;
+        }
+        #[cfg(not(all(target_os = "linux", feature = "rdma")))]
+        {
+            warn!(
+                transport = %transport,
+                "⚠️  RDMA not available on this platform — falling back to TCP"
+            );
+        }
     }
 
     // Default: TCP transport

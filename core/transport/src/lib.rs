@@ -60,6 +60,9 @@ pub mod afxdp;
 #[cfg(all(target_os = "linux", feature = "af-xdp"))]
 pub mod ebpf;
 
+#[cfg(all(target_os = "linux", feature = "rdma"))]
+pub mod rdma_transport;
+
 pub use priority::EventPriority;
 pub use protocol::{TransactionRequest, TransactionResponse};
 pub use server::TransportServer;
@@ -82,3 +85,6 @@ pub use afxdp::AfXdpConfig;
 
 #[cfg(all(target_os = "linux", feature = "af-xdp"))]
 pub use afxdp::client::AfXdpClient;
+
+#[cfg(all(target_os = "linux", feature = "rdma"))]
+pub use rdma_transport::RdmaTransportServer;

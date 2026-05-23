@@ -161,7 +161,7 @@ pub async fn handle_connection(
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Parses a [`TransactionRequest`] into a [`TransactionEvent`].
-fn build_event(req: TransactionRequest) -> BlazerResult<TransactionEvent> {
+pub(crate) fn build_event(req: TransactionRequest) -> BlazerResult<TransactionEvent> {
     // Parse debit account ID.
     let debit_account_id = AccountId::from_str(&req.debit_account_id).map_err(|_| {
         BlazerError::ValidationError(format!(
@@ -229,7 +229,7 @@ async fn wait_for_result(
 }
 
 /// Builds a [`TransactionResponse`] from a [`TransactionResult`].
-fn build_response(request_id: &str, result: TransactionResult) -> TransactionResponse {
+pub(crate) fn build_response(request_id: &str, result: TransactionResult) -> TransactionResponse {
     let ts = Timestamp::now().as_nanos();
     match result {
         TransactionResult::Committed {

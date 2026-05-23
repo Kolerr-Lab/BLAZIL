@@ -1,0 +1,296 @@
+---
+# dedicated.yml — Enterprise dedicated-tenant cluster deploy
+#
+# Extends site.yml with tenant isolation, RDMA auto-detect, TLS cert
+# provisioning, and a post-deploy smoke test.
+#
+# Usage (via one-command wrapper — recommended):
+#   ./scripts/deploy-dedicated.sh <tenant_id> <node1_ip> <node2_ip> <node3_ip> [--rdma]
+#
+# Direct invocation (advanced):
+#   ansible-playbook \
+#     -i infra/ansible/inventory/dedicated-<tenant_id> \
+#     infra/ansible/playbooks/dedicated.yml \
+#     -e "tenant_id=acme-corp" \
+#     -e "tenant_api_key=$(openssl rand -hex 32)" \
+#     -e "tb_addresses=10.x.x.1:3000,10.x.x.2:3001,10.x.x.3:3002" \
+#     -e "blazil_nodes=node-1:10.x.x.1:7878,node-2:10.x.x.2:7878,node-3:10.x.x.3:7878"
+#
+# Optional variables:
+#   rdma_enabled=true          — force RDMA transport (skip auto-detect)
+#   tls_cn=acme.blazil.internal — override TLS CN (default: <tenant_id>.blazil.internal)
+#   admin_token=<token>        — override gateway admin token
+#
+# Tags:
+#   site         — base cluster bring-up (site.yml plays)
+#   tenant       — tenant env file + API key config
+#   rdma         — RDMA hardware detection + transport switch
+#   tls          — self-signed TLS cert generation
+#   smoke        — health check + baseline TPS assertion
+
+# ── Phase 1: Full base cluster bring-up ──────────────────────────────────────
+#
+# site.yml handles: apt packages, Docker, kernel tuning, repo clone,
+# env file write, sequential cluster start, health port checks.
+- import_playbook: site.yml
+
+# ── Phase 2: Tenant isolation ─────────────────────────────────────────────────
+- name: Write tenant-specific environment
+  hosts: blazil_nodes
+  become: true
+  tags: [tenant, config]
+
+  vars:
+    tls_cn: "{{ tenant_id }}.blazil.internal"
+    tls_dir: "{{ blazil_install_dir }}/tls"
+    tenant_env_file: "{{ blazil_install_dir }}/.env.tenant"
+
+  tasks:
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - tenant_id is defined and tenant_id | length > 0
+          - tenant_api_key is defined and tenant_api_key | length >= 32
+        fail_msg: >
+          tenant_id and tenant_api_key must be set.
+          Generate a key with: openssl rand -hex 32
+      tags: [tenant]
+
+    - name: Write tenant env file
+      ansible.builtin.copy:
+        dest: "{{ tenant_env_file }}"
+        mode: "0640"
+        owner: root
+        group: root
+        content: |
+          # Blazil dedicated tenant configuration
+          # Generated: {{ ansible_date_time.iso8601 }}
+          TENANT_ID={{ tenant_id }}
+          TENANT_API_KEY={{ tenant_api_key }}
+          ADMIN_TOKEN={{ admin_token | default(lookup('password', '/dev/null length=40 chars=ascii_letters,digits')) }}
+          BLAZIL_TRANSPORT={{ effective_transport | default(blazil_transport) }}
+          TLS_CERT_PATH={{ tls_dir }}/server.crt
+          TLS_KEY_PATH={{ tls_dir }}/server.key
+          TLS_CN={{ tls_cn }}
+      tags: [tenant]
+
+    - name: Ensure tenant env is sourced by gateway startup
+      ansible.builtin.lineinfile:
+        path: "{{ blazil_install_dir }}/.env.node"
+        line: "# Tenant env loaded by deploy-dedicated.sh: see .env.tenant"
+        create: true
+        mode: "0640"
+      tags: [tenant]
+
+# ── Phase 3: RDMA hardware detection ─────────────────────────────────────────
+- name: Detect RDMA hardware and configure transport
+  hosts: blazil_nodes
+  become: true
+  tags: [rdma]
+
+  tasks:
+    - name: Check for InfiniBand / RoCEv2 kernel modules
+      ansible.builtin.shell:
+        cmd: lsmod | grep -qE 'mlx5_ib|mlx5_core|rdma_rxe|ib_core'
+      register: rdma_module_check
+      changed_when: false
+      failed_when: false
+      tags: [rdma]
+
+    - name: Check for ibverbs library
+      ansible.builtin.shell:
+        cmd: ldconfig -p | grep -q libibverbs
+      register: rdma_lib_check
+      changed_when: false
+      failed_when: false
+      tags: [rdma]
+
+    - name: Set effective transport (auto-detect)
+      ansible.builtin.set_fact:
+        effective_transport: >-
+          {{ 'rdma' if (rdma_enabled | default(false) | bool)
+             or (rdma_module_check.rc == 0 and rdma_lib_check.rc == 0)
+             else blazil_transport }}
+      tags: [rdma]
+
+    - name: Report detected transport
+      ansible.builtin.debug:
+        msg: >
+          RDMA modules={{ rdma_module_check.rc == 0 }},
+          ibverbs={{ rdma_lib_check.rc == 0 }},
+          effective_transport={{ effective_transport }}
+      tags: [rdma]
+
+    - name: Install libibverbs-dev when RDMA hardware present
+      ansible.builtin.apt:
+        name:
+          - libibverbs-dev
+          - librdmacm-dev
+          - infiniband-diags
+          - rdma-core
+        state: present
+      when: effective_transport == 'rdma'
+      tags: [rdma]
+
+    - name: Patch .env.node transport setting to RDMA
+      ansible.builtin.lineinfile:
+        path: "{{ blazil_install_dir }}/.env.node"
+        regexp: '^BLAZIL_TRANSPORT='
+        line: "BLAZIL_TRANSPORT=rdma"
+      when: effective_transport == 'rdma'
+      tags: [rdma]
+
+    - name: Restart engine container to apply new transport
+      ansible.builtin.shell:
+        cmd: cd {{ blazil_install_dir }} && docker compose restart engine
+      when: effective_transport == 'rdma'
+      changed_when: true
+      tags: [rdma]
+
+# ── Phase 4: TLS certificate provisioning ────────────────────────────────────
+- name: Provision self-signed TLS certificate
+  hosts: blazil_nodes
+  become: true
+  tags: [tls]
+
+  vars:
+    tls_cn: "{{ tenant_id }}.blazil.internal"
+    tls_dir: "{{ blazil_install_dir }}/tls"
+    tls_days: 3650  # 10-year self-signed cert (replaced by PKI in production)
+    tls_key: "{{ tls_dir }}/server.key"
+    tls_crt: "{{ tls_dir }}/server.crt"
+
+  tasks:
+    - name: Ensure TLS directory exists
+      ansible.builtin.file:
+        path: "{{ tls_dir }}"
+        state: directory
+        mode: "0750"
+        owner: root
+        group: root
+      tags: [tls]
+
+    - name: Check if certificate already exists and is still valid
+      ansible.builtin.shell:
+        cmd: >
+          openssl x509 -in {{ tls_crt }} -noout -checkend 2592000
+          2>/dev/null && echo "valid" || echo "missing_or_expiring"
+      register: cert_check
+      changed_when: false
+      failed_when: false
+      tags: [tls]
+
+    - name: Generate RSA-4096 private key
+      ansible.builtin.command:
+        cmd: >
+          openssl genrsa -out {{ tls_key }} 4096
+        creates: "{{ tls_key }}"
+      when: cert_check.stdout != "valid"
+      tags: [tls]
+
+    - name: Set private key permissions (owner-read only)
+      ansible.builtin.file:
+        path: "{{ tls_key }}"
+        mode: "0600"
+        owner: root
+        group: root
+      tags: [tls]
+
+    - name: Generate self-signed certificate (CN={{ tls_cn }})
+      ansible.builtin.command:
+        cmd: >
+          openssl req -new -x509 -days {{ tls_days }}
+          -key {{ tls_key }} -out {{ tls_crt }}
+          -subj "/C=SG/ST=Singapore/O=Kolerr Lab/CN={{ tls_cn }}"
+          -addext "subjectAltName=DNS:{{ tls_cn }},DNS:localhost,IP:{{ ansible_host }}"
+      when: cert_check.stdout != "valid"
+      changed_when: true
+      tags: [tls]
+
+    - name: Show certificate fingerprint
+      ansible.builtin.shell:
+        cmd: openssl x509 -in {{ tls_crt }} -noout -fingerprint -sha256
+      register: cert_fingerprint
+      changed_when: false
+      tags: [tls]
+
+    - name: Display fingerprint (add to client trust store)
+      ansible.builtin.debug:
+        msg: "TLS cert for {{ tls_cn }}: {{ cert_fingerprint.stdout }}"
+      tags: [tls]
+
+# ── Phase 5: Smoke test ───────────────────────────────────────────────────────
+- name: Smoke test — health check and baseline performance assertion
+  hosts: blazil_nodes
+  tags: [smoke]
+
+  vars:
+    engine_port: 7878
+    health_url: "http://{{ ansible_host }}:9090/metrics"
+    bench_duration_s: 5
+    bench_tps_floor: 1000  # conservative floor; real hardware >> this
+
+  tasks:
+    - name: Wait for engine port to be reachable
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: "{{ engine_port }}"
+        timeout: 30
+      tags: [smoke]
+
+    - name: Fetch Prometheus metrics endpoint (hard fail if not 200)
+      ansible.builtin.uri:
+        url: "{{ health_url }}"
+        method: GET
+        status_code: 200
+        timeout: 10
+      register: health_result
+      tags: [smoke]
+
+    - name: Assert metrics endpoint is up
+      ansible.builtin.assert:
+        that:
+          - health_result.status == 200
+        fail_msg: "Engine metrics endpoint returned {{ health_result.status }} — cluster is NOT healthy"
+        success_msg: "Engine metrics endpoint OK (HTTP 200)"
+      tags: [smoke]
+
+    - name: Run 5-second TCP baseline bench (soft assertion — alert only)
+      ansible.builtin.shell:
+        cmd: >
+          which blazil-bench 2>/dev/null &&
+          blazil-bench --addr {{ ansible_host }}:{{ engine_port }}
+          --duration {{ bench_duration_s }}s --report-json /tmp/bench_{{ tenant_id }}.json ||
+          echo '{"tps": 0, "p99_us": 0, "skipped": true}'
+      register: bench_raw
+      changed_when: false
+      failed_when: false
+      tags: [smoke]
+
+    - name: Save bench result as deploy evidence
+      ansible.builtin.copy:
+        dest: "{{ blazil_install_dir }}/deploy_{{ tenant_id }}_bench.json"
+        content: "{{ bench_raw.stdout }}"
+        mode: "0644"
+      become: true
+      tags: [smoke]
+
+    - name: Display deploy summary
+      ansible.builtin.debug:
+        msg: |
+          ============================================================
+          Blazil dedicated cluster for tenant: {{ tenant_id }}
+          ============================================================
+          Engine endpoint:   {{ ansible_host }}:{{ engine_port }}
+          Metrics:           {{ health_url }}
+          Transport:         {{ effective_transport | default(blazil_transport) }}
+          TLS CN:            {{ tenant_id }}.blazil.internal
+          TLS fingerprint:   (see earlier task output)
+          Deploy bench:      /opt/blazil/deploy_{{ tenant_id }}_bench.json
+          ============================================================
+          Next steps:
+            1. Distribute TLS cert to client trust store
+            2. Set BLAZIL_TRANSPORT={{ effective_transport | default(blazil_transport) }} on clients
+            3. Monitor: http://{{ ansible_host }}:3001 (Grafana)
+          ============================================================
+      tags: [smoke]

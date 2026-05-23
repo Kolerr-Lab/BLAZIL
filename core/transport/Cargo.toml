@@ -27,6 +27,12 @@ io-uring = ["dep:tokio-uring"]
 # See: core/transport/ebpf/blazil_xdp.bpf.c and src/afxdp/
 af-xdp = ["dep:xsk-rs", "dep:aya"]
 
+# Enables the RDMA (InfiniBand / RoCEv2) zero-copy transport (Linux + IB HCA).
+# Requires: libibverbs-dev + librdmacm-dev (build time).
+# Hardware: Mellanox mlx5 NIC or softRoCE (rxe) for testing.
+# Activate at runtime via BLAZIL_TRANSPORT=rdma.
+rdma = ["dep:ibverbs"]
+
 [dependencies]
 blazil-common  = { path = "../common" }
 blazil-engine  = { path = "../engine" }
@@ -50,6 +56,8 @@ tokio-uring    = { version = "0.5", optional = true }
 # AF_XDP zero-copy transport (feature = "af-xdp")
 xsk-rs         = { version = "0.3", optional = true }
 aya            = { version = "0.13", optional = true }
+# RDMA InfiniBand / RoCEv2 transport (feature = "rdma")
+ibverbs        = { version = "0.9.2", optional = true }
 
 [dev-dependencies]
 blazil-ledger  = { path = "../ledger", features = ["tigerbeetle-client"] }
