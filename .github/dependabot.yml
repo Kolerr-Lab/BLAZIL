@@ -1,0 +1,205 @@
+# Dependabot configuration
+# Docs: https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+#
+# Security alert suppression policy
+# ───────────────────────────────────
+# RUSTSEC-2024-0436 (paste — unmaintained, INFO severity, no CVE):
+#   paste is a compile-time proc-macro with zero runtime exposure.
+#   It is a transitive dependency via tract-linalg ← tract-core ← tract-onnx.
+#   There is no patched version; pastey is an alternative but tract has not
+#   migrated.  This advisory is suppressed via .cargo/audit.toml and dismissed
+#   in the GitHub Security tab.  Re-evaluate when tract >= 0.22 is released.
+
+version: 2
+updates:
+  # ── Cargo (Rust workspace) ────────────────────────────────────────────────
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+      - rust
+    ignore:
+      # paste — unmaintained INFO advisory, no patched version, compile-time
+      # proc-macro only, transitive via tract.  Tracked in .cargo/audit.toml.
+      - dependency-name: paste
+        update-types:
+          - version-update:semver-patch
+          - version-update:semver-minor
+          - version-update:semver-major
+
+  # ── Go services ───────────────────────────────────────────────────────────
+  - package-ecosystem: gomod
+    directory: /services/banking
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - go
+
+  - package-ecosystem: gomod
+    directory: /services/crypto
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - go
+
+  - package-ecosystem: gomod
+    directory: /services/gateway
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - go
+
+  - package-ecosystem: gomod
+    directory: /services/payments
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - go
+
+  - package-ecosystem: gomod
+    directory: /services/trading
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - go
+
+  - package-ecosystem: gomod
+    directory: /libs/auth
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - go
+
+  - package-ecosystem: gomod
+    directory: /libs/discovery
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - go
+
+  - package-ecosystem: gomod
+    directory: /libs/metering
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - go
+
+  - package-ecosystem: gomod
+    directory: /libs/observability
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - go
+
+  - package-ecosystem: gomod
+    directory: /libs/policy
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - go
+
+  - package-ecosystem: gomod
+    directory: /libs/secrets
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - go
+
+  - package-ecosystem: gomod
+    directory: /libs/sharding
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - go
+
+  - package-ecosystem: gomod
+    directory: /tools/loadgen
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - go
+
+  - package-ecosystem: gomod
+    directory: /tools/stresstest
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - go
+
+  # ── npm (dashboards) ──────────────────────────────────────────────────────
+  - package-ecosystem: npm
+    directory: /tools/ai-dashboard
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - frontend
+
+  - package-ecosystem: npm
+    directory: /tools/fintech-dashboard
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - frontend
+
+  # ── GitHub Actions ────────────────────────────────────────────────────────
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - ci
