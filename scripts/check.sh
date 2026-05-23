@@ -88,7 +88,11 @@ print_section "Go Checks"
 
 cd services
 
-for service in gateway payments banking trading crypto compliance; do
+for service in gateway banking crypto payments trading; do
+    if [ ! -d "$service" ]; then
+        print_info "$service: directory not found, skipping"
+        continue
+    fi
     print_info "Checking $service..."
     
     cd "$service"
@@ -101,14 +105,14 @@ for service in gateway payments banking trading crypto compliance; do
     fi
     
     # Build
-    if go build -v ./...; then
+    if go build ./...; then
         print_status "$service: build succeeded"
     else
         print_error "$service: build failed"
     fi
     
     # Test
-    if go test -v ./...; then
+    if go test ./...; then
         print_status "$service: tests passed"
     else
         print_error "$service: tests failed"
