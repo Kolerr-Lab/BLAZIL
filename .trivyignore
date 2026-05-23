@@ -41,3 +41,15 @@ DIG-0001
 #   Owner: infra team | Last reviewed: 2026-05-23
 DIG-0003
 
+# ── Third-party Upstream Submodule (core/aeron-sys/aeron) ────────────────────
+#
+# DS-0015: yum package cache not cleaned in Rocky Linux builder Dockerfile.
+#   File: core/aeron-sys/aeron/cppbuild/rocky/Dockerfile
+#   This is UPSTREAM code from real-logic/aeron tag 1.50.4 — a C++ build
+#   environment Dockerfile, NOT a runtime production image.  We do not own
+#   this repo and cannot push fixes to it; the submodule must stay pinned to
+#   the upstream tag.  The image is only used to build the aeron_static.a
+#   library on Rocky Linux CI agents — it is never deployed or used at runtime.
+#   Owner: infra team | Last reviewed: 2026-05-23
+DS-0015
+
