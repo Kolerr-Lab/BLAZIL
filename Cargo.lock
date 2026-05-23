@@ -481,7 +481,7 @@ dependencies = [
  "io-uring",
  "memmap2",
  "proptest",
- "rand 0.8.6",
+ "rand 0.9.4",
  "rand_chacha 0.3.1",
  "serde",
  "serde_json",

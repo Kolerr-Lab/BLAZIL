@@ -29,7 +29,7 @@ image = { version = ">=0.25.0, <=0.25.9", default-features = false, features = [
 hound = { version = "3.5", optional = true }
 
 # Crypto/RNG
-rand = "0.8"
+rand = "0.9"
 rand_chacha = "0.3"
 
 # Error handling
