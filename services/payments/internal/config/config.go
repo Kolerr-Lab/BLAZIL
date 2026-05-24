@@ -40,6 +40,11 @@ type Config struct {
 	// Default: ":9091"
 	MetricsAddr string
 
+	// DatabaseURL is the Postgres DSN for the payments store.
+	// Set via BLAZIL_PAYMENTS_DATABASE_URL.
+	// When empty the service falls back to a volatile in-memory store.
+	DatabaseURL string
+
 	// ShardingEnabled turns on account-based shard routing when true.
 	// Set via BLAZIL_SHARDING_ENABLED=true. Default: false.
 	ShardingEnabled bool
@@ -65,9 +70,8 @@ func Load() Config {
 		MaxAmountMinorUnits: envInt64("BLAZIL_MAX_AMOUNT_MINOR_UNITS", 100_000_000_00),
 		IdempotencyTTL:      envDuration("BLAZIL_IDEMPOTENCY_TTL", 24*time.Hour),
 		LogLevel:            envString("BLAZIL_LOG_LEVEL", "info"),
-		MetricsAddr:         envString("BLAZIL_METRICS_ADDR", ":9091"),
-		ShardingEnabled:     envBool("BLAZIL_SHARDING_ENABLED", false),
-		NodeAddresses:       envStringSlice("BLAZIL_NODES"),
+		MetricsAddr:         envString("BLAZIL_METRICS_ADDR", ":9091"), DatabaseURL: secrets.LoadOrEnv(ctx, vc, "secret/data/payments", "database_url", "BLAZIL_PAYMENTS_DATABASE_URL", ""), ShardingEnabled: envBool("BLAZIL_SHARDING_ENABLED", false),
+		NodeAddresses: envStringSlice("BLAZIL_NODES"),
 	}
 }
 

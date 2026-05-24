@@ -1,0 +1,37 @@
+# Per-Dockerfile ignore rules for Dockerfile.inference.
+#
+# Dockerfile.inference builds blazil-inference-service which depends on
+# blazil-transport --features aeron + blazil-aeron-sys.  Both crates compile
+# the Aeron C++ media driver from source (core/aeron-sys/aeron/).
+#
+# NOTE: core/aeron-sys/aeron/ is intentionally NOT excluded here (unlike the
+# root .dockerignore).  The git submodule MUST be present in the build context
+# so cmake can compile libaeron_static.a.  Run before building locally:
+#   git submodule update --init --recursive
+
+# Rust build artifacts — can be several GB
+target/
+
+# Git history
+.git/
+
+# Local dev / IDE
+.env
+.env.*
+*.env
+.vscode/
+.idea/
+*.iml
+
+# Benchmark / test artifacts
+bench/target/
+docs/benchmark-screenshots/
+docs/benchmark-results/
+
+# CI
+.github/
+
+# Misc
+*.log
+*.tmp
+RELEASE-*.md

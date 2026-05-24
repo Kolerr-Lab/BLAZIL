@@ -28,7 +28,10 @@ import (
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/status"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	paymentsv1 "github.com/blazil/services/payments/api/proto/payments/v1"
+	paydb "github.com/blazil/services/payments/db"
 	"github.com/blazil/services/payments/internal/authorization"
 	"github.com/blazil/services/payments/internal/config"
 	"github.com/blazil/services/payments/internal/domain"
@@ -96,13 +99,35 @@ func main() {
 	routerCfg := routing.DefaultRouterConfig()
 	router := routing.NewRuleBasedRouter(routerCfg)
 
-	idempotencyStore := lifecycle.NewInMemoryIdempotencyStore(cfg.IdempotencyTTL)
+	// ── Database migrations + store ─────────────────────────────────────────
 	cleanupDone := make(chan struct{})
-	idempotencyStore.StartCleanup(time.Hour, cleanupDone)
+	var paymentStore lifecycle.PaymentStore
+	var idempotencyStore lifecycle.IdempotencyStore
+
+	if cfg.DatabaseURL != "" {
+		if err := paydb.RunMigrations(cfg.DatabaseURL, logger); err != nil {
+			logger.Fatal("database migration failed", zap.Error(err))
+		}
+		pool, err := pgxpool.New(context.Background(), cfg.DatabaseURL)
+		if err != nil {
+			logger.Fatal("failed to create database pool", zap.Error(err))
+		}
+		defer pool.Close()
+		pgStore := paydb.NewPostgresPaymentStore(pool)
+		paymentStore = pgStore
+		idempotencyStore = paydb.NewPostgresIdempotencyStore(pgStore, logger)
+		logger.Info("postgres payment store active",
+			zap.String("dsn_host", maskDSN(cfg.DatabaseURL)),
+		)
+	} else {
+		logger.Warn("BLAZIL_PAYMENTS_DATABASE_URL not set — using volatile in-memory payment store")
+		memIdempotency := lifecycle.NewInMemoryIdempotencyStore(cfg.IdempotencyTTL)
+		memIdempotency.StartCleanup(time.Hour, cleanupDone)
+		paymentStore = lifecycle.NewInMemoryPaymentStore()
+		idempotencyStore = memIdempotency
+	}
 
 	engineClient := engine.NewTcpEngineClient(cfg.EngineAddr, cfg.EngineTimeout)
-
-	paymentStore := lifecycle.NewInMemoryPaymentStore()
 	processor := lifecycle.NewPaymentProcessor(paymentStore, auth, router, idempotencyStore, engineClient)
 
 	// ── Sharding coordinator (multi-node mode) ────────────────────────────────
@@ -484,4 +509,23 @@ func buildLogger(level string) (*zap.Logger, error) {
 	default:
 		return zap.NewProduction()
 	}
+}
+
+// maskDSN returns only the host portion of a Postgres DSN for safe logging.
+// e.g. "postgres://user:secret@host:5432/db" → "host:5432"
+func maskDSN(dsn string) string {
+	for _, prefix := range []string{"postgres://", "postgresql://", "pgx5://"} {
+		if after, ok := strings.CutPrefix(dsn, prefix); ok {
+			// after = "user:pass@host:port/db"
+			if at := strings.Index(after, "@"); at >= 0 {
+				hostDB := after[at+1:]
+				if slash := strings.Index(hostDB, "/"); slash >= 0 {
+					return hostDB[:slash]
+				}
+				return hostDB
+			}
+			return after
+		}
+	}
+	return "(custom dsn)"
 }
