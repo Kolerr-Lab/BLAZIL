@@ -14,6 +14,7 @@ import (
 
 	"github.com/blazil/auth"
 	"github.com/blazil/observability"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -30,6 +31,7 @@ import (
 
 func main() {
 	cfg := config.Load()
+	ctx := context.Background()
 
 	logger, err := buildLogger(cfg.LogLevel)
 	if err != nil {
@@ -60,9 +62,7 @@ func main() {
 
 	// ── Wiring ────────────────────────────────────────────────────────────────
 
-	accountSvc := accounts.NewInMemoryAccountService()
-	balanceStore := balances.NewInMemoryBalanceStore()
-	txStore := history.NewInMemoryTransactionStore()
+	accountSvc, balanceStore, txStore := buildBankingStores(ctx, cfg, logger)
 	balanceSvc := balances.NewAccountBalanceService(accountSvc, balanceStore, txStore)
 	accountSvc.SetBalanceService(balanceSvc)
 
@@ -107,10 +107,10 @@ func main() {
 // bankingServer implements bankingv1.BankingServiceServer.
 type bankingServer struct {
 	bankingv1.UnimplementedBankingServiceServer
-	accounts     *accounts.InMemoryAccountService
+	accounts     accounts.AccountService
 	balances     *balances.AccountBalanceService
-	balanceStore *balances.InMemoryBalanceStore
-	history      *history.InMemoryTransactionStore
+	balanceStore balances.BalanceStore
+	history      history.TransactionStore
 	logger       *zap.Logger
 }
 
@@ -247,4 +247,28 @@ func domainToGRPCStatus(err error) error {
 	default:
 		return status.Errorf(codes.Internal, "%v", err)
 	}
+}
+
+// buildBankingStores returns Postgres-backed stores when BANKING_DATABASE_URL is set,
+// otherwise falls back to in-memory implementations (non-production).
+func buildBankingStores(ctx context.Context, cfg config.Config, logger *zap.Logger) (
+	accounts.AccountService, balances.BalanceStore, history.TransactionStore,
+) {
+	if cfg.DatabaseURL == "" {
+		logger.Warn("BANKING_DATABASE_URL not set — using in-memory stores (data will not survive restarts)")
+		return accounts.NewInMemoryAccountService(),
+			balances.NewInMemoryBalanceStore(),
+			history.NewInMemoryTransactionStore()
+	}
+	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	if err != nil {
+		logger.Fatal("failed to connect to banking database", zap.Error(err))
+	}
+	if err := pool.Ping(ctx); err != nil {
+		logger.Fatal("banking database ping failed", zap.Error(err))
+	}
+	logger.Info("banking: using Postgres stores")
+	return accounts.NewPgAccountService(pool),
+		balances.NewPgBalanceStore(pool),
+		history.NewPgTransactionStore(pool)
 }

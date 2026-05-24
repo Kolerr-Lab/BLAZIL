@@ -13,6 +13,7 @@ import (
 
 	"github.com/blazil/auth"
 	"github.com/blazil/observability"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -30,6 +31,7 @@ import (
 
 func main() {
 	cfg := config.Load()
+	ctx := context.Background()
 
 	logger := observability.NewLogger("trading", cfg.LogLevel)
 	defer logger.Sync() //nolint:errcheck
@@ -52,7 +54,7 @@ func main() {
 		}
 	}()
 
-	orderSvc := orders.NewInMemoryOrderService(matching.NewFIFOEngine())
+	orderSvc := buildOrderService(ctx, cfg, logger)
 	posSvc := positions.NewInMemoryPositionService()
 	settler := settlement.NewEngineSettler(orderSvc, posSvc)
 
@@ -92,7 +94,7 @@ func main() {
 // tradingServer implements tradingv1.TradingServiceServer.
 type tradingServer struct {
 	tradingv1.UnimplementedTradingServiceServer
-	orders    *orders.InMemoryOrderService
+	orders    orders.OrderService
 	positions *positions.InMemoryPositionService
 	settler   *settlement.EngineSettler
 }
@@ -239,4 +241,26 @@ func positionToProto(p *domain.Position) *tradingv1.PositionProto {
 		QuantityUnits:         p.QuantityUnits,
 		AverageCostMinorUnits: p.AverageCostMinorUnits,
 	}
+}
+
+// buildOrderService returns a PgOrderService if TRADING_DATABASE_URL is configured,
+// otherwise falls back to the in-memory implementation.
+func buildOrderService(ctx context.Context, cfg config.Config, logger *zap.Logger) orders.OrderService {
+	if cfg.DatabaseURL == "" {
+		logger.Warn("TRADING_DATABASE_URL not set — using in-memory order store (data will not survive restarts)")
+		return orders.NewInMemoryOrderService(matching.NewFIFOEngine())
+	}
+	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	if err != nil {
+		logger.Fatal("failed to connect to trading database", zap.Error(err))
+	}
+	if err := pool.Ping(ctx); err != nil {
+		logger.Fatal("trading database ping failed", zap.Error(err))
+	}
+	svc, err := orders.NewPgOrderService(ctx, pool, matching.NewFIFOEngine())
+	if err != nil {
+		logger.Fatal("failed to init PgOrderService", zap.Error(err))
+	}
+	logger.Info("trading: using Postgres order store")
+	return svc
 }

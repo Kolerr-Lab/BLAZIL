@@ -1,0 +1,34 @@
+# Blazil inference service — Rust multi-stage build
+#
+# This image does NOT require Aeron, Zig, or TigerBeetle.
+# It builds only the blazil-inference-service binary (HTTP + gRPC inference API).
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 1: Rust builder
+# ─────────────────────────────────────────────────────────────────────────────
+FROM rust:1-slim AS builder
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config libssl-dev ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY . .
+RUN --mount=type=cache,target=/root/.cargo/registry \
+    --mount=type=cache,target=/root/.cargo/git \
+    --mount=type=cache,target=/app/target \
+    cargo build --release -p blazil-inference-service \
+    && cp target/release/blazil-inference-service /tmp/blazil-inference-service
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 2: Runtime image
+# ─────────────────────────────────────────────────────────────────────────────
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd -r blazil && useradd -r -g blazil blazil
+COPY --from=builder /tmp/blazil-inference-service /usr/local/bin/blazil-inference-service
+USER blazil
+EXPOSE 8080 9090
+CMD ["blazil-inference-service"]

@@ -10,10 +10,12 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/blazil/auth"
 	"github.com/blazil/crypto/internal/engine"
 	"github.com/blazil/observability"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -32,6 +34,7 @@ import (
 
 func main() {
 	cfg := config.Load()
+	ctx := context.Background()
 
 	logger := observability.NewLogger("crypto", cfg.LogLevel)
 	defer logger.Sync() //nolint:errcheck
@@ -54,23 +57,38 @@ func main() {
 		}
 	}()
 
-	// Build chain registry with mock adapters (no real blockchain connections).
+	// Build chain registry: use real adapters when node URLs are configured.
 	registry := chains.NewChainRegistry()
 	for _, c := range domain.SupportedChains() {
-		registry.Register(chains.NewMockChainAdapter(c))
+		switch c.ID {
+		case domain.ChainEthereum, domain.ChainPolygon, domain.ChainTron:
+			if cfg.EthNodeURL != "" {
+				registry.Register(chains.NewEthChainAdapter(c.ID, cfg.EthNodeURL))
+			} else {
+				registry.Register(chains.NewMockChainAdapter(c))
+			}
+		case domain.ChainBitcoin:
+			if cfg.BtcNodeURL != "" {
+				registry.Register(chains.NewBtcChainAdapter(cfg.BtcNodeURL, cfg.BtcRPCUser, cfg.BtcRPCPass))
+			} else {
+				registry.Register(chains.NewMockChainAdapter(c))
+			}
+		default:
+			registry.Register(chains.NewMockChainAdapter(c))
+		}
 	}
 
-	walletStore := wallets.NewInMemoryWalletStore()
+	engineClient := buildEngineClient(cfg, logger)
+	walletStore, depositStore, withdrawalStore := buildCryptoStores(ctx, cfg, logger)
+
 	walletSvc := wallets.NewInMemoryWalletService(walletStore, registry)
 
-	depositStore := deposits.NewInMemoryDepositStore()
 	depositDetector := deposits.NewInMemoryDepositDetector(depositStore)
-	depositProcessor := deposits.NewDepositProcessor(depositStore, registry, nil)
+	depositProcessor := deposits.NewDepositProcessor(depositStore, registry, engineClient)
 
-	withdrawalStore := withdrawals.NewInMemoryWithdrawalStore()
-	withdrawalSvc := withdrawals.NewInMemoryWithdrawalService(withdrawalStore, registry, nil)
+	withdrawalSvc := withdrawals.NewInMemoryWithdrawalService(withdrawalStore, registry, engineClient)
 
-	transferSvc := transfers.NewInMemoryInternalTransferService(walletSvc, &engine.MockEngineClient{})
+	transferSvc := transfers.NewInMemoryInternalTransferService(walletSvc, engineClient)
 
 	lis, err := net.Listen("tcp", cfg.GRPCAddr)
 	if err != nil {
@@ -110,12 +128,12 @@ func main() {
 
 type cryptoServer struct {
 	cryptov1.UnimplementedCryptoServiceServer
-	walletSvc       *wallets.InMemoryWalletService
-	depositStore    *deposits.InMemoryDepositStore
+	walletSvc       wallets.WalletService
+	depositStore    deposits.DepositStore
 	depositDetector *deposits.InMemoryDepositDetector
 	depositProc     *deposits.DepositProcessor
-	withdrawalSvc   *withdrawals.InMemoryWithdrawalService
-	transferSvc     *transfers.InMemoryInternalTransferService
+	withdrawalSvc   withdrawals.WithdrawalService
+	transferSvc     transfers.InternalTransferService
 }
 
 // CreateWallet implements CryptoServiceServer.
@@ -276,4 +294,44 @@ func transferToProto(t *transfers.InternalTransfer) *cryptov1.TransferProto {
 		ChainId:          int32(t.ChainID),
 		AmountMinorUnits: t.AmountMinorUnits,
 	}
+}
+
+// buildEngineClient returns a TcpEngineClient when BLAZIL_ENGINE_ADDR is configured,
+// otherwise returns a MockEngineClient (non-production fallback).
+func buildEngineClient(cfg config.Config, logger *zap.Logger) engine.EngineClient {
+	if cfg.EngineAddr == "" || cfg.EngineAddr == "127.0.0.1:7878" {
+		logger.Warn("crypto: BLAZIL_ENGINE_ADDR not configured — using mock engine client")
+		return &engine.MockEngineClient{}
+	}
+	client, err := engine.NewTcpEngineClient(cfg.EngineAddr, 4, 5*time.Second)
+	if err != nil {
+		logger.Warn("crypto: could not connect to engine, falling back to mock", zap.Error(err))
+		return &engine.MockEngineClient{}
+	}
+	logger.Info("crypto: connected to Rust engine", zap.String("addr", cfg.EngineAddr))
+	return client
+}
+
+// buildCryptoStores returns Postgres-backed stores when CRYPTO_DATABASE_URL is set,
+// otherwise falls back to in-memory implementations.
+func buildCryptoStores(ctx context.Context, cfg config.Config, logger *zap.Logger) (
+	wallets.WalletStore, deposits.DepositStore, withdrawals.WithdrawalStore,
+) {
+	if cfg.DatabaseURL == "" {
+		logger.Warn("CRYPTO_DATABASE_URL not set — using in-memory stores (data will not survive restarts)")
+		return wallets.NewInMemoryWalletStore(),
+			deposits.NewInMemoryDepositStore(),
+			withdrawals.NewInMemoryWithdrawalStore()
+	}
+	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	if err != nil {
+		logger.Fatal("failed to connect to crypto database", zap.Error(err))
+	}
+	if err := pool.Ping(ctx); err != nil {
+		logger.Fatal("crypto database ping failed", zap.Error(err))
+	}
+	logger.Info("crypto: using Postgres stores")
+	return wallets.NewPgWalletStore(pool),
+		deposits.NewPgDepositStore(pool),
+		withdrawals.NewPgWithdrawalStore(pool)
 }

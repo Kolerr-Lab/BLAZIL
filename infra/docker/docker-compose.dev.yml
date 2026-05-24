@@ -11,6 +11,7 @@ volumes:
   keycloak-data:
   prometheus-data:
   grafana-data:
+  postgres-data:
 
 services:
   tigerbeetle:
@@ -175,6 +176,25 @@ services:
       - prometheus
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: blazil-postgres
+    networks:
+      - blazil-dev
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: blazil
+      POSTGRES_PASSWORD: blazil
+      POSTGRES_DB: blazil
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U blazil"]
       interval: 10s
       timeout: 5s
       retries: 5

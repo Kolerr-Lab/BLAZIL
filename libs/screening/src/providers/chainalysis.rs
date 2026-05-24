@@ -8,7 +8,7 @@
 //! All HTTP plumbing, request/response mapping, and error handling are
 //! implemented. Before going live:
 //!
-//! 1. Obtain sandbox credentials and set env var:
+//! 1. Obtain sandbox credentials and set env var:          
 //!    ```text
 //!    CHAINALYSIS_API_KEY → api_key
 //!    ```

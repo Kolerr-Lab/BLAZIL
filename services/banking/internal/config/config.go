@@ -27,6 +27,10 @@ type Config struct {
 	// MetricsAddr is the address the Prometheus metrics HTTP server listens on.
 	// Default: ":9092"
 	MetricsAddr string
+
+	// DatabaseURL is the Postgres connection string for persistent stores.
+	// If empty, in-memory stores are used (non-production fallback).
+	DatabaseURL string
 }
 
 // Load reads configuration from environment variables with defaults.
@@ -39,6 +43,7 @@ func Load() Config {
 	return Config{
 		GRPCAddr:       getEnv("BANKING_GRPC_ADDR", ":50052"),
 		EngineAddr:     secrets.LoadOrEnv(ctx, vc, "secret/data/banking", "engine_conn_string", "BLAZIL_ENGINE_ADDR", "127.0.0.1:7878"),
+		DatabaseURL:    secrets.LoadOrEnv(ctx, vc, "secret/data/banking", "database_url", "BANKING_DATABASE_URL", ""),
 		LogLevel:       getEnv("LOG_LEVEL", "info"),
 		IdempotencyTTL: 24 * time.Hour,
 		MetricsAddr:    getEnv("BANKING_METRICS_ADDR", ":9092"),

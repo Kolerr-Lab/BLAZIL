@@ -13,6 +13,7 @@ import (
 type Config struct {
 	GRPCAddr    string
 	EngineAddr  string
+	DatabaseURL string
 	LogLevel    string
 	MetricsAddr string
 }
@@ -39,6 +40,7 @@ func Load() Config {
 	return Config{
 		GRPCAddr:    grpcAddr,
 		EngineAddr:  secrets.LoadOrEnv(ctx, vc, "secret/data/trading", "engine_conn_string", "BLAZIL_ENGINE_ADDR", "127.0.0.1:7878"),
+		DatabaseURL: secrets.LoadOrEnv(ctx, vc, "secret/data/trading", "database_url", "TRADING_DATABASE_URL", ""),
 		LogLevel:    logLevel,
 		MetricsAddr: metricsAddr,
 	}
