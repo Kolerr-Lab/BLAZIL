@@ -29,6 +29,7 @@ import (
 
 	"github.com/blazil/metering"
 	"github.com/blazil/observability"
+	"github.com/blazil/services/gateway/db"
 	"github.com/blazil/services/gateway/internal/admin"
 	"github.com/blazil/services/gateway/internal/billing"
 	"github.com/blazil/services/gateway/internal/config"
@@ -70,6 +71,12 @@ func run(logger *zap.Logger) error {
 	if cfg.DatabaseURL == "" {
 		return errors.New("GATEWAY_DATABASE_URL is required")
 	}
+
+	// ── Database migrations ───────────────────────────────────────────────────
+	if err := db.RunMigrations(cfg.DatabaseURL, logger); err != nil {
+		return fmt.Errorf("database migration failed: %w", err)
+	}
+
 	dbCtx, dbCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer dbCancel()
 	db, err := pgxpool.New(dbCtx, cfg.DatabaseURL)

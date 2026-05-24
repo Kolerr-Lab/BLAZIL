@@ -23,6 +23,7 @@ func init() {
 	// messages on both server and client side pass through as raw []byte.
 	encoding.RegisterCodec(rawBytesCodec{})
 }
+
 // rawBytesCodec passes gRPC message frames as raw []byte without any
 // protobuf encoding or decoding. This lets the gateway proxy any gRPC
 // service without importing its generated .pb.go stubs.

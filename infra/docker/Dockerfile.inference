@@ -1,7 +1,12 @@
 # Blazil inference service — Rust multi-stage build
 #
-# This image does NOT require Aeron, Zig, or TigerBeetle.
-# It builds only the blazil-inference-service binary (HTTP + gRPC inference API).
+# blazil-inference-service depends on blazil-transport --features aeron and
+# blazil-aeron-sys, so the Aeron C media driver must be compiled from the
+# git submodule (core/aeron-sys/aeron/).  Ensure the submodule is checked out:
+#   git submodule update --init --recursive
+#
+# TigerBeetle / Zig are NOT required: the tigerbeetle-client feature is only
+# a dev-dependency of blazil-transport and is excluded from --release builds.
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Stage 1: Rust builder
@@ -9,8 +14,14 @@
 FROM rust:1-slim AS builder
 WORKDIR /app
 
+# System deps:
+#   cmake g++ libbsd-dev — required to compile libaeron_static.a (Aeron C driver)
+#   clang lld            — faster Rust linking
+#   pkg-config libssl-dev — required by TLS crates
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    pkg-config libssl-dev ca-certificates \
+    cmake g++ libbsd-dev \
+    pkg-config libssl-dev \
+    clang lld ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 COPY . .
@@ -18,7 +29,7 @@ RUN --mount=type=cache,target=/root/.cargo/registry \
     --mount=type=cache,target=/root/.cargo/git \
     --mount=type=cache,target=/app/target \
     cargo build --release -p blazil-inference-service \
-    && cp target/release/blazil-inference-service /tmp/blazil-inference-service
+    && cp target/release/inference-server /tmp/inference-server
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Stage 2: Runtime image
@@ -28,7 +39,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -r blazil && useradd -r -g blazil blazil
-COPY --from=builder /tmp/blazil-inference-service /usr/local/bin/blazil-inference-service
+COPY --from=builder /tmp/inference-server /usr/local/bin/inference-server
 USER blazil
 EXPOSE 8080 9090
-CMD ["blazil-inference-service"]
+CMD ["inference-server"]

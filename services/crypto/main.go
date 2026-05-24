@@ -23,6 +23,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	cryptov1 "github.com/blazil/crypto/api/proto/crypto/v1"
+	cryptodb "github.com/blazil/crypto/db"
 	"github.com/blazil/crypto/internal/chains"
 	"github.com/blazil/crypto/internal/config"
 	"github.com/blazil/crypto/internal/deposits"
@@ -79,6 +80,14 @@ func main() {
 	}
 
 	engineClient := buildEngineClient(cfg, logger)
+
+	// ── Database migrations ──────────────────────────────────────────────────
+	if cfg.DatabaseURL != "" {
+		if err := cryptodb.RunMigrations(cfg.DatabaseURL, logger); err != nil {
+			logger.Fatal("database migration failed", zap.Error(err))
+		}
+	}
+
 	walletStore, depositStore, withdrawalStore := buildCryptoStores(ctx, cfg, logger)
 
 	walletSvc := wallets.NewInMemoryWalletService(walletStore, registry)

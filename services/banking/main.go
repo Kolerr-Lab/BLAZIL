@@ -22,6 +22,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	bankingv1 "github.com/blazil/banking/api/proto/banking/v1"
+	bankingdb "github.com/blazil/banking/db"
 	"github.com/blazil/banking/internal/accounts"
 	"github.com/blazil/banking/internal/balances"
 	"github.com/blazil/banking/internal/config"
@@ -59,6 +60,13 @@ func main() {
 			logger.Error("metrics server error", zap.Error(err))
 		}
 	}()
+
+	// ── Database migrations ───────────────────────────────────────────────────
+	if cfg.DatabaseURL != "" {
+		if err := bankingdb.RunMigrations(cfg.DatabaseURL, logger); err != nil {
+			logger.Fatal("database migration failed", zap.Error(err))
+		}
+	}
 
 	// ── Wiring ────────────────────────────────────────────────────────────────
 

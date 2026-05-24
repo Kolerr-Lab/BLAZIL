@@ -51,14 +51,14 @@ type Tenant struct {
 // APIKey is a non-secret view of a tenant API key.
 // RawKey is only populated immediately after IssueAPIKey(); never stored.
 type APIKey struct {
-	ID          string
-	TenantID    string
-	Prefix      string     // first 16 chars of raw key, safe for dashboards
-	Name        string
-	CreatedAt   time.Time
-	LastUsedAt  *time.Time
-	RevokedAt   *time.Time
-	RawKey      string // present only at creation — json:"-" to prevent accidental logging
+	ID         string
+	TenantID   string
+	Prefix     string // first 16 chars of raw key, safe for dashboards
+	Name       string
+	CreatedAt  time.Time
+	LastUsedAt *time.Time
+	RevokedAt  *time.Time
+	RawKey     string // present only at creation — json:"-" to prevent accidental logging
 }
 
 // Store is the tenant persistence interface.

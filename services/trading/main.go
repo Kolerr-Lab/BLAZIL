@@ -21,6 +21,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	tradingv1 "github.com/blazil/trading/api/proto/trading/v1"
+	tradingdb "github.com/blazil/trading/db"
 	"github.com/blazil/trading/internal/config"
 	"github.com/blazil/trading/internal/domain"
 	"github.com/blazil/trading/internal/matching"
@@ -53,6 +54,13 @@ func main() {
 			logger.Error("metrics server error", zap.Error(err))
 		}
 	}()
+
+	// ── Database migrations ──────────────────────────────────────────────────
+	if cfg.DatabaseURL != "" {
+		if err := tradingdb.RunMigrations(cfg.DatabaseURL, logger); err != nil {
+			logger.Fatal("database migration failed", zap.Error(err))
+		}
+	}
 
 	orderSvc := buildOrderService(ctx, cfg, logger)
 	posSvc := positions.NewInMemoryPositionService()
