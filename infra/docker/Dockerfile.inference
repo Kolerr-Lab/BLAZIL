@@ -15,11 +15,12 @@ FROM rust:1-slim AS builder
 WORKDIR /app
 
 # System deps:
-#   cmake g++ libbsd-dev — required to compile libaeron_static.a (Aeron C driver)
-#   clang lld            — faster Rust linking
-#   pkg-config libssl-dev — required by TLS crates
+#   cmake g++ make libbsd-dev — required to compile libaeron_static.a (Aeron C driver)
+#                               make is invoked by cmake --build (Unix Makefiles generator)
+#   clang lld                 — faster Rust linking
+#   pkg-config libssl-dev     — required by TLS crates
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    cmake g++ libbsd-dev \
+    cmake g++ make libbsd-dev \
     pkg-config libssl-dev \
     clang lld ca-certificates \
     && rm -rf /var/lib/apt/lists/*

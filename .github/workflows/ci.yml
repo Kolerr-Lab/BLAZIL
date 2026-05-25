@@ -373,6 +373,13 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Prepare inference build context
+        run: |
+          # Some BuildKit versions resolve the per-Dockerfile .dockerignore relative
+          # to the context root (basename only) rather than alongside the Dockerfile.
+          # Copy it to the context root so Aeron C submodule is included in both cases.
+          cp infra/docker/Dockerfile.inference.dockerignore Dockerfile.inference.dockerignore
+
       - name: Build and push inference
         uses: docker/build-push-action@v6
         with:
