@@ -33,6 +33,11 @@ anyhow = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+# Thread-pool control — mirrors Rayon pool used internally by Tract
+# Must be the same major version as the Rayon pulled in transitively by
+# tract-core; currently Tract 0.22 depends on rayon 1.x.
+rayon = "1.10"
+
 # Serialization (always enabled for health module)
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

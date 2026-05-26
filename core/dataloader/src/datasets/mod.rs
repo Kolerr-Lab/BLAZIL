@@ -7,6 +7,7 @@ pub mod audio;
 pub mod detection;
 pub mod features;
 pub mod imagenet;
+pub mod synthetic;
 pub mod text;
 pub mod timeseries;
 
@@ -15,5 +16,6 @@ pub use audio::AudioDataset;
 pub use detection::{BoundingBox, DetectionDataset, ImageAnnotation};
 pub use features::FeatureDataset;
 pub use imagenet::ImageNetDataset;
+pub use synthetic::SyntheticDataset;
 pub use text::TextDataset;
 pub use timeseries::TimeSeriesDataset;

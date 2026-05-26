@@ -20,6 +20,11 @@ tract-core = "0.22"
 # Tensor operations
 ndarray = "0.16"
 
+# Thread-pool control — Tract 0.22 uses Rayon for intra-op parallelism.
+# Explicit dep lets us call ThreadPoolBuilder::build_global() to pre-size
+# the pool before the first model load.
+rayon = "1.10"
+
 # Async runtime
 tokio = { version = "1.37", features = ["full"] }
 

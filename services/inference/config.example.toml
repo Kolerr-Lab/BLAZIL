@@ -22,9 +22,20 @@ device = "cpu"
 # Optimization level: "disable", "basic", "extended", "all"
 optimization_level = "basic"
 
-# Enable Prometheus metrics HTTP server
-enable_metrics = true
+# HTTP server port.
+# Serves all endpoints on a single port:
+#   GET  /health       — liveness probe (no auth required)
+#   GET  /metrics      — Prometheus text exposition (no auth required)
+#   POST /v1/infer     — run inference  (requires Authorization: Bearer <key>)
+#   POST /v1/models    — upload a model (requires Authorization: Bearer <key>)
+#   …
+# Default: 8090
+http_port = 8090
 
-# Metrics HTTP server port
-# Endpoints: /metrics (Prometheus), /health (health check)
-metrics_port = 9091
+# API key for Authorization: Bearer auth on /v1/** endpoints.
+# If empty here, the server reads BLAZIL_INFERENCE_API_KEY from the environment.
+api_key = ""
+
+# Root directory for per-tenant ONNX model storage.
+# Layout: <model_dir>/<tenant_id>/<model_id>/<version>/model.onnx
+model_dir = "/var/lib/blazil/models"

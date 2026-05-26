@@ -31,8 +31,9 @@ fn bench_inference_throughput(c: &mut Criterion) {
     for batch_size in [1, 8, 16, 32, 64] {
         let config = InferenceConfig::new(&model_path)
             .with_device(Device::Cpu)
-            .with_batch_size(batch_size)
-            .with_threads(4, 1);
+            .with_batch_size(batch_size);
+        // intra_threads=0 (default) → Rayon auto-sizes to all available vCPUs.
+        // On i4i.4xlarge (16 vCPU) this means full 16-thread Rayon pool.
 
         let model = OnnxModel::load(config).expect("Failed to load model");
 

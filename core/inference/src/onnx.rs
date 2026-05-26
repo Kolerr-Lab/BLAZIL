@@ -47,6 +47,20 @@ impl OnnxModel {
     fn load_and_optimize(config: &InferenceConfig) -> Result<RunnableModel> {
         config.validate()?;
 
+        // Wire intra_op thread count to Rayon's global thread pool.
+        //
+        // Tract uses Rayon for intra-op parallelism during both graph
+        // optimization and inference. `build_global()` must be called before
+        // the first Rayon work-steal; subsequent calls return Err and are
+        // silently ignored via `.ok()`.  When `intra_threads == 0` (default)
+        // we leave the pool at Rayon's auto-detected size (all vCPUs).
+        if config.intra_threads > 0 {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(config.intra_threads)
+                .build_global()
+                .ok();
+        }
+
         // Load ONNX model
         let model = tract_onnx::onnx()
             .model_for_path(&config.model_path)

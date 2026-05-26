@@ -42,6 +42,7 @@ pub mod transform;
 // pub mod ipc;
 
 pub use config::DatasetConfig;
+pub use datasets::SyntheticDataset;
 pub use error::{Error, Result};
 pub use pipeline::{CheckpointState, Pipeline};
 pub use transform::{Transform, TransformChain};

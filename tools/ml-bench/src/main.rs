@@ -30,7 +30,10 @@ mod health;
 #[cfg(feature = "metrics-ws")]
 mod ws_server;
 
-use blazil_dataloader::{datasets::ImageNetDataset, Dataset, DatasetConfig, Pipeline};
+use blazil_dataloader::{
+    datasets::{ImageNetDataset, SyntheticDataset},
+    Dataset, DatasetConfig, Pipeline,
+};
 use blazil_inference::{InferenceConfig, InferenceModel, InferencePipeline, OnnxModel};
 use clap::Parser;
 use health::{HealthTracker, SlaConfig};
@@ -45,6 +48,65 @@ use std::{
 use tokio::time::timeout;
 
 use serde_json::json;
+
+// ─────────────────────────────────────────────
+// Dataset dispatch enum
+// ─────────────────────────────────────────────
+
+/// Zero-overhead dispatch over concrete dataset types.
+///
+/// Add a new variant here when a new dataset backend is implemented.
+/// Using an enum rather than `Box<dyn Dataset>` avoids the vtable indirection
+/// in the hot path of the benchmark pipeline workers.
+enum AnyDataset {
+    ImageNet(ImageNetDataset),
+    Synthetic(SyntheticDataset),
+}
+
+impl Dataset for AnyDataset {
+    fn len(&self) -> usize {
+        match self {
+            AnyDataset::ImageNet(d) => d.len(),
+            AnyDataset::Synthetic(d) => d.len(),
+        }
+    }
+
+    fn get(&self, idx: usize) -> blazil_dataloader::Result<blazil_dataloader::Sample> {
+        match self {
+            AnyDataset::ImageNet(d) => d.get(idx),
+            AnyDataset::Synthetic(d) => d.get(idx),
+        }
+    }
+
+    fn iter_shuffled(
+        &self,
+        seed: u64,
+    ) -> Box<dyn Iterator<Item = blazil_dataloader::Result<blazil_dataloader::Sample>> + '_> {
+        match self {
+            AnyDataset::ImageNet(d) => d.iter_shuffled(seed),
+            AnyDataset::Synthetic(d) => d.iter_shuffled(seed),
+        }
+    }
+
+    fn iter(
+        &self,
+    ) -> Box<dyn Iterator<Item = blazil_dataloader::Result<blazil_dataloader::Sample>> + '_> {
+        match self {
+            AnyDataset::ImageNet(d) => d.iter(),
+            AnyDataset::Synthetic(d) => d.iter(),
+        }
+    }
+}
+
+impl AnyDataset {
+    /// Number of distinct label classes in the dataset.
+    fn num_classes(&self) -> usize {
+        match self {
+            AnyDataset::ImageNet(d) => d.num_classes(),
+            AnyDataset::Synthetic(d) => d.num_classes(),
+        }
+    }
+}
 
 // ─────────────────────────────────────────────
 // CLI Arguments
@@ -127,6 +189,13 @@ struct Args {
     /// Duration of fault in seconds (default: 10s, then auto-recover)
     #[arg(long, default_value_t = 10)]
     fault_duration: u64,
+
+    /// Number of virtual samples for `--dataset synthetic`.
+    /// Ignored for real datasets (imagenet, etc.).
+    /// The pipeline wraps around this count, so even a small value sustains
+    /// an arbitrarily long benchmark without disk I/O.
+    #[arg(long, default_value_t = 100_000)]
+    synthetic_samples: usize,
 }
 
 // ─────────────────────────────────────────────
@@ -343,6 +412,21 @@ async fn main() -> anyhow::Result<()> {
         .with_env_filter(if args.verbose { "debug" } else { "info" })
         .init();
 
+    // Initialize Rayon global thread pool.
+    // Tract (the pure-Rust ONNX inference engine) uses Rayon for intra-op
+    // parallelism during both graph optimization and inference.  Setting the
+    // pool size here — before any model load — ensures all vCPUs are used.
+    // build_global() returns Err if already initialized; .ok() silently ignores
+    // that case so this is safe to call unconditionally.
+    let rayon_threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(rayon_threads)
+        .build_global()
+        .ok();
+    tracing::info!("Rayon thread pool initialized: {rayon_threads} threads");
+
     // Initialize health tracker with SLA requirements
     let sla_config = SlaConfig {
         max_error_rate: 0.01,       // 1% max error rate
@@ -458,9 +542,17 @@ async fn run_dataloader_benchmark(
     print_header(&args);
     let t_load = Instant::now();
 
-    let dataset = match args.dataset.as_str() {
-        "imagenet" => ImageNetDataset::open(&args.path, config.clone())?,
-        other => anyhow::bail!("Unknown dataset '{other}'. Supported: imagenet"),
+    let dataset: AnyDataset = match args.dataset.as_str() {
+        "imagenet" => AnyDataset::ImageNet(ImageNetDataset::open(&args.path, config.clone())?),
+        "synthetic" => AnyDataset::Synthetic(SyntheticDataset::new(
+            args.synthetic_samples,
+            1_000, // ImageNet-compatible: 1 000 classes
+            224,   // height — matches SqueezeNet / ResNet standard input
+            224,   // width
+            3,     // channels (RGB)
+            args.seed,
+        )),
+        other => anyhow::bail!("Unknown dataset '{other}'. Supported: imagenet, synthetic"),
     };
 
     let num_samples = dataset.len();
@@ -704,9 +796,17 @@ async fn run_inference_benchmark(
     print_header(&args);
     let t_load = Instant::now();
 
-    let dataset = match args.dataset.as_str() {
-        "imagenet" => ImageNetDataset::open(&args.path, config.clone())?,
-        other => anyhow::bail!("Unknown dataset '{other}'. Supported: imagenet"),
+    let dataset: AnyDataset = match args.dataset.as_str() {
+        "imagenet" => AnyDataset::ImageNet(ImageNetDataset::open(&args.path, config.clone())?),
+        "synthetic" => AnyDataset::Synthetic(SyntheticDataset::new(
+            args.synthetic_samples,
+            1_000, // ImageNet-compatible: 1 000 classes
+            224,   // height — matches SqueezeNet / ResNet standard input
+            224,   // width
+            3,     // channels (RGB)
+            args.seed,
+        )),
+        other => anyhow::bail!("Unknown dataset '{other}'. Supported: imagenet, synthetic"),
     };
 
     let num_samples = dataset.len();
@@ -950,7 +1050,7 @@ async fn run_inference_benchmark(
 #[allow(unused_variables)]
 #[allow(clippy::too_many_arguments)]
 async fn run_phase(
-    pipeline: &Pipeline<ImageNetDataset>,
+    pipeline: &Pipeline<AnyDataset>,
     duration: Duration,
     args: &Args,
     record: bool,
@@ -1136,7 +1236,7 @@ async fn run_phase(
 #[allow(unused_variables)]
 #[allow(clippy::too_many_arguments)]
 async fn run_inference_phase(
-    data_pipeline: &Pipeline<ImageNetDataset>,
+    data_pipeline: &Pipeline<AnyDataset>,
     inference_pipeline: &InferencePipeline<OnnxModel>,
     duration: Duration,
     args: &Args,

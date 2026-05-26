@@ -35,7 +35,7 @@ echo "╚═══════════════════════�
 echo ""
 echo "  Samples       : $(printf "%'d" $SAMPLES)"
 echo "  Dataset       : Synthetic (generated on-the-fly)"
-echo "  Hardware      : AWS i4i.4xlarge (16 vCPU, 32 GiB RAM, NVMe)"
+echo "  Hardware      : AWS i4i.4xlarge (16 vCPU, 122 GiB RAM, 2× 1.9 TB NVMe)"
 echo "  Timestamp     : $TIMESTAMP"
 echo "  Log           : $LOG_FILE"
 echo ""
@@ -43,6 +43,54 @@ echo "────────────────────────�
 echo ""
 
 # System info
+# ─────────────────────────────────────────────────────────────
+echo "═══ Pre-flight Checks ═══"
+echo ""
+
+# 1. Build release binary if not present
+if [[ ! -f "$BLAZIL_ROOT/target/release/ml-bench" ]]; then
+  echo "  Building ml-bench (release) — this may take a few minutes..."
+  (cd "$BLAZIL_ROOT" && cargo build --release -p ml-bench) \
+    || { echo "[ERROR] cargo build failed"; exit 1; }
+  echo "  ✓ ml-bench built"
+else
+  echo "  ✓ ml-bench binary found"
+fi
+echo ""
+
+# 2. Download ONNX models if not already cached
+mkdir -p "$MODEL_DIR"
+
+SQUEEZENET_URL="https://github.com/onnx/models/raw/main/validated/vision/classification/squeezenet/model/squeezenet1.1-7.onnx"
+RESNET50_URL="https://github.com/onnx/models/raw/main/validated/vision/classification/resnet/model/resnet50-v2-7.onnx"
+
+if [[ ! -f "$MODEL_DIR/squeezenet1.1.onnx" ]]; then
+  echo "  Downloading SqueezeNet 1.1 (~5 MB)..."
+  curl -fsSL --retry 3 --retry-delay 2 \
+    -o "$MODEL_DIR/squeezenet1.1.onnx" \
+    "$SQUEEZENET_URL" \
+    || { echo "[ERROR] Failed to download SqueezeNet 1.1"; exit 1; }
+  echo "  ✓ squeezenet1.1.onnx  ($(du -sh "$MODEL_DIR/squeezenet1.1.onnx" | cut -f1))"
+else
+  echo "  ✓ squeezenet1.1.onnx  (cached)"
+fi
+
+if [[ ! -f "$MODEL_DIR/resnet50.onnx" ]]; then
+  echo "  Downloading ResNet-50 v2 (~100 MB)..."
+  curl -fsSL --retry 3 --retry-delay 2 \
+    -o "$MODEL_DIR/resnet50.onnx" \
+    "$RESNET50_URL" \
+    || { echo "[ERROR] Failed to download ResNet-50 v2"; exit 1; }
+  echo "  ✓ resnet50.onnx        ($(du -sh "$MODEL_DIR/resnet50.onnx" | cut -f1))"
+else
+  echo "  ✓ resnet50.onnx        (cached)"
+fi
+
+echo ""
+echo "────────────────────────────────────────────────────────────"
+echo ""
+
+# ─────────────────────────────────────────────────────────────
 echo "═══ System Information ═══"
 echo ""
 echo "CPU:"
@@ -62,7 +110,7 @@ echo "═══ Phase 1: Dataloader Throughput ═══"
 echo ""
 echo "  Mode          : dataloader"
 echo "  Batch size    : 256"
-echo "  Workers       : 4"
+echo "  Workers       : 16"
 echo "  Duration      : 600 seconds (10 min — thermal stability + statistical significance)"
 echo ""
 
@@ -71,7 +119,7 @@ echo ""
   --dataset synthetic \
   --path "$DATA_DIR" \
   --batch-size 256 \
-  --num-workers 4 \
+  --num-workers 16 \
   --duration 600 \
   --shuffle || { echo "[ERROR] Dataloader benchmark failed"; exit 1; }
 
@@ -84,7 +132,7 @@ echo "═══ Phase 2: SqueezeNet 1.1 Inference (Lightweight) ═══"
 echo ""
 echo "  Model         : SqueezeNet 1.1 (~5 MB)"
 echo "  Batch size    : 64"
-echo "  Workers       : 4"
+echo "  Workers       : 16"
 echo "  Duration      : 600 seconds (10 min — sustained lightweight inference)"
 echo ""
 
@@ -94,7 +142,8 @@ echo ""
   --dataset synthetic \
   --path "$DATA_DIR" \
   --batch-size 64 \
-  --inference-workers 4 \
+  --num-workers 16 \
+  --inference-workers 16 \
   --duration 600 || { echo "[ERROR] SqueezeNet benchmark failed"; exit 1; }
 
 echo ""
@@ -106,7 +155,7 @@ echo "═══ Phase 3: ResNet-50 Inference (Heavy) ═══"
 echo ""
 echo "  Model         : ResNet-50 (~100 MB)"
 echo "  Batch size    : 32 (reduced for memory)"
-echo "  Workers       : 4"
+echo "  Workers       : 4 inference + 16 data (Rayon handles intra-op parallelism per batch)"
 echo "  Duration      : 900 seconds (15 min — stress test heavy model)"
 echo ""
 
@@ -116,6 +165,7 @@ echo ""
   --dataset synthetic \
   --path "$DATA_DIR" \
   --batch-size 32 \
+  --num-workers 16 \
   --inference-workers 4 \
   --duration 900 || { echo "[ERROR] ResNet-50 benchmark failed"; exit 1; }
 
