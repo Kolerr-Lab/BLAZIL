@@ -8,8 +8,8 @@
 [![Build](https://github.com/Kolerr-Lab/BLAZIL/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Kolerr-Lab/BLAZIL/actions)
 [![License: BSL 1.1](https://img.shields.io/badge/License-BSL%201.1-blue?style=flat-square)](LICENSE)
 
-[![Rust](https://img.shields.io/badge/Rust-stable%202021-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
-[![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat-square&logo=go)](https://go.dev)
+[![Rust](https://img.shields.io/badge/Rust-1.88-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
+[![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat-square&logo=go)](https://go.dev)
 
 ![234K TPS](https://img.shields.io/badge/234K_TPS-Production_Ready-brightgreen?style=flat-square)
 ![10x Visa](https://img.shields.io/badge/10%C3%97_Visa-fault--tolerant-red?style=flat-square)
@@ -123,10 +123,14 @@ Real hardware. Real replication. Real benchmarks.
 ```mermaid
 graph LR
     A[Client] -->|gRPC Stream| B[Go Services]
-    B -->|TCP/io_uring| C[Rust Engine]
+    B -->|TCP+MessagePack| C[Rust Engine]
     C -->|LMAX Disruptor| D[Pipeline]
     D -->|Batch 100×| E[TigerBeetle VSR]
     E -->|3-node consensus| F[Ledger]
+    B -->|2PC Phase 1: PENDING| C
+    B -->|2PC Phase 2: POST/VOID| C
+    G[cert-manager] -->|mTLS certs auto-rotate| B
+    G --> C
 ```
 
 **Zero-copy stack from client to disk:**
@@ -151,14 +155,21 @@ Blazil implements **multi-stream priority routing** for critical events:
 
 **Documentation:** [docs/PRIORITY_QUEUING.md](docs/PRIORITY_QUEUING.md)
 
-**How a transaction flows:**
+**How a transaction flows (single-shard):**
 
 1. Client opens a persistent gRPC stream to the payments service
-2. Service validates and forwards to the Rust engine via TCP
+2. Service validates and forwards to the Rust engine via TCP + MessagePack (4-byte length-prefix)
 3. Engine enqueues onto the LMAX Disruptor ring buffer (lock-free, single producer)
 4. Pipeline thread dequeues, runs risk checks, accumulates batches of ≤100 transfers
 5. Batch commits to TigerBeetle in one VSR round (~1.6ms) — one consensus cost for 100 transfers
 6. Response streams back; client measures end-to-end latency
+
+**How a cross-shard transfer flows (2PC):**
+
+1. `CrossShardCoordinator` detects debit and credit accounts are on different shards
+2. **Phase 1 (Reserve):** sends `flags=PENDING` to shard A → TigerBeetle reserves funds, returns `pending_transfer_id`
+3. **Phase 2 (Commit):** sends `flags=POST + pending_transfer_id` to both shards → funds confirmed atomically
+4. **Abort path:** if Phase 2 fails, sends `flags=VOID` to shard A → funds released; TigerBeetle auto-expires pending transfers after 30s
 
 **Why it's fast:**
 
@@ -184,7 +195,7 @@ Starts a single-node cluster with all services on `localhost`.
 **Development stack:**
 
 ```bash
-# Prerequisites: Docker, Rust stable, Go 1.22+
+# Prerequisites: Docker, Rust 1.88+, Go 1.25+
 ./scripts/setup.sh
 docker compose -f infra/docker/docker-compose.dev.yml up -d
 cargo build --workspace
@@ -215,12 +226,14 @@ Grafana → `http://<node-1-ip>:3001` (admin / blazil)
 | **Engine** | Rust + LMAX Disruptor | Lock-free pipeline, 84ns P99 latency |
 | **Services** | Go + gRPC Streaming | Zero RTT, 256 in-flight window |
 | **Ledger** | TigerBeetle VSR | Fastest financial database on Earth |
-| **Transport** | io_uring + Aeron IPC | Zero-copy kernel I/O bypass |
+| **Transport** | TCP + MessagePack · io_uring · Aeron IPC | Sub-ms hot path, zero-copy kernel I/O bypass |
+| **Cross-Shard 2PC** | TigerBeetle pending/post/void | Atomic cross-shard transfers, ACID guarantees |
 | **Priority Routing** | Multi-stream Aeron (Critical/High/Normal) | <1ms critical events, independent backpressure |
 | **Replication** | VSR consensus | 3-node fault tolerance |
 | **AI/ML** | Tract ONNX + 5 datasets | Pure Rust inference, production-grade dataloader |
 | **Observability** | Prometheus + Grafana + OTel | Real-time metrics, distributed tracing |
-| **Security** | Vault + Keycloak + OPA | Production-grade secrets & policy |
+| **Security** | Vault + Keycloak + OPA + cert-manager | Secrets, policy, mTLS auto-rotation |
+| **Supply Chain** | Syft SBOM + Cosign keyless signing | Container provenance, CI-attested images |
 
 ---
 
@@ -405,6 +418,16 @@ graph LR
 - **Performance baselines:** [docs/AI_BASELINES.md](docs/AI_BASELINES.md)
 - **Metrics & records:** [docs/AI_METRICS_AND_RECORDS.md](docs/AI_METRICS_AND_RECORDS.md)
 
+**Architecture decisions:**
+- [ADR 0004 — Auth strategy (JWT + mTLS)](docs/adr/0004-auth-strategy.md)
+- [ADR 0005 — Transport selection (gRPC / TCP+MessagePack / Aeron)](docs/adr/0005-transport-selection.md)
+- [ADR 0006 — Sharding design & cross-shard 2PC](docs/adr/0006-sharding-design.md)
+
+**Runbooks:**
+- [Blue-green deployment](docs/runbooks/blue-green-deployment.md) · [Scaling](docs/runbooks/scaling.md) · [Backup & restore](docs/runbooks/backup-restore.md)
+- [Data corruption response](docs/runbooks/data-corruption.md) · [Alert runbook](docs/runbooks/alert-runbook.md)
+- [Version upgrade](docs/runbooks/version-upgrade.md) · [Dependency updates](docs/runbooks/dependency-updates.md) · [Dashboard guide](docs/runbooks/dashboard-guide.md)
+
 ---
 
 ## 🗺 Roadmap
@@ -416,6 +439,7 @@ graph LR
 | **v0.3** | ✅ Done | **233,894 peak TPS** (AWS i4i.4xlarge VSR) | Production-grade single-shard, live VSR failover test, AWS NVMe, 0% error |
 | **v0.3.1 AI** | 🔨 Implemented | No benchmark yet (1,500-2,000 RPS estimate) | 5 production datasets, Tract ONNX, io_uring dataloader, 57 tests passing |
 | **v0.3.2 Priority** | ✅ Done | Same TPS, <1ms critical latency | Multi-stream priority routing (Critical/High/Normal), 429 tests, 0 Clippy warnings |
+| **v0.3.3 Hardening** | ✅ Done | Same TPS | Cross-shard 2PC (TigerBeetle pending/post/void), K8s Ingress + cert-manager mTLS, Prometheus PVC, SBOM + Cosign CI signing, 3 ADRs, 8 runbooks |
 | **v0.4 Fintech Scale** | 🔭 Future | 1M+ TPS target | 4× AWS i8g.16xlarge Graviton 4 sharded VSR cluster, production benchmark pending |
 | **v0.5 AI Production** | 🔭 Future | TBD RPS | AI inference production benchmark on AWS i4i.4xlarge, cost efficiency validation |
 
