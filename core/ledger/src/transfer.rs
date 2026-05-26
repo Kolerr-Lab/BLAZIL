@@ -307,6 +307,7 @@ impl Transfer {
     /// );
     /// assert!(result.is_ok());
     /// ```
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_flags(
         id: TransferId,
         debit_account_id: AccountId,
