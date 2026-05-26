@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: blazil-gateway
+  namespace: blazil
+  labels:
+    app.kubernetes.io/name: blazil-gateway
+    app.kubernetes.io/component: gateway
+spec:
+  selector:
+    app: blazil-gateway
+  ports:
+    # Customer-facing gRPC proxy — exposed externally via LoadBalancer.
+    - name: grpc
+      port: 50050
+      targetPort: 50050
+    # Admin REST control plane — MUST be firewalled to internal networks only.
+    # Do NOT expose port 8080 on the LoadBalancer; use a separate internal LB or
+    # restrict via NetworkPolicy + Ingress annotations.
+    - name: admin
+      port: 8080
+      targetPort: 8080
+    - name: metrics
+      port: 9090
+      targetPort: 9090
+  type: LoadBalancer

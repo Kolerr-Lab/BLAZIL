@@ -19,6 +19,11 @@ resources:
   - trading/service.yaml
   - crypto/deployment.yaml
   - crypto/service.yaml
+  - gateway/deployment.yaml
+  - gateway/service.yaml
+  - inference/deployment.yaml
+  - inference/service.yaml
+  - inference/pvc.yaml
   - monitoring/prometheus.yaml
   - monitoring/grafana.yaml
   - networkpolicy.yaml

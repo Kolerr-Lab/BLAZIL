@@ -33,7 +33,7 @@ Blazil is a source-available financial infrastructure project. We welcome contri
 | Tool | Minimum version |
 |------|-----------------|
 | Rust | stable (2021 edition) |
-| Go | 1.22 |
+| Go | 1.25 |
 | Docker | 24.x |
 | Docker Compose | 2.x |
 

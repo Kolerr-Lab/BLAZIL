@@ -71,3 +71,7 @@ images:
     newTag: "v0.2"
   - name: ghcr.io/kolerr-lab/blazil-crypto
     newTag: "v0.2"
+  - name: ghcr.io/kolerr-lab/blazil-gateway
+    newTag: "v0.2"
+  - name: ghcr.io/kolerr-lab/blazil-inference
+    newTag: "v0.2"

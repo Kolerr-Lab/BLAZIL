@@ -27,8 +27,16 @@ This directory contains operational runbooks for managing Blazil in production.
 
 ## TODO
 
-- [ ] Write deployment runbook
-- [ ] Write incident response procedures
-- [ ] Write high-latency debugging guide
+- [x] Write deployment runbook
+- [x] Write rollback procedures
+- [x] Write incident response procedures
+- [x] Write high-latency debugging guide
+- [x] Write service-down recovery guide
+- [ ] Write blue-green deployment guide
+- [ ] Write data-corruption / ledger inconsistency guide
 - [ ] Write scaling procedures
 - [ ] Write backup/restore procedures
+- [ ] Write version-upgrade guide
+- [ ] Write dependency-updates guide
+- [ ] Write dashboard guide
+- [ ] Write per-alert response runbook

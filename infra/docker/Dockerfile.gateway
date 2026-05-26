@@ -12,5 +12,5 @@ RUN apk add --no-cache ca-certificates \
     && adduser -S blazil -G blazil
 COPY --from=builder /gateway /usr/local/bin/gateway
 USER blazil
-EXPOSE 8080 9090
+EXPOSE 50050 8080 9090
 CMD ["gateway"]

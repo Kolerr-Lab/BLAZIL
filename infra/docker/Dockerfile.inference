@@ -42,5 +42,5 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && groupadd -r blazil && useradd -r -g blazil blazil
 COPY --from=builder /tmp/inference-server /usr/local/bin/inference-server
 USER blazil
-EXPOSE 8080 9090
+EXPOSE 8090
 CMD ["inference-server"]

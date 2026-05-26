@@ -37,3 +37,13 @@ scrape_configs:
     static_configs:
       - targets: ['localhost:9094']
     metrics_path: '/metrics'
+
+  - job_name: 'blazil-gateway'
+    static_configs:
+      - targets: ['localhost:9090']
+    metrics_path: '/metrics'
+
+  - job_name: 'blazil-inference'
+    static_configs:
+      - targets: ['localhost:8090']
+    metrics_path: '/metrics'

@@ -1,0 +1,107 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: blazil-inference
+  namespace: blazil
+  labels:
+    app.kubernetes.io/name: blazil-inference
+    app.kubernetes.io/component: inference
+spec:
+  # Single replica in base; scale up in overlays only when PVC supports ReadWriteMany.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: blazil-inference
+  template:
+    metadata:
+      labels:
+        app: blazil-inference
+        app.kubernetes.io/name: blazil-inference
+        app.kubernetes.io/component: inference
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8090"
+        prometheus.io/path: "/metrics"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: inference
+          image: ghcr.io/kolerr-lab/blazil-inference:latest
+          args:
+            - "--http-port"
+            - "8090"
+          env:
+            - name: BLAZIL_INFERENCE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: inference-secret
+                  key: api-key
+            # Aeron term buffer — keep in sync with engine.
+            - name: AERON_TERM_BUFFER_LENGTH
+              valueFrom:
+                configMapKeyRef:
+                  name: blazil-cluster
+                  key: AERON_TERM_BUFFER_LENGTH
+            - name: AERON_IPC_MTU_LENGTH
+              valueFrom:
+                configMapKeyRef:
+                  name: blazil-cluster
+                  key: AERON_IPC_MTU_LENGTH
+          ports:
+            - name: http
+              containerPort: 8090
+              protocol: TCP
+          resources:
+            requests:
+              cpu: "1"
+              memory: "1Gi"
+            limits:
+              cpu: "4"
+              memory: "4Gi"
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            seccompProfile:
+              type: RuntimeDefault
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8090
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8090
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 3
+          volumeMounts:
+            # Persistent model storage: /opt/blazil/models/<tenant>/<model>/<ver>/model.onnx
+            - name: models
+              mountPath: /opt/blazil/models
+            # Aeron shared-memory IPC directory (tmpfs, zero page-fault latency).
+            - name: dshm
+              mountPath: /dev/shm
+            # Writable /tmp for Rust runtime, ONNX scratch space.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: inference-models
+        # Memory-backed tmpfs for Aeron IPC; 512 Mi is sufficient for default term buffer.
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 512Mi
+        - name: tmp
+          emptyDir: {}

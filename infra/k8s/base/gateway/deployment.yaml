@@ -1,0 +1,119 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: blazil-gateway
+  namespace: blazil
+  labels:
+    app.kubernetes.io/name: blazil-gateway
+    app.kubernetes.io/component: gateway
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: blazil-gateway
+  template:
+    metadata:
+      labels:
+        app: blazil-gateway
+        app.kubernetes.io/name: blazil-gateway
+        app.kubernetes.io/component: gateway
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: blazil-gateway
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: gateway
+          image: ghcr.io/kolerr-lab/blazil-gateway:latest
+          env:
+            # ── Addresses ─────────────────────────────────────────────────
+            - name: GATEWAY_GRPC_ADDR
+              value: "0.0.0.0:50050"
+            - name: GATEWAY_ADMIN_ADDR
+              value: "0.0.0.0:8080"
+            - name: GATEWAY_METRICS_ADDR
+              value: "0.0.0.0:9090"
+            # ── Upstream service routing (K8s DNS) ────────────────────────
+            - name: PAYMENTS_GRPC_ADDR
+              value: "blazil-payments:50051"
+            - name: BANKING_GRPC_ADDR
+              value: "blazil-banking:50052"
+            - name: TRADING_GRPC_ADDR
+              value: "blazil-trading:50053"
+            - name: CRYPTO_GRPC_ADDR
+              value: "blazil-crypto:50054"
+            # ── Secrets (loaded from Vault at runtime; env is the fallback) ─
+            - name: GATEWAY_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: gateway-secret
+                  key: database-url
+            - name: GATEWAY_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: gateway-secret
+                  key: admin-token
+            # ── Auth ──────────────────────────────────────────────────────
+            - name: BLAZIL_AUTH_REQUIRED
+              valueFrom:
+                configMapKeyRef:
+                  name: blazil-cluster
+                  key: BLAZIL_AUTH_REQUIRED
+          ports:
+            - name: grpc
+              containerPort: 50050
+              protocol: TCP
+            - name: admin
+              containerPort: 8080
+              protocol: TCP
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "128Mi"
+            limits:
+              cpu: "1"
+              memory: "512Mi"
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            seccompProfile:
+              type: RuntimeDefault
+          readinessProbe:
+            tcpSocket:
+              port: 50050
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: 50050
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          volumeMounts:
+            # Writable /tmp for Go runtime scratch space.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

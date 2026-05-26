@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: inference-models
+  namespace: blazil
+  labels:
+    app.kubernetes.io/name: blazil-inference
+    app.kubernetes.io/component: inference
+  annotations:
+    # Model storage layout: <model_dir>/<tenant_id>/<model_id>/<version>/model.onnx
+    # ReadWriteOnce is sufficient for a single inference replica.
+    # To scale beyond 1 replica, provision a ReadWriteMany volume (e.g. NFS or
+    # managed cloud storage) and update accessModes in the prod overlay.
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi

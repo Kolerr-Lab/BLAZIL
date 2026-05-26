@@ -107,6 +107,62 @@ spec:
         - port: 9093
         - port: 9094
 ---
+# Gateway: accept external gRPC (50050) from all; admin (8080) within namespace only; metrics from Prometheus
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gateway-ingress
+  namespace: blazil
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: gateway
+  policyTypes:
+    - Ingress
+  ingress:
+    # Customer-facing gRPC proxy — open to all ingress sources (LB terminates externally).
+    - ports:
+        - port: 50050
+    # Admin REST — restrict to within the blazil namespace only.
+    # External access must be blocked at the LB/firewall level.
+    - from:
+        - podSelector: {}
+      ports:
+        - port: 8080
+    # Prometheus metrics scrape.
+    - from:
+        - podSelector:
+            matchLabels:
+              app: prometheus
+      ports:
+        - port: 9090
+---
+# Inference: accept HTTP (8090) from within namespace and Prometheus
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: inference-ingress
+  namespace: blazil
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: inference
+  policyTypes:
+    - Ingress
+  ingress:
+    # HTTP API + /health + /metrics — accessible from within the namespace.
+    - from:
+        - podSelector: {}
+      ports:
+        - port: 8090
+    # Prometheus metrics scrape (port 8090 also serves /metrics).
+    - from:
+        - podSelector:
+            matchLabels:
+              app: prometheus
+      ports:
+        - port: 8090
+---
 # Monitoring: allow prometheus to scrape everything; grafana accessible externally
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
