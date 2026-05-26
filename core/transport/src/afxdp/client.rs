@@ -35,6 +35,8 @@
 //!     currency: "USD".into(),
 //!     ledger_id: 1,
 //!     code: 1,
+//!     flags: 0,
+//!     pending_transfer_id: "".into(),
 //! };
 //! let (resp, rtt) = client.roundtrip(&req, Duration::from_millis(200))?;
 //! assert!(resp.committed || resp.error.is_some());
@@ -221,6 +223,8 @@ mod tests {
             currency: "USD".into(),
             ledger_id: 1,
             code: 1,
+            flags: 0,
+            pending_transfer_id: "".into(),
         }
     }
 

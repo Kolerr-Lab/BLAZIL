@@ -276,6 +276,8 @@ mod aeron_ipc_tests {
                     currency: "USD".to_owned(),
                     ledger_id: 1, // LedgerId::USD — must be non-zero
                     code: i + 1,
+                    flags: 0,
+                    pending_transfer_id: "".into(),
                 };
                 let bytes = serialize_request(&req).expect("serialize");
                 client_pub.offer(&bytes).expect("offer");
