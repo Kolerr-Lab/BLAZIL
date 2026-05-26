@@ -30,13 +30,15 @@ type BlazerEngineClient interface {
 // Field order must exactly match the Rust struct definition to ensure correct
 // MessagePack array encoding/decoding.
 type transactionRequest struct {
-	RequestID       string `msgpack:"request_id"`
-	DebitAccountID  string `msgpack:"debit_account_id"`
-	CreditAccountID string `msgpack:"credit_account_id"`
-	Amount          string `msgpack:"amount"`
-	Currency        string `msgpack:"currency"`
-	LedgerID        uint32 `msgpack:"ledger_id"`
-	Code            uint16 `msgpack:"code"`
+	RequestID         string `msgpack:"request_id"`
+	DebitAccountID    string `msgpack:"debit_account_id"`
+	CreditAccountID   string `msgpack:"credit_account_id"`
+	Amount            string `msgpack:"amount"`
+	Currency          string `msgpack:"currency"`
+	LedgerID          uint32 `msgpack:"ledger_id"`
+	Code              uint16 `msgpack:"code"`
+	Flags             uint8  `msgpack:"flags"`               // 0=normal, 0x02=pending, 0x08=post, 0x10=void
+	PendingTransferID string `msgpack:"pending_transfer_id"` // empty or UUID string of pending transfer
 }
 
 // transactionResponse is the Go representation of the Rust TransactionResponse.
@@ -217,13 +219,15 @@ func (c *TcpEngineClient) Submit(ctx context.Context, p *domain.Payment) (bool, 
 // marshalRequest serialises a Payment into a MessagePack wire payload.
 func marshalRequest(p *domain.Payment) ([]byte, error) {
 	req := transactionRequest{
-		RequestID:       string(p.ID),
-		DebitAccountID:  string(p.DebitAccountID),
-		CreditAccountID: string(p.CreditAccountID),
-		Amount:          fmt.Sprintf("%d", p.Amount.MinorUnits),
-		Currency:        p.Amount.Currency.Code,
-		LedgerID:        uint32(p.LedgerID),
-		Code:            1,
+		RequestID:         string(p.ID),
+		DebitAccountID:    string(p.DebitAccountID),
+		CreditAccountID:   string(p.CreditAccountID),
+		Amount:            fmt.Sprintf("%d", p.Amount.MinorUnits),
+		Currency:          p.Amount.Currency.Code,
+		LedgerID:          uint32(p.LedgerID),
+		Code:              1,
+		Flags:             0,
+		PendingTransferID: "",
 	}
 	b, err := msgpack.Marshal(&req)
 	if err != nil {

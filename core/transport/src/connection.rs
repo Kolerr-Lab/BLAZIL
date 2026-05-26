@@ -32,9 +32,9 @@ use tracing::{debug, error, instrument, warn};
 use blazil_common::amount::Amount;
 use blazil_common::currency::parse_currency;
 use blazil_common::error::{BlazerError, BlazerResult};
-use blazil_common::ids::{AccountId, LedgerId, TransactionId};
+use blazil_common::ids::{AccountId, LedgerId, TransactionId, TransferId};
 use blazil_common::timestamp::Timestamp;
-use blazil_engine::event::{TransactionEvent, TransactionResult};
+use blazil_engine::event::{EventFlags, TransactionEvent, TransactionResult};
 use blazil_engine::pipeline::Pipeline;
 use blazil_ledger::convert::{amount_to_minor_units, ledger_id_to_currency};
 
@@ -195,14 +195,31 @@ pub(crate) fn build_event(req: TransactionRequest) -> BlazerResult<TransactionEv
             TransactionId::new()
         });
 
-    Ok(TransactionEvent::new(
+    // Apply request flags and optional pending transfer ID for 2PC operations.
+    let flags = EventFlags::from_raw(req.flags);
+    let pending_transfer_id = if !req.pending_transfer_id.is_empty() {
+        TransferId::from_str(&req.pending_transfer_id).unwrap_or_else(|_| {
+            warn!(
+                pending_transfer_id = %req.pending_transfer_id,
+                "non-parseable pending_transfer_id — using nil UUID"
+            );
+            TransferId::from_bytes([0u8; 16])
+        })
+    } else {
+        TransferId::from_bytes([0u8; 16])
+    };
+
+    let mut event = TransactionEvent::new(
         transaction_id,
         debit_account_id,
         credit_account_id,
         amount_units,
         ledger_id,
         req.code,
-    ))
+    );
+    event.flags = flags;
+    event.pending_transfer_id = pending_transfer_id;
+    Ok(event)
 }
 
 /// Polls the results map at `seq` until a result appears or the

@@ -563,6 +563,8 @@ pub mod inner {
             currency: "USD".to_owned(),
             ledger_id: 1, // 1 = USD (see ledger_id_to_currency)
             code: 1,
+            flags: 0,
+            pending_transfer_id: "".to_owned(),
         }
     }
 }

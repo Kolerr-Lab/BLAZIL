@@ -1,0 +1,49 @@
+# Ingress for the gateway gRPC service.
+#
+# Prerequisites:
+#   - ingress-nginx installed (nginx.ingress.kubernetes.io annotations)
+#   - cert-manager installed with the letsencrypt-prod ClusterIssuer
+#   - DNS A record: api.blazil.finance → LoadBalancer IP of ingress-nginx
+#
+# TLS is terminated at the Ingress; traffic to the backend uses plaintext
+# gRPC (cleartext within the cluster). If end-to-end TLS is required, set
+#   nginx.ingress.kubernetes.io/backend-protocol: "GRPCS"
+# and configure the gateway pod with a TLS cert.
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: blazil-gateway-grpc
+  namespace: blazil
+  labels:
+    app.kubernetes.io/name: blazil-gateway
+    app.kubernetes.io/component: gateway
+  annotations:
+    # Terminate TLS and forward as cleartext gRPC (HTTP/2) to the backend.
+    nginx.ingress.kubernetes.io/backend-protocol: "GRPC"
+    # Required for gRPC: nginx must speak HTTP/2 to the upstream.
+    nginx.ingress.kubernetes.io/http2-push-preload: "true"
+    # Route ALL paths to the gateway (gRPC paths are method-based, not URL-based).
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    # Provision a TLS certificate via cert-manager Let's Encrypt.
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    # Increase timeouts for long-lived gRPC streaming calls.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - api.blazil.finance
+      secretName: blazil-gateway-tls
+  rules:
+    - host: api.blazil.finance
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: blazil-gateway
+                port:
+                  number: 50050

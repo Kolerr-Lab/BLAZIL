@@ -49,7 +49,7 @@ use blazil_common::ids::TransferId;
 use blazil_common::timestamp::Timestamp;
 use blazil_ledger::client::LedgerClient;
 use blazil_ledger::convert::{ledger_id_to_currency, minor_units_to_amount};
-use blazil_ledger::transfer::Transfer;
+use blazil_ledger::transfer::{Transfer, TransferFlags};
 use dashmap::DashMap;
 use tracing::{debug, error, info, warn};
 
@@ -255,15 +255,74 @@ impl<C: LedgerClient + Send + Sync + 'static> EventHandler for LedgerHandler<C> 
             }
         };
 
-        // Build a Transfer from the event fields.
-        let transfer = match Transfer::new(
-            TransferId::new(),
-            event.debit_account_id,
-            event.credit_account_id,
-            amount,
-            event.ledger_id,
-            event.code,
+        // Build a Transfer from the event fields, respecting 2PC flags.
+        let transfer = match (
+            event.flags.is_pending(),
+            event.flags.is_posted(),
+            event.flags.is_voided(),
         ) {
+            (true, false, false) => {
+                // Phase 1: reserve funds via a TigerBeetle pending transfer.
+                Transfer::new_with_flags(
+                    TransferId::new(),
+                    event.debit_account_id,
+                    event.credit_account_id,
+                    amount,
+                    event.ledger_id,
+                    event.code,
+                    TransferFlags {
+                        pending: true,
+                        ..TransferFlags::default()
+                    },
+                    None,
+                )
+            }
+            (false, true, false) => {
+                // Phase 2 commit: post the pending transfer to finalise funds.
+                Transfer::new_with_flags(
+                    TransferId::new(),
+                    event.debit_account_id,
+                    event.credit_account_id,
+                    amount,
+                    event.ledger_id,
+                    event.code,
+                    TransferFlags {
+                        post_pending_transfer: true,
+                        ..TransferFlags::default()
+                    },
+                    Some(event.pending_transfer_id),
+                )
+            }
+            (false, false, true) => {
+                // Phase 2 abort: void the pending transfer to release reserved funds.
+                Transfer::new_with_flags(
+                    TransferId::new(),
+                    event.debit_account_id,
+                    event.credit_account_id,
+                    amount,
+                    event.ledger_id,
+                    event.code,
+                    TransferFlags {
+                        void_pending_transfer: true,
+                        ..TransferFlags::default()
+                    },
+                    Some(event.pending_transfer_id),
+                )
+            }
+            _ => {
+                // Normal immediate single-phase transfer (no 2PC flags set).
+                Transfer::new(
+                    TransferId::new(),
+                    event.debit_account_id,
+                    event.credit_account_id,
+                    amount,
+                    event.ledger_id,
+                    event.code,
+                )
+            }
+        };
+
+        let transfer = match transfer {
             Ok(t) => t,
             Err(e) => {
                 error!(

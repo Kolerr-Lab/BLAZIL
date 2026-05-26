@@ -1,3 +1,5 @@
+# External LoadBalancer: customer-facing gRPC only (port 50050).
+# Admin (8080) and metrics (9090) are intentionally NOT included here.
 apiVersion: v1
 kind: Service
 metadata:
@@ -10,17 +12,30 @@ spec:
   selector:
     app: blazil-gateway
   ports:
-    # Customer-facing gRPC proxy — exposed externally via LoadBalancer.
     - name: grpc
       port: 50050
       targetPort: 50050
-    # Admin REST control plane — MUST be firewalled to internal networks only.
-    # Do NOT expose port 8080 on the LoadBalancer; use a separate internal LB or
-    # restrict via NetworkPolicy + Ingress annotations.
+  type: LoadBalancer
+---
+# Internal ClusterIP: admin REST + Prometheus metrics, never reachable from
+# outside the cluster. Scraped by Prometheus and reachable by operators via
+# kubectl port-forward only.
+apiVersion: v1
+kind: Service
+metadata:
+  name: blazil-gateway-internal
+  namespace: blazil
+  labels:
+    app.kubernetes.io/name: blazil-gateway
+    app.kubernetes.io/component: gateway
+spec:
+  selector:
+    app: blazil-gateway
+  ports:
     - name: admin
       port: 8080
       targetPort: 8080
     - name: metrics
       port: 9090
       targetPort: 9090
-  type: LoadBalancer
+  type: ClusterIP

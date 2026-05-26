@@ -493,14 +493,21 @@ fn domain_transfer_to_tb(transfer: &Transfer) -> BlazerResult<tb::Transfer> {
         flags.insert(tb::transfer::Flags::VOID_PENDING_TRANSFER);
     }
 
-    Ok(tb::Transfer::new(tb_id)
+    let mut tb_transfer = tb::Transfer::new(tb_id)
         .with_debit_account_id(debit_id)
         .with_credit_account_id(credit_id)
         .with_ledger(ledger)
         .with_code(transfer.code())
         .with_amount(amount)
         .with_flags(flags)
-        .with_user_data_32(u32::from(transfer.amount().currency().numeric())))
+        .with_user_data_32(u32::from(transfer.amount().currency().numeric()));
+
+    if let Some(pending_id) = transfer.pending_id() {
+        let pending_id_u128 = convert::transfer_id_to_u128(pending_id);
+        tb_transfer = tb_transfer.with_pending_id(pending_id_u128);
+    }
+
+    Ok(tb_transfer)
 }
 
 /// Converts a TigerBeetle [`tb::Account`] back to a Blazil [`Account`].

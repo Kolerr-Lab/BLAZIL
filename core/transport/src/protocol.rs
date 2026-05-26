@@ -51,6 +51,8 @@ pub const MAX_FRAME_SIZE: usize = 1_048_576;
 ///     currency: "USD".into(),
 ///     ledger_id: 1,
 ///     code: 1,
+///     flags: 0,
+///     pending_transfer_id: "".into(),
 /// };
 /// let bytes = serialize_request(&req).unwrap();
 /// let decoded = deserialize_request(&bytes).unwrap();
@@ -85,6 +87,20 @@ pub struct TransactionRequest {
 
     /// Application-level transaction type code.
     pub code: u16,
+
+    /// EventFlags bitfield: `0` = normal, `0x02` = pending, `0x08` = post, `0x10` = void.
+    ///
+    /// Corresponds to `EventFlags` in `blazil_engine::event`. For cross-shard
+    /// two-phase commit the coordinator sets this field; regular single-shard
+    /// payments always leave it at `0`.
+    pub flags: u8,
+
+    /// UUID string of the pending transfer to post or void.
+    ///
+    /// Required when `flags` has the post (`0x08`) or void (`0x10`) bit set.
+    /// Must be the `transfer_id` returned by the earlier `SubmitPending` call.
+    /// Empty string for all other transfer types.
+    pub pending_transfer_id: String,
 }
 
 // ── TransactionResponse ───────────────────────────────────────────────────────
@@ -301,6 +317,8 @@ mod tests {
             currency: "USD".into(),
             ledger_id: 1,
             code: 1,
+            flags: 0,
+            pending_transfer_id: "".into(),
         }
     }
 

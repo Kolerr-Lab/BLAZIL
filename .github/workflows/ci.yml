@@ -267,6 +267,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write    # OIDC token for keyless Cosign signing
+      attestations: write  # SBOM attestation upload to GHCR
     steps:
       - uses: actions/checkout@v4
         with:
@@ -282,6 +284,9 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
 
       - name: Cache Zig binary
         id: cache-zig
@@ -302,6 +307,7 @@ jobs:
         run: cp ~/.cache/zig/zig-x86_64-linux-0.14.1.tar.xz ./zig-x86_64-linux-0.14.1.tar.xz
 
       - name: Build and push gateway
+        id: build-gateway
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -313,7 +319,20 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Generate SBOM for gateway
+        uses: anchore/sbom-action@v0.20.0
+        with:
+          image: ghcr.io/kolerr-lab/blazil-gateway@${{ steps.build-gateway.outputs.digest }}
+          artifact-name: sbom-gateway.spdx.json
+          output-file: /tmp/sbom-gateway.spdx.json
+
+      - name: Sign gateway image
+        run: |
+          cosign sign --yes \
+            ghcr.io/kolerr-lab/blazil-gateway@${{ steps.build-gateway.outputs.digest }}
+
       - name: Build and push trading
+        id: build-trading
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -325,7 +344,20 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Generate SBOM for trading
+        uses: anchore/sbom-action@v0.20.0
+        with:
+          image: ghcr.io/kolerr-lab/blazil-trading@${{ steps.build-trading.outputs.digest }}
+          artifact-name: sbom-trading.spdx.json
+          output-file: /tmp/sbom-trading.spdx.json
+
+      - name: Sign trading image
+        run: |
+          cosign sign --yes \
+            ghcr.io/kolerr-lab/blazil-trading@${{ steps.build-trading.outputs.digest }}
+
       - name: Build and push banking
+        id: build-banking
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -337,7 +369,20 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Generate SBOM for banking
+        uses: anchore/sbom-action@v0.20.0
+        with:
+          image: ghcr.io/kolerr-lab/blazil-banking@${{ steps.build-banking.outputs.digest }}
+          artifact-name: sbom-banking.spdx.json
+          output-file: /tmp/sbom-banking.spdx.json
+
+      - name: Sign banking image
+        run: |
+          cosign sign --yes \
+            ghcr.io/kolerr-lab/blazil-banking@${{ steps.build-banking.outputs.digest }}
+
       - name: Build and push crypto
+        id: build-crypto
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -349,7 +394,20 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Generate SBOM for crypto
+        uses: anchore/sbom-action@v0.20.0
+        with:
+          image: ghcr.io/kolerr-lab/blazil-crypto@${{ steps.build-crypto.outputs.digest }}
+          artifact-name: sbom-crypto.spdx.json
+          output-file: /tmp/sbom-crypto.spdx.json
+
+      - name: Sign crypto image
+        run: |
+          cosign sign --yes \
+            ghcr.io/kolerr-lab/blazil-crypto@${{ steps.build-crypto.outputs.digest }}
+
       - name: Build and push payments
+        id: build-payments
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -361,7 +419,20 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Generate SBOM for payments
+        uses: anchore/sbom-action@v0.20.0
+        with:
+          image: ghcr.io/kolerr-lab/blazil-payments@${{ steps.build-payments.outputs.digest }}
+          artifact-name: sbom-payments.spdx.json
+          output-file: /tmp/sbom-payments.spdx.json
+
+      - name: Sign payments image
+        run: |
+          cosign sign --yes \
+            ghcr.io/kolerr-lab/blazil-payments@${{ steps.build-payments.outputs.digest }}
+
       - name: Build and push engine
+        id: build-engine
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -373,6 +444,18 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Generate SBOM for engine
+        uses: anchore/sbom-action@v0.20.0
+        with:
+          image: ghcr.io/kolerr-lab/blazil-engine@${{ steps.build-engine.outputs.digest }}
+          artifact-name: sbom-engine.spdx.json
+          output-file: /tmp/sbom-engine.spdx.json
+
+      - name: Sign engine image
+        run: |
+          cosign sign --yes \
+            ghcr.io/kolerr-lab/blazil-engine@${{ steps.build-engine.outputs.digest }}
+
       - name: Prepare inference build context
         run: |
           # Some BuildKit versions resolve the per-Dockerfile .dockerignore relative
@@ -381,6 +464,7 @@ jobs:
           cp infra/docker/Dockerfile.inference.dockerignore Dockerfile.inference.dockerignore
 
       - name: Build and push inference
+        id: build-inference
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -391,4 +475,16 @@ jobs:
             ghcr.io/kolerr-lab/blazil-inference:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Generate SBOM for inference
+        uses: anchore/sbom-action@v0.20.0
+        with:
+          image: ghcr.io/kolerr-lab/blazil-inference@${{ steps.build-inference.outputs.digest }}
+          artifact-name: sbom-inference.spdx.json
+          output-file: /tmp/sbom-inference.spdx.json
+
+      - name: Sign inference image
+        run: |
+          cosign sign --yes \
+            ghcr.io/kolerr-lab/blazil-inference@${{ steps.build-inference.outputs.digest }}
 

@@ -15,9 +15,10 @@
 //!   1 × u16 (code)                                                     =  2 B
 //!   1 × u8  (flags bitfield)                                           =  1 B
 //!   padding                                                            =  1 B
+//!   1 × [u8;16] (pending_transfer_id UUID bytes)                       = 16 B
 //!   ─────────────────────────────────────────────────────────────────────────
-//!   Payload                                                            = 56 B
-//!   Alignment padding                                                  = 72 B
+//!   Payload                                                            = 72 B
+//!   Alignment padding                                                  = 56 B
 //!   Slot size                                                          = 128 B
 //! 128-byte alignment prevents false sharing across L1/L2 cache lines when
 //! adjacent shard threads process sequential ring buffer slots simultaneously.
@@ -50,6 +51,8 @@ impl EventFlags {
     const RISK_CHECK: u8 = 0b0000_0001;
     const PENDING: u8 = 0b0000_0010;
     const SKIP_PUBLISH: u8 = 0b0000_0100;
+    const POSTED: u8 = 0b0000_1000;
+    const VOIDED: u8 = 0b0001_0000;
 
     /// Creates EventFlags from raw u8 value (for deserialization).
     #[inline]
@@ -107,6 +110,36 @@ impl EventFlags {
             self.0 &= !Self::SKIP_PUBLISH;
         }
     }
+
+    /// When `true`, this event posts (commits) a previously created pending transfer.
+    #[inline]
+    pub fn is_posted(&self) -> bool {
+        self.0 & Self::POSTED != 0
+    }
+    /// Set the posted flag.
+    #[inline]
+    pub fn set_is_posted(&mut self, v: bool) {
+        if v {
+            self.0 |= Self::POSTED;
+        } else {
+            self.0 &= !Self::POSTED;
+        }
+    }
+
+    /// When `true`, this event voids a previously created pending transfer.
+    #[inline]
+    pub fn is_voided(&self) -> bool {
+        self.0 & Self::VOIDED != 0
+    }
+    /// Set the voided flag.
+    #[inline]
+    pub fn set_is_voided(&mut self, v: bool) {
+        if v {
+            self.0 |= Self::VOIDED;
+        } else {
+            self.0 &= !Self::VOIDED;
+        }
+    }
 }
 
 // ── TransactionResult ─────────────────────────────────────────────────────────
@@ -157,8 +190,20 @@ pub enum TransactionResult {
 ///
 /// 128-byte aligned (`#[repr(C, align(128))]`) to eliminate false sharing when
 /// adjacent shard threads access sequential ring buffer slots on the same L2/L3
-/// cache line. Payload is **56 bytes**; the remaining 72 bytes are padding that
+/// cache line. Payload is **72 bytes**; the remaining 56 bytes are padding that
 /// the compiler inserts to honour the alignment.
+///
+/// Layout:
+///   6 × u64 (sequence, tx_id, debit, credit, amount_units, timestamp) = 48 B
+///   1 × u32 (ledger_id)                                                =  4 B
+///   1 × u16 (code)                                                     =  2 B
+///   1 × u8  (flags bitfield)                                           =  1 B
+///   padding                                                            =  1 B
+///   1 × [u8;16] (pending_transfer_id UUID bytes)                       = 16 B
+///   ─────────────────────────────────────────────────────────────────────────
+///   Payload                                                            = 72 B
+///   Alignment padding                                                  = 56 B
+///   Slot size                                                          = 128 B
 ///
 /// # Examples
 ///
@@ -209,6 +254,13 @@ pub struct TransactionEvent {
 
     /// Flags for pipeline control (bitfield).
     pub flags: EventFlags,
+
+    /// The pending transfer to post or void for two-phase commit operations.
+    ///
+    /// All-zero bytes (nil UUID) for normal single-phase transfers.
+    /// Set by the transport layer when `flags` has POSTED (`0x08`) or
+    /// VOIDED (`0x10`) bits set.
+    pub pending_transfer_id: TransferId,
 }
 
 impl TransactionEvent {
@@ -250,6 +302,7 @@ impl TransactionEvent {
             ledger_id,
             code,
             flags: EventFlags::default(),
+            pending_transfer_id: TransferId::from_bytes([0u8; 16]),
         }
     }
 }

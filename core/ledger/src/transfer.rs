@@ -112,6 +112,11 @@ pub struct Transfer {
     ledger_id: LedgerId,
     code: u16,
     flags: TransferFlags,
+    /// The ID of the pending transfer this operation posts or voids.
+    ///
+    /// `None` for normal and pending transfers. Required for
+    /// `post_pending_transfer` and `void_pending_transfer` transfers.
+    pending_id: Option<TransferId>,
     timestamp: Timestamp,
 }
 
@@ -161,6 +166,7 @@ impl Transfer {
             ledger_id,
             code,
             flags: TransferFlags::default(),
+            pending_id: None,
             timestamp: Timestamp::now(),
         };
         transfer.validate()?;
@@ -191,6 +197,7 @@ impl Transfer {
             ledger_id,
             code,
             flags,
+            pending_id: None,
             timestamp: Timestamp::now(),
         }
     }
@@ -215,6 +222,7 @@ impl Transfer {
             ledger_id,
             code,
             flags: TransferFlags::default(),
+            pending_id: None,
             timestamp: Timestamp::now(),
         }
     }
@@ -254,9 +262,74 @@ impl Transfer {
         &self.flags
     }
 
+    /// The pending transfer to post or void, if any.
+    ///
+    /// Returns `Some` for `post_pending_transfer` and `void_pending_transfer`
+    /// transfers; `None` for normal and pending transfers.
+    pub fn pending_id(&self) -> Option<&TransferId> {
+        self.pending_id.as_ref()
+    }
+
     /// The timestamp at which this Transfer struct was created locally.
     pub fn timestamp(&self) -> &Timestamp {
         &self.timestamp
+    }
+
+    /// Creates a validated transfer with explicit flags and optional pending ID.
+    ///
+    /// Use this constructor for two-phase commit operations where you need to
+    /// specify non-default `TransferFlags` (e.g. `pending`, `post_pending_transfer`,
+    /// `void_pending_transfer`) and, for post/void operations, the ID of the
+    /// pending transfer to resolve.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BlazerError::ValidationError`] if the transfer violates any
+    /// structural invariant (same rules as [`Transfer::new`]).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use blazil_ledger::transfer::{Transfer, TransferFlags};
+    /// use blazil_common::ids::{AccountId, LedgerId, TransferId};
+    /// use blazil_common::amount::Amount;
+    /// use blazil_common::currency::parse_currency;
+    /// use rust_decimal::Decimal;
+    ///
+    /// let usd = parse_currency("USD").unwrap();
+    /// let amount = Amount::new(Decimal::new(1_000, 2), usd).unwrap();
+    /// let pending_id = TransferId::new();
+    /// let result = Transfer::new_with_flags(
+    ///     TransferId::new(), AccountId::new(), AccountId::new(),
+    ///     amount, LedgerId::USD, 1,
+    ///     TransferFlags { post_pending_transfer: true, ..TransferFlags::default() },
+    ///     Some(pending_id),
+    /// );
+    /// assert!(result.is_ok());
+    /// ```
+    pub fn new_with_flags(
+        id: TransferId,
+        debit_account_id: AccountId,
+        credit_account_id: AccountId,
+        amount: Amount,
+        ledger_id: LedgerId,
+        code: u16,
+        flags: TransferFlags,
+        pending_id: Option<TransferId>,
+    ) -> BlazerResult<Self> {
+        let transfer = Self {
+            id,
+            debit_account_id,
+            credit_account_id,
+            amount,
+            ledger_id,
+            code,
+            flags,
+            pending_id,
+            timestamp: Timestamp::now(),
+        };
+        transfer.validate()?;
+        Ok(transfer)
     }
 }
 

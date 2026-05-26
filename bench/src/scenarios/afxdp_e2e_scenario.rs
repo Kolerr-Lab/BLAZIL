@@ -468,6 +468,8 @@ pub mod inner {
             currency: "USD".into(),
             ledger_id: 1,
             code: 1,
+            flags: 0,
+            pending_transfer_id: "".into(),
         }
     }
 }

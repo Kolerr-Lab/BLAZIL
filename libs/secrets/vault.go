@@ -137,9 +137,37 @@ func (v *VaultClientImpl) RotateSecret(ctx context.Context, path string) error {
 	if v.addr == "" {
 		return ErrUnavailable
 	}
-	// Stub: signals an external rotation policy. Real implementation would
-	// call a Vault plugin or external rotation tool.
-	return nil
+	// Calls Vault's rotation endpoint for the given path.
+	//
+	// Callers pass the full Vault rotation path, e.g.:
+	//   "database/rotate-root/payments-db"  → rotates database backend credentials
+	//   "pki/config/rotate-root"            → rotates PKI root CA
+	//   "aws/config/rotate-root"            → rotates cloud IAM key
+	//
+	// The Vault token must hold the relevant capability (update) on the path.
+	// If the engine at the given path does not support rotation, Vault returns
+	// a 4xx which is propagated as a non-nil error here.
+	url := fmt.Sprintf("%s/v1/%s", strings.TrimRight(v.addr, "/"), path)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	if err != nil {
+		return fmt.Errorf("build vault rotate request: %w", err)
+	}
+	if v.token != "" {
+		req.Header.Set("X-Vault-Token", v.token)
+	}
+
+	resp, err := v.client.Do(req)
+	if err != nil {
+		return ErrUnavailable
+	}
+	defer resp.Body.Close()
+
+	// Vault returns 200 or 204 on success for rotation endpoints.
+	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent {
+		return nil
+	}
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+	return fmt.Errorf("vault rotate at %q returned %d: %s", path, resp.StatusCode, b)
 }
 
 // LoadOrEnv tries to get key from Vault at path; falls back to envVar default.

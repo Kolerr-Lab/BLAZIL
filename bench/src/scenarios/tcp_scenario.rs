@@ -193,5 +193,7 @@ fn make_request(debit_id: &AccountId, credit_id: &AccountId) -> TransactionReque
         currency: "USD".to_owned(),
         ledger_id: 1,
         code: 1,
+        flags: 0,
+        pending_transfer_id: "".to_owned(),
     }
 }

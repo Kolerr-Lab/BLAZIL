@@ -21,12 +21,14 @@ resources:
   - crypto/service.yaml
   - gateway/deployment.yaml
   - gateway/service.yaml
+  - gateway/ingress.yaml
   - inference/deployment.yaml
   - inference/service.yaml
   - inference/pvc.yaml
   - monitoring/prometheus.yaml
   - monitoring/grafana.yaml
   - networkpolicy.yaml
+  - cert-manager/cluster-issuer.yaml
 
 commonLabels:
   app.kubernetes.io/part-of: blazil
