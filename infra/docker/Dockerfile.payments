@@ -8,7 +8,7 @@ WORKDIR /app/services/payments
 ENV GOWORK=off
 RUN go mod download && go build -o /payments ./cmd/server
 
-FROM alpine:3.19
+FROM alpine:3.23
 RUN apk add --no-cache ca-certificates \
     && addgroup -S blazil \
     && adduser -S blazil -G blazil
