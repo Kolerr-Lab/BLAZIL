@@ -278,6 +278,16 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # Pre-seed ~/.docker/config.json with an empty auths object.
+      # This prevents docker/login-action from using a credential helper,
+      # ensuring the auth token is written directly in base64 format.
+      # Without this, go-containerregistry (used by cosign) cannot read
+      # credentials from the system keyring, and cosign sign fails with DENIED.
+      - name: Prepare Docker config for cosign
+        run: |
+          mkdir -p ~/.docker
+          echo '{"auths":{}}' > ~/.docker/config.json
+
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
