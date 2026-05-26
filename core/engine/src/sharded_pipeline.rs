@@ -502,6 +502,7 @@ mod tests {
                 code: 1,
                 flags: Default::default(),
                 ingestion_timestamp: Timestamp::now(),
+                pending_transfer_id: blazil_common::ids::TransferId::from_bytes([0u8; 16]),
             };
 
             let shard_id = id as usize % 4;
