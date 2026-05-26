@@ -302,7 +302,7 @@ jobs:
         run: cp ~/.cache/zig/zig-x86_64-linux-0.14.1.tar.xz ./zig-x86_64-linux-0.14.1.tar.xz
 
       - name: Build and push gateway
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: infra/docker/Dockerfile.gateway
@@ -314,7 +314,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Build and push trading
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: infra/docker/Dockerfile.trading
@@ -326,7 +326,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Build and push banking
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: infra/docker/Dockerfile.banking
@@ -338,7 +338,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Build and push crypto
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: infra/docker/Dockerfile.crypto
@@ -350,7 +350,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Build and push payments
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: infra/docker/Dockerfile.payments
@@ -362,7 +362,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Build and push engine
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: infra/docker/Dockerfile.engine
@@ -381,7 +381,7 @@ jobs:
           cp infra/docker/Dockerfile.inference.dockerignore Dockerfile.inference.dockerignore
 
       - name: Build and push inference
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: infra/docker/Dockerfile.inference
