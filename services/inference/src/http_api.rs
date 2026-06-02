@@ -281,6 +281,7 @@ async fn infer_handler(
     match result {
         Ok(Ok(predictions)) => {
             state.metrics.request_success(latency_us);
+            state.metrics.request_success_tenant(&tenant_id, latency_us);
             let pred =
                 predictions
                     .into_iter()
@@ -306,6 +307,7 @@ async fn infer_handler(
         }
         Ok(Err(e)) => {
             state.metrics.request_failed(latency_us);
+            state.metrics.request_failed_tenant(&tenant_id, latency_us);
             warn!("Inference error: {e}");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -315,6 +317,7 @@ async fn infer_handler(
         }
         Err(e) => {
             state.metrics.request_failed(latency_us);
+            state.metrics.request_failed_tenant(&tenant_id, latency_us);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 ApiError::new(format!("Worker panicked: {e}")),

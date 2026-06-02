@@ -257,10 +257,14 @@ impl InferenceModel for OnnxModel {
         Self::init_environment()?;
 
         if config.device != Device::Cpu {
-            tracing::warn!(
-                "Tract backend currently supports CPU only; ignoring device {:?}",
-                config.device
-            );
+            return Err(Error::ModelLoadFailed {
+                reason: format!(
+                    "device {:?} is not supported by the Tract backend — \
+                     only Device::Cpu is available. \
+                     Device::Cuda and Device::TensorRT are planned future backends.",
+                    config.device
+                ),
+            });
         }
 
         tracing::info!(

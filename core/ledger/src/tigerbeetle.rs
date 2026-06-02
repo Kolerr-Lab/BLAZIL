@@ -291,40 +291,42 @@ impl LedgerClient for TigerBeetleClient {
                     // is stable across all TB versions that use the Exists* naming
                     // convention.  This avoids coupling to generated variant names
                     // that may change between TB releases.
-                    let failed: std::collections::HashSet<usize> = api_err
+                    //
+                    // Build O(1) lookup: tb_pos → error kind string.
+                    // Replaces the previous approach that computed a dead
+                    // `HashSet` and re-scanned api_err with `find()` per item
+                    // (O(n²) over the error slice for each transfer).
+                    let error_map: std::collections::HashMap<usize, String> = api_err
                         .as_slice()
                         .iter()
-                        .map(|e| e.index() as usize)
+                        .map(|e| (e.index() as usize, format!("{:?}", e.kind())))
                         .collect();
+                    let failed_count = error_map.len();
                     for (tb_pos, &orig_i) in tb_to_orig.iter().enumerate() {
-                        if let Some(e) = api_err
-                            .as_slice()
-                            .iter()
-                            .find(|e| e.index() as usize == tb_pos)
-                        {
-                            // If the debug name of the error kind contains "Exist",
-                            // the transfer was already committed — treat as Ok.
-                            let kind_str = format!("{:?}", e.kind());
-                            if kind_str.contains("Exist") {
+                        match error_map.get(&tb_pos) {
+                            Some(kind_str) if kind_str.contains("Exist") => {
+                                // Transfer already committed — idempotent retry,
+                                // treat as Ok so the caller sees a committed result.
                                 tracing::debug!(
                                     orig_i,
                                     kind = %kind_str,
                                     "TB transfer already committed (idempotent retry) — treating as Ok"
                                 );
                                 results[orig_i] = Some(Ok(*transfers[orig_i].id()));
-                            } else {
+                            }
+                            Some(kind_str) => {
                                 results[orig_i] = Some(Err(BlazerError::Ledger(format!(
-                                    "TB transfer error {:?} at batch index {tb_pos}",
-                                    e.kind()
+                                    "TB transfer error {kind_str} at batch index {tb_pos}"
                                 ))));
                             }
-                        } else {
-                            results[orig_i] = Some(Ok(*transfers[orig_i].id()));
+                            None => {
+                                results[orig_i] = Some(Ok(*transfers[orig_i].id()));
+                            }
                         }
                     }
                     tracing::warn!(
                         count = submitted,
-                        failed = failed.len(),
+                        failed = failed_count,
                         elapsed_ms = t0.elapsed().as_millis(),
                         "batch create_transfers partial failure"
                     );
@@ -353,10 +355,11 @@ impl LedgerClient for TigerBeetleClient {
         }
 
         // Convert Vec<Option<Result>> to Vec<Result>.
-        // Every index must have been populated by either:
-        // 1. domain_transfer_to_tb validation error (line ~229)
+        // Every index is guaranteed to be populated by either:
+        // 1. domain_transfer_to_tb validation error
         // 2. TB success/failure in one of the match arms above
-        // If any Option is None, it indicates a logic bug in this function.
+        // The defensive guard below catches any future regression that
+        // accidentally leaves an index unpopulated.
         results
             .into_iter()
             .enumerate()
@@ -364,7 +367,8 @@ impl LedgerClient for TigerBeetleClient {
                 opt.unwrap_or_else(|| {
                     tracing::error!(
                         index = i,
-                        "LOGIC BUG: transfer result not populated in create_transfers_batch"
+                        "Defensive guard triggered: transfer result not set \
+                         — check create_transfers_batch for an unhandled branch"
                     );
                     Err(BlazerError::Ledger(
                         "internal error: transfer result not set".to_owned(),

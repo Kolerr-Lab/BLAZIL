@@ -1,7 +1,8 @@
 //! Prometheus metrics for inference server.
 
 use prometheus::{
-    Encoder, HistogramOpts, HistogramVec, IntCounter, IntGauge, Registry, TextEncoder,
+    Encoder, HistogramOpts, HistogramVec, IntCounter, IntCounterVec, IntGauge, Opts, Registry,
+    TextEncoder,
 };
 
 /// Inference server metrics.
@@ -29,6 +30,9 @@ pub struct InferenceMetrics {
 
     /// Aeron offer failures (backpressure).
     pub aeron_offer_failures: IntCounter,
+
+    /// Per-tenant request counter (label: `tenant_id`).
+    pub requests_per_tenant: IntCounterVec,
 }
 
 impl InferenceMetrics {
@@ -82,6 +86,15 @@ impl InferenceMetrics {
         )?;
         registry.register(Box::new(aeron_offer_failures.clone()))?;
 
+        let requests_per_tenant = IntCounterVec::new(
+            Opts::new(
+                "inference_requests_per_tenant_total",
+                "Total inference requests per tenant",
+            ),
+            &["tenant_id"],
+        )?;
+        registry.register(Box::new(requests_per_tenant.clone()))?;
+
         Ok(Self {
             registry,
             requests_total,
@@ -91,6 +104,7 @@ impl InferenceMetrics {
             request_latency_us,
             active_requests,
             aeron_offer_failures,
+            requests_per_tenant,
         })
     }
 
@@ -120,6 +134,28 @@ impl InferenceMetrics {
     pub fn request_failed(&self, latency_us: u64) {
         self.requests_total.inc();
         self.requests_failed_total.inc();
+        self.request_latency_us
+            .with_label_values(&["error"])
+            .observe(latency_us as f64);
+    }
+
+    /// Record a successful request for a specific tenant.
+    #[allow(dead_code)]
+    pub fn request_success_tenant(&self, tenant_id: &str, latency_us: u64) {
+        self.requests_per_tenant
+            .with_label_values(&[tenant_id])
+            .inc();
+        self.request_latency_us
+            .with_label_values(&["success"])
+            .observe(latency_us as f64);
+    }
+
+    /// Record a failed request for a specific tenant.
+    #[allow(dead_code)]
+    pub fn request_failed_tenant(&self, tenant_id: &str, latency_us: u64) {
+        self.requests_per_tenant
+            .with_label_values(&[tenant_id])
+            .inc();
         self.request_latency_us
             .with_label_values(&["error"])
             .observe(latency_us as f64);
