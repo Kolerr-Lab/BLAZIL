@@ -3,6 +3,9 @@
 //! Pure Rust, production-safe implementation using candle-transformers.
 //! Supports streaming token generation with system prompt injection
 //! and token filtering for Clarken branding.
+//!
+//! Uses Qwen2 architecture (quantized_qwen2) for compatibility with
+//! DeepSeek-R1-Distill-Qwen and other Qwen2-based models.
 
 use std::path::Path;
 
@@ -10,13 +13,14 @@ use anyhow::{Context, Result};
 use candle_core::quantized::gguf_file;
 use candle_core::{Device, Tensor};
 use candle_transformers::generation::{LogitsProcessor, Sampling};
-use candle_transformers::models::quantized_llama::ModelWeights;
+use candle_transformers::models::quantized_qwen2::ModelWeights;
 use tokenizers::Tokenizer;
 use tracing::{debug, info};
 
 /// GGUF model wrapper with Clarken identity injection.
 ///
 /// Uses HuggingFace Candle (pure Rust, safe) for LLM inference.
+/// Architecture: Qwen2 (quantized_qwen2) for DeepSeek-R1-Distill-Qwen compatibility.
 #[allow(dead_code)] // Infrastructure code - HTTP API integration pending
 pub struct GgufModel {
     model: ModelWeights,
@@ -37,7 +41,7 @@ impl GgufModel {
     /// - `n_ctx` — Context window size (used as max_seq_len)
     ///
     /// # Implementation
-    /// Uses Candle's quantized GGUF loader (ModelWeights::from_gguf).
+    /// Uses Candle's quantized Qwen2 GGUF loader (ModelWeights::from_gguf).
     /// Loads tokenizer from same directory (tokenizer.json).
     pub fn load<P: AsRef<Path>>(path: P, _n_threads: u32, n_ctx: u32) -> Result<Self> {
         let path = path.as_ref();
@@ -106,7 +110,7 @@ impl GgufModel {
 
         // Create model from GGUF
         let model = ModelWeights::from_gguf(gguf_content, &mut file, &device)
-            .context("Failed to load quantized LLaMA model from GGUF")?;
+            .context("Failed to load quantized Qwen2 model from GGUF")?;
 
         info!("Model loaded successfully");
 
@@ -136,14 +140,14 @@ impl GgufModel {
     /// Injects Clarken identity before user prompt:
     /// ```text
     /// You are Clarken, a high-performance financial AI assistant.
-    /// Never mention DeepSeek, LLaMA, or other model names. You are Clarken.
+    /// Never mention DeepSeek, Qwen, or other model names. You are Clarken.
     /// ```
     ///
     /// # Token Filtering
     /// - "DeepSeek" → "Clarken"
     /// - "deepseek" → "clarken"
-    /// - "LLaMA" → "Clarken"
-    /// - "llama" → "clarken"
+    /// - "Qwen" → "Clarken"
+    /// - "qwen" → "clarken"
     ///
     /// # Arguments
     /// - `prompt` — User input
@@ -164,7 +168,7 @@ impl GgufModel {
         // System prompt injection
         let system_prompt = "\
 You are Clarken, a high-performance financial AI assistant built on Blazil infrastructure. \
-Never mention DeepSeek, LLaMA, or other model names. You are Clarken. \
+Never mention DeepSeek, Qwen, or other model names. You are Clarken. \
 Provide accurate, concise answers focused on finance, trading, and risk management.\n\n";
 
         let full_prompt = format!("{system_prompt}{prompt}");
@@ -231,8 +235,16 @@ Provide accurate, concise answers focused on finance, trading, and risk manageme
             // Sample next token
             let next_token = logits_processor.sample(&logits)?;
 
-            // Check for common EOS tokens (2 for LLaMA, 128001/128009 for LLaMA3)
-            if next_token == 2 || next_token == 128001 || next_token == 128009 {
+            // Check for common EOS tokens
+            // Qwen2: 151643 (primary), 151645 (secondary)
+            // LLaMA3: 128001, 128009
+            // Generic: 2
+            if next_token == 151643
+                || next_token == 151645
+                || next_token == 128001
+                || next_token == 128009
+                || next_token == 2
+            {
                 debug!("EOS token encountered: {next_token}");
                 break;
             }
@@ -241,7 +253,7 @@ Provide accurate, concise answers focused on finance, trading, and risk manageme
 
             // Decode token
             if let Ok(token_str) = self.tokenizer.decode(&[next_token], false) {
-                // Token filtering: DeepSeek → Clarken
+                // Token filtering: DeepSeek/Qwen → Clarken
                 let filtered = self.filter_token(&token_str);
 
                 // Invoke callback
@@ -258,6 +270,8 @@ Provide accurate, concise answers focused on finance, trading, and risk manageme
         token
             .replace("DeepSeek", "Clarken")
             .replace("deepseek", "clarken")
+            .replace("Qwen", "Clarken")
+            .replace("qwen", "clarken")
             .replace("LLaMA", "Clarken")
             .replace("llama", "clarken")
             .replace("Llama", "Clarken")
@@ -275,6 +289,8 @@ mod tests {
             token
                 .replace("DeepSeek", "Clarken")
                 .replace("deepseek", "clarken")
+                .replace("Qwen", "Clarken")
+                .replace("qwen", "clarken")
                 .replace("LLaMA", "Clarken")
                 .replace("llama", "clarken")
                 .replace("Llama", "Clarken")
@@ -282,6 +298,8 @@ mod tests {
 
         assert_eq!(filter("I am DeepSeek"), "I am Clarken");
         assert_eq!(filter("deepseek-coder"), "clarken-coder");
+        assert_eq!(filter("Qwen2.5-7B"), "Clarken2.5-7B");
+        assert_eq!(filter("qwen model"), "clarken model");
         assert_eq!(filter("LLaMA 3.1"), "Clarken 3.1");
         assert_eq!(filter("Llama model"), "Clarken model");
     }
