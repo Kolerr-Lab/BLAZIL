@@ -30,7 +30,7 @@ impl ModelBackend {
         match ext.to_lowercase().as_str() {
             "onnx" => Ok(Self::Onnx),
             "gguf" => Ok(Self::Gguf),
-            _ => anyhow::bail!("Unsupported model format: .{}", ext),
+            _ => anyhow::bail!("Unsupported model format: .{ext}"),
         }
     }
 }
