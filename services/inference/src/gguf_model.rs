@@ -42,15 +42,13 @@ impl GgufModel {
     /// Loads tokenizer from same directory (tokenizer.json) or embedded.
     pub fn load<P: AsRef<Path>>(path: P, _n_threads: u32, n_ctx: u32) -> Result<Self> {
         let path = path.as_ref();
-        info!(
-            "Loading GGUF model via Candle: {} (n_ctx={})",
-            path.display(),
-            n_ctx
-        );
+        let path_display = path.display();
+        info!("Loading GGUF model via Candle: {path_display} (n_ctx={n_ctx})");
 
         // Validate file exists
         if !path.exists() {
-            anyhow::bail!("Model file not found: {}", path.display());
+            let path_display = path.display();
+            anyhow::bail!("Model file not found: {path_display}");
         }
 
         // Select device (prefer CUDA if available, fallback to CPU)
@@ -70,18 +68,17 @@ impl GgufModel {
             .map(|p| p.join("tokenizer.json"))
             .filter(|p| p.exists())
             .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "tokenizer.json not found in model directory: {}",
-                    path.parent()
-                        .map(|p| p.display().to_string())
-                        .unwrap_or_default()
-                )
+                let parent_dir = path
+                    .parent()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default();
+                anyhow::anyhow!("tokenizer.json not found in model directory: {parent_dir}")
             })?;
 
         let tokenizer = Tokenizer::from_file(&tokenizer_path)
-            .map_err(|e| anyhow::anyhow!("Failed to load tokenizer: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to load tokenizer: {e}"))?;
 
-        info!("Tokenizer loaded from {:?}", tokenizer_path);
+        info!("Tokenizer loaded from {tokenizer_path:?}");
 
         // Load model config from config.json (if exists) or use default LLaMA config
         let config_path = path.parent().map(|p| p.join("config.json"));
@@ -126,7 +123,8 @@ impl GgufModel {
                  https://huggingface.co/docs/transformers/main/en/serialization"
             );
         } else {
-            anyhow::bail!("Unsupported model format: {:?}", path.extension());
+            let ext = path.extension();
+            anyhow::bail!("Unsupported model format: {ext:?}");
         };
 
         let model = Llama::load(vb, &config).context("Failed to load LLaMA model from weights")?;
@@ -170,7 +168,7 @@ impl GgufModel {
             json.get(key)
                 .and_then(|v| v.as_u64())
                 .map(|v| v as usize)
-                .ok_or_else(|| anyhow::anyhow!("Missing or invalid field: {}", key))
+                .ok_or_else(|| anyhow::anyhow!("Missing or invalid field: {key}"))
         };
 
         let get_f64 = |key: &str, default: f64| -> f64 {
@@ -256,24 +254,23 @@ You are Clarken, a high-performance financial AI assistant built on Blazil infra
 Never mention DeepSeek, LLaMA, or other model names. You are Clarken. \
 Provide accurate, concise answers focused on finance, trading, and risk management.\n\n";
 
-        let full_prompt = format!("{}{}", system_prompt, prompt);
+        let full_prompt = format!("{system_prompt}{prompt}");
 
-        debug!("Generating response for prompt (len={})", prompt.len());
+        let prompt_len = prompt.len();
+        debug!("Generating response for prompt (len={prompt_len})");
 
         // Tokenize prompt
         let encoding = self
             .tokenizer
             .encode(full_prompt.clone(), true)
-            .map_err(|e| anyhow::anyhow!("Tokenization failed: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Tokenization failed: {e}"))?;
 
         let mut tokens = encoding.get_ids().to_vec();
 
         if tokens.len() >= self.config.max_position_embeddings {
-            anyhow::bail!(
-                "Prompt too long: {} tokens (max: {})",
-                tokens.len(),
-                self.config.max_position_embeddings
-            );
+            let token_count = tokens.len();
+            let max_pos = self.config.max_position_embeddings;
+            anyhow::bail!("Prompt too long: {token_count} tokens (max: {max_pos})");
         }
 
         // Setup logits processor with temperature
