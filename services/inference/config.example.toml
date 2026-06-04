@@ -39,3 +39,20 @@ api_key = ""
 # Root directory for per-tenant ONNX model storage.
 # Layout: <model_dir>/<tenant_id>/<model_id>/<version>/model.onnx
 model_dir = "/var/lib/blazil/models"
+
+# ────────────────────────────────────────────────────────────────────────────
+# GGUF/LLM Configuration
+# ────────────────────────────────────────────────────────────────────────────
+
+[gguf]
+# Number of CPU threads for llama.cpp inference (0 = auto, uses all cores)
+n_threads = 14
+
+# Context window size (max tokens in prompt + generation)
+n_ctx = 4096
+
+# Sampling temperature (0.0 = deterministic, 1.0 = creative, 2.0 = very random)
+temperature = 0.7
+
+# Maximum tokens to generate per request (0 = until EOS token)
+max_tokens = 2048

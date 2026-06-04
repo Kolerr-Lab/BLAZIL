@@ -21,6 +21,7 @@
 //! ```
 
 mod config;
+mod gguf_model;
 mod http_api;
 mod metrics;
 mod model_registry;
@@ -37,7 +38,8 @@ use tracing::{error, info};
 use blazil_inference::{InferenceConfig, InferenceModel, OnnxModel, OptimizationLevel};
 use blazil_transport::server::TransportServer;
 
-use crate::config::ServerConfig;
+use crate::config::{ModelBackend, ServerConfig};
+use crate::gguf_model::GgufModel;
 use crate::http_api::AppState;
 use crate::metrics::InferenceMetrics;
 use crate::model_registry::ModelRegistry;
@@ -139,20 +141,55 @@ async fn main() -> Result<()> {
 
     // ── Optional default model ────────────────────────────────────────────────
     let default_model: Option<Arc<OnnxModel>> = if let Some(ref path) = config.model_path {
-        info!(path = %path.display(), "Loading default ONNX model...");
-        let cfg = InferenceConfig::new(path)
-            .with_threads(config.inference_workers, config.inference_workers)
-            .with_optimization(opt_level);
-        let model = tokio::task::spawn_blocking(move || OnnxModel::load(cfg))
-            .await
-            .context("spawn_blocking join error")?
-            .context("Failed to load default ONNX model")?;
-        info!(
-            input_shape = ?model.input_shape(),
-            num_classes = ?model.num_classes(),
-            "Default model loaded"
-        );
-        Some(Arc::new(model))
+        // Detect backend from file extension
+        let backend = ModelBackend::detect(path).context("Failed to detect model backend")?;
+
+        match backend {
+            ModelBackend::Onnx => {
+                info!(path = %path.display(), "Loading default ONNX model...");
+                let cfg = InferenceConfig::new(path)
+                    .with_threads(config.inference_workers, config.inference_workers)
+                    .with_optimization(opt_level);
+                let model = tokio::task::spawn_blocking(move || OnnxModel::load(cfg))
+                    .await
+                    .context("spawn_blocking join error")?
+                    .context("Failed to load default ONNX model")?;
+                info!(
+                    input_shape = ?model.input_shape(),
+                    num_classes = ?model.num_classes(),
+                    "ONNX model loaded"
+                );
+                Some(Arc::new(model))
+            }
+            ModelBackend::Gguf => {
+                info!(path = %path.display(), "Loading default GGUF model...");
+                let path_clone = path.clone();
+                let n_threads = config.gguf.n_threads;
+                let n_ctx = config.gguf.n_ctx;
+                let mut model = tokio::task::spawn_blocking(move || {
+                    GgufModel::load(&path_clone, n_threads, n_ctx)
+                })
+                .await
+                .context("spawn_blocking join error")?
+                .context("Failed to load default GGUF model")?;
+
+                // Configure temperature and max_tokens
+                model.set_temperature(config.gguf.temperature);
+                model.set_max_tokens(config.gguf.max_tokens);
+
+                info!(
+                    n_ctx = n_ctx,
+                    temp = config.gguf.temperature,
+                    "GGUF model loaded"
+                );
+
+                // GGUF models don't implement InferenceModel trait (streaming text gen, not batch inference)
+                // For now, return None to skip Aeron IPC (HTTP-only mode)
+                // Future: Add separate Aeron streaming text protocol
+                info!("⚠️  GGUF model loaded — HTTP API only (Aeron IPC requires ONNX for batch inference)");
+                None
+            }
+        }
     } else {
         info!("No default model configured — tenants use the model registry");
         None

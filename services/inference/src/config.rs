@@ -8,6 +8,64 @@ use serde::{Deserialize, Serialize};
 
 use crate::server::DEFAULT_INFERENCE_CHANNEL;
 
+/// Model backend type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ModelBackend {
+    /// ONNX models (.onnx) via Tract.
+    Onnx,
+    /// GGUF models (.gguf) via llama.cpp.
+    Gguf,
+}
+
+impl ModelBackend {
+    /// Detect backend from file extension.
+    pub fn detect<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let ext = path
+            .as_ref()
+            .extension()
+            .and_then(|e| e.to_str())
+            .ok_or_else(|| anyhow::anyhow!("Model file has no extension"))?;
+
+        match ext.to_lowercase().as_str() {
+            "onnx" => Ok(Self::Onnx),
+            "gguf" => Ok(Self::Gguf),
+            _ => anyhow::bail!("Unsupported model format: .{}", ext),
+        }
+    }
+}
+
+/// GGUF model configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GgufConfig {
+    /// Number of CPU threads for inference (0 = auto).
+    #[serde(default = "default_gguf_threads")]
+    pub n_threads: u32,
+
+    /// Context window size (max tokens).
+    #[serde(default = "default_gguf_ctx")]
+    pub n_ctx: u32,
+
+    /// Sampling temperature (0.0 = deterministic, 1.0 = creative).
+    #[serde(default = "default_gguf_temp")]
+    pub temperature: f32,
+
+    /// Maximum tokens to generate per request (0 = until EOS).
+    #[serde(default = "default_gguf_max_tokens")]
+    pub max_tokens: usize,
+}
+
+impl Default for GgufConfig {
+    fn default() -> Self {
+        Self {
+            n_threads: default_gguf_threads(),
+            n_ctx: default_gguf_ctx(),
+            temperature: default_gguf_temp(),
+            max_tokens: default_gguf_max_tokens(),
+        }
+    }
+}
+
 /// Server configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
@@ -53,6 +111,10 @@ pub struct ServerConfig {
     /// If empty, read from `BLAZIL_INFERENCE_API_KEY` env var at startup.
     #[serde(default)]
     pub api_key: String,
+
+    /// GGUF model configuration.
+    #[serde(default)]
+    pub gguf: GgufConfig,
 }
 
 impl Default for ServerConfig {
@@ -67,6 +129,7 @@ impl Default for ServerConfig {
             http_port: default_http_port(),
             model_dir: default_model_dir(),
             api_key: String::new(),
+            gguf: GgufConfig::default(),
         }
     }
 }
@@ -155,4 +218,22 @@ fn default_http_port() -> u16 {
 
 fn default_model_dir() -> PathBuf {
     PathBuf::from("/opt/blazil/models")
+}
+
+// ── GGUF defaults ─────────────────────────────────────────────────────────────
+
+fn default_gguf_threads() -> u32 {
+    num_cpus::get() as u32
+}
+
+fn default_gguf_ctx() -> u32 {
+    4096
+}
+
+fn default_gguf_temp() -> f32 {
+    0.7
+}
+
+fn default_gguf_max_tokens() -> usize {
+    2048
 }

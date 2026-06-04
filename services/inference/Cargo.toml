@@ -20,6 +20,12 @@ blazil-common = { path = "../../core/common" }
 # Aeron IPC transport
 blazil-aeron-sys = { path = "../../core/aeron-sys" }
 
+# LLM inference (Candle - HuggingFace, pure Rust, safe)
+candle-core = "0.9"
+candle-transformers = "0.9"
+candle-nn = "0.9"
+tokenizers = "0.21"
+
 # Async runtime
 tokio = { version = "1.37", features = ["full"] }
 async-trait = "0.1"
