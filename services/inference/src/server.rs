@@ -30,7 +30,7 @@
 //! 3. `EmbeddedAeronDriver` (driver exits, `aeron_driver_close`)
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -44,6 +44,7 @@ use blazil_transport::aeron::{
 };
 use blazil_transport::server::TransportServer;
 
+use crate::gguf_model::GgufModel;
 use crate::protocol::{
     deserialize_request, serialize_response, InferenceRequest, InferenceResponse,
     INFERENCE_REQ_STREAM_ID, INFERENCE_RSP_STREAM_ID,
@@ -68,20 +69,38 @@ const OFFER_SPIN_RETRIES: usize = 64;
 /// After this many empty polls, yield to other threads.
 const SPIN_BEFORE_YIELD: u32 = 512;
 
+// ── Model Backend Enum ────────────────────────────────────────────────────────
+
+/// Model backend for Aeron IPC inference.
+///
+/// Supports both ONNX (batch classification) and GGUF (streaming text generation).
+pub enum ModelBackend {
+    /// ONNX model for batch inference (classification, regression).
+    Onnx(Arc<OnnxModel>),
+    /// GGUF model for text generation (streaming LLM inference).
+    /// Wrapped in Mutex for interior mutability during generate_streaming().
+    Gguf(Arc<Mutex<GgufModel>>),
+}
+
 // ── AeronInferenceServer ──────────────────────────────────────────────────────
 
 /// Aeron IPC inference server using embedded C Media Driver.
 ///
 /// Subscribes to [`INFERENCE_REQ_STREAM_ID`] on the configured channel,
-/// processes each request through the ONNX model, and publishes responses
-/// on [`INFERENCE_RSP_STREAM_ID`].
+/// processes each request through the model (ONNX or GGUF), and publishes
+/// responses on [`INFERENCE_RSP_STREAM_ID`].
+///
+/// # Protocol
+///
+/// - **ONNX**: input_data → batch inference → class_id, probabilities, raw_output
+/// - **GGUF**: input_data (UTF-8 text) → streaming generation → generated_text in raw_output
 pub struct AeronInferenceServer {
     /// Aeron channel URI.
     channel: String,
     /// Path to Aeron IPC shared-memory directory.
     aeron_dir: String,
-    /// Loaded ONNX model (shared across threads).
-    model: Arc<OnnxModel>,
+    /// Model backend (ONNX or GGUF).
+    model: ModelBackend,
     /// Shutdown signal.
     shutdown: Arc<AtomicBool>,
     /// Cumulative Aeron publication offer() failures.
@@ -95,8 +114,8 @@ impl AeronInferenceServer {
     ///
     /// - `channel`   — Aeron channel URI (see [`DEFAULT_INFERENCE_CHANNEL`]).
     /// - `aeron_dir` — IPC directory for the embedded C Media Driver.
-    /// - `model`     — Pre-loaded ONNX model.
-    pub fn new(channel: &str, aeron_dir: &str, model: Arc<OnnxModel>) -> Self {
+    /// - `model`     — Model backend (ONNX or GGUF).
+    pub fn new(channel: &str, aeron_dir: &str, model: ModelBackend) -> Self {
         Self {
             channel: channel.to_owned(),
             aeron_dir: aeron_dir.to_owned(),
@@ -129,7 +148,11 @@ impl TransportServer for AeronInferenceServer {
     async fn serve(&self) -> BlazerResult<()> {
         let channel = self.channel.clone();
         let aeron_dir = self.aeron_dir.clone();
-        let model = Arc::clone(&self.model);
+        // Clone ModelBackend (either Arc<OnnxModel> or Arc<Mutex<GgufModel>>)
+        let model = match &self.model {
+            ModelBackend::Onnx(m) => ModelBackend::Onnx(Arc::clone(m)),
+            ModelBackend::Gguf(m) => ModelBackend::Gguf(Arc::clone(m)),
+        };
         let shutdown = Arc::clone(&self.shutdown);
         let offer_failures = Arc::clone(&self.offer_failures);
         let requests_processed = Arc::clone(&self.requests_processed);
@@ -183,7 +206,7 @@ impl TransportServer for AeronInferenceServer {
 fn aeron_inference_loop(
     channel: &str,
     aeron_dir: &str,
-    model: Arc<OnnxModel>,
+    model: ModelBackend,
     shutdown: Arc<AtomicBool>,
     offer_failures: Arc<AtomicU64>,
     requests_processed: Arc<AtomicU64>,
@@ -306,7 +329,15 @@ fn aeron_inference_loop(
 
 // ── Inference Processing ──────────────────────────────────────────────────────
 
-fn process_inference_request(model: &Arc<OnnxModel>, req: InferenceRequest) -> InferenceResponse {
+fn process_inference_request(model: &ModelBackend, req: InferenceRequest) -> InferenceResponse {
+    match model {
+        ModelBackend::Onnx(onnx_model) => process_onnx_inference(onnx_model, req),
+        ModelBackend::Gguf(gguf_model) => process_gguf_inference(gguf_model, req),
+    }
+}
+
+/// Process ONNX batch inference (classification/regression).
+fn process_onnx_inference(model: &Arc<OnnxModel>, req: InferenceRequest) -> InferenceResponse {
     // Convert request to Sample
     let sample = Sample {
         data: req.input_data.clone(),
@@ -347,6 +378,87 @@ fn process_inference_request(model: &Arc<OnnxModel>, req: InferenceRequest) -> I
             confidence: 0.0,
             latency_us: 0,
             error: format!("Inference failed: {e}"),
+        },
+    }
+}
+
+/// Process GGUF text generation inference.
+///
+/// # Protocol
+///
+/// - `input_data` — UTF-8 encoded prompt text
+/// - `input_shape` — [max_tokens] (optional, defaults to model config)
+/// - `raw_output` — UTF-8 encoded generated text
+fn process_gguf_inference(
+    model: &Arc<Mutex<GgufModel>>,
+    req: InferenceRequest,
+) -> InferenceResponse {
+    // Decode input_data as UTF-8 text (prompt)
+    let prompt = match String::from_utf8(req.input_data.clone()) {
+        Ok(s) => s,
+        Err(e) => {
+            return InferenceResponse {
+                request_id: req.request_id,
+                class_id: None,
+                probabilities: vec![],
+                raw_output: vec![],
+                confidence: 0.0,
+                latency_us: 0,
+                error: format!("Invalid UTF-8 prompt: {e}"),
+            };
+        }
+    };
+
+    // Extract max_tokens from input_shape (if provided)
+    let max_tokens = req.input_shape.first().copied().unwrap_or(0) as usize;
+
+    // Lock model and generate text
+    let mut model_guard = match model.lock() {
+        Ok(g) => g,
+        Err(e) => {
+            return InferenceResponse {
+                request_id: req.request_id,
+                class_id: None,
+                probabilities: vec![],
+                raw_output: vec![],
+                confidence: 0.0,
+                latency_us: 0,
+                error: format!("Failed to lock GGUF model: {e}"),
+            };
+        }
+    };
+
+    // Generate text (streaming tokens accumulated)
+    let mut generated_text = String::new();
+    let result = model_guard.generate_streaming(&prompt, max_tokens, |token| {
+        generated_text.push_str(token);
+    });
+
+    match result {
+        Ok(text) => {
+            // Encode UTF-8 text as Vec<f32> for protocol compatibility
+            // Each byte is cast to f32 (0.0-255.0 range)
+            let text_bytes = text.as_bytes();
+            let raw_output: Vec<f32> = text_bytes.iter().map(|&b| b as f32).collect();
+
+            InferenceResponse {
+                request_id: req.request_id,
+                class_id: None,
+                probabilities: vec![],
+                raw_output,
+                confidence: 1.0, // Not applicable for text generation
+                latency_us: 0,   // Set by caller
+                error: String::new(),
+            }
+        }
+        Err(e) => InferenceResponse {
+            request_id: req.request_id,
+            class_id: None,
+            probabilities: vec![],
+            raw_output: vec![],
+            confidence: 0.0,
+            latency_us: 0,
+            error: format!("GGUF generation failed: {e}"),
         },
     }
 }

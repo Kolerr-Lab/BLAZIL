@@ -29,7 +29,7 @@ mod protocol;
 mod server;
 
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -38,12 +38,12 @@ use tracing::{error, info};
 use blazil_inference::{InferenceConfig, InferenceModel, OnnxModel, OptimizationLevel};
 use blazil_transport::server::TransportServer;
 
-use crate::config::{ModelBackend, ServerConfig};
+use crate::config::{ModelBackend as ConfigBackend, ServerConfig};
 use crate::gguf_model::GgufModel;
 use crate::http_api::AppState;
 use crate::metrics::InferenceMetrics;
 use crate::model_registry::ModelRegistry;
-use crate::server::AeronInferenceServer;
+use crate::server::{AeronInferenceServer, ModelBackend as AeronBackend};
 
 // ── CLI Arguments ─────────────────────────────────────────────────────────────
 
@@ -140,60 +140,63 @@ async fn main() -> Result<()> {
     );
 
     // ── Optional default model ────────────────────────────────────────────────
-    let default_model: Option<Arc<OnnxModel>> = if let Some(ref path) = config.model_path {
-        // Detect backend from file extension
-        let backend = ModelBackend::detect(path).context("Failed to detect model backend")?;
+    let (default_model, aeron_backend): (Option<Arc<OnnxModel>>, Option<AeronBackend>) =
+        if let Some(ref path) = config.model_path {
+            // Detect backend from file extension
+            let backend = ConfigBackend::detect(path).context("Failed to detect model backend")?;
 
-        match backend {
-            ModelBackend::Onnx => {
-                info!(path = %path.display(), "Loading default ONNX model...");
-                let cfg = InferenceConfig::new(path)
-                    .with_threads(config.inference_workers, config.inference_workers)
-                    .with_optimization(opt_level);
-                let model = tokio::task::spawn_blocking(move || OnnxModel::load(cfg))
+            match backend {
+                ConfigBackend::Onnx => {
+                    info!(path = %path.display(), "Loading default ONNX model...");
+                    let cfg = InferenceConfig::new(path)
+                        .with_threads(config.inference_workers, config.inference_workers)
+                        .with_optimization(opt_level);
+                    let model = tokio::task::spawn_blocking(move || OnnxModel::load(cfg))
+                        .await
+                        .context("spawn_blocking join error")?
+                        .context("Failed to load default ONNX model")?;
+                    info!(
+                        input_shape = ?model.input_shape(),
+                        num_classes = ?model.num_classes(),
+                        "ONNX model loaded"
+                    );
+                    let model_arc = Arc::new(model);
+                    (
+                        Some(Arc::clone(&model_arc)),
+                        Some(AeronBackend::Onnx(model_arc)),
+                    )
+                }
+                ConfigBackend::Gguf => {
+                    info!(path = %path.display(), "Loading default GGUF model...");
+                    let path_clone = path.clone();
+                    let n_threads = config.gguf.n_threads;
+                    let n_ctx = config.gguf.n_ctx;
+                    let mut model = tokio::task::spawn_blocking(move || {
+                        GgufModel::load(&path_clone, n_threads, n_ctx)
+                    })
                     .await
                     .context("spawn_blocking join error")?
-                    .context("Failed to load default ONNX model")?;
-                info!(
-                    input_shape = ?model.input_shape(),
-                    num_classes = ?model.num_classes(),
-                    "ONNX model loaded"
-                );
-                Some(Arc::new(model))
+                    .context("Failed to load default GGUF model")?;
+
+                    // Configure temperature and max_tokens
+                    model.set_temperature(config.gguf.temperature);
+                    model.set_max_tokens(config.gguf.max_tokens);
+
+                    info!(
+                        n_ctx = n_ctx,
+                        temp = config.gguf.temperature,
+                        "GGUF model loaded — Aeron IPC + HTTP API enabled"
+                    );
+
+                    // Wrap in Arc<Mutex<>> for Aeron IPC (interior mutability for generate_streaming)
+                    let gguf_arc = Arc::new(Mutex::new(model));
+                    (None, Some(AeronBackend::Gguf(gguf_arc)))
+                }
             }
-            ModelBackend::Gguf => {
-                info!(path = %path.display(), "Loading default GGUF model...");
-                let path_clone = path.clone();
-                let n_threads = config.gguf.n_threads;
-                let n_ctx = config.gguf.n_ctx;
-                let mut model = tokio::task::spawn_blocking(move || {
-                    GgufModel::load(&path_clone, n_threads, n_ctx)
-                })
-                .await
-                .context("spawn_blocking join error")?
-                .context("Failed to load default GGUF model")?;
-
-                // Configure temperature and max_tokens
-                model.set_temperature(config.gguf.temperature);
-                model.set_max_tokens(config.gguf.max_tokens);
-
-                info!(
-                    n_ctx = n_ctx,
-                    temp = config.gguf.temperature,
-                    "GGUF model loaded"
-                );
-
-                // GGUF models don't implement InferenceModel trait (streaming text gen, not batch inference)
-                // For now, return None to skip Aeron IPC (HTTP-only mode)
-                // Future: Add separate Aeron streaming text protocol
-                info!("⚠️  GGUF model loaded — HTTP API only (Aeron IPC requires ONNX for batch inference)");
-                None
-            }
-        }
-    } else {
-        info!("No default model configured — tenants use the model registry");
-        None
-    };
+        } else {
+            info!("No default model configured — tenants use the model registry");
+            (None, None)
+        };
 
     // ── HTTP API server ───────────────────────────────────────────────────────
     let http_addr: SocketAddr = ([0, 0, 0, 0], config.http_port).into();
@@ -211,12 +214,12 @@ async fn main() -> Result<()> {
     });
 
     // ── Aeron IPC server ──────────────────────────────────────────────────────
-    // Requires a model — use default model if present, otherwise skip Aeron.
-    if let Some(model) = default_model {
+    // Requires a model — use Aeron backend if present, otherwise skip Aeron.
+    if let Some(backend) = aeron_backend {
         let aeron_server = Arc::new(AeronInferenceServer::new(
             &config.channel,
             &config.aeron_dir,
-            model,
+            backend,
         ));
 
         info!(
