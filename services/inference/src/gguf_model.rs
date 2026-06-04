@@ -7,10 +7,10 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use candle_core::{DType, Device, Tensor};
-use candle_nn::VarBuilder;
+use candle_core::quantized::gguf_file;
+use candle_core::{Device, Tensor};
 use candle_transformers::generation::{LogitsProcessor, Sampling};
-use candle_transformers::models::llama::{Cache, Config, Llama};
+use candle_transformers::models::quantized_llama::ModelWeights;
 use tokenizers::Tokenizer;
 use tracing::{debug, info};
 
@@ -19,13 +19,12 @@ use tracing::{debug, info};
 /// Uses HuggingFace Candle (pure Rust, safe) for LLM inference.
 #[allow(dead_code)] // Infrastructure code - HTTP API integration pending
 pub struct GgufModel {
-    model: Llama,
+    model: ModelWeights,
     tokenizer: Tokenizer,
-    cache: Cache,
-    config: Config,
     device: Device,
     temp: f32,
     max_tokens: usize,
+    max_seq_len: usize,
 }
 
 #[allow(dead_code)] // Infrastructure code - HTTP API integration pending
@@ -33,22 +32,28 @@ impl GgufModel {
     /// Load a GGUF model from disk.
     ///
     /// # Arguments
-    /// - `path` — Path to .gguf or .safetensors file
-    /// - `n_threads` — Number of CPU threads (used for CPU device)
-    /// - `n_ctx` — Context window size (default: 4096)
+    /// - `path` — Path to .gguf file
+    /// - `_n_threads` — Number of CPU threads (unused, kept for API compatibility)
+    /// - `n_ctx` — Context window size (used as max_seq_len)
     ///
     /// # Implementation
-    /// Uses Candle's GGUF loader or safetensors loader depending on file extension.
-    /// Loads tokenizer from same directory (tokenizer.json) or embedded.
+    /// Uses Candle's quantized GGUF loader (ModelWeights::from_gguf).
+    /// Loads tokenizer from same directory (tokenizer.json).
     pub fn load<P: AsRef<Path>>(path: P, _n_threads: u32, n_ctx: u32) -> Result<Self> {
         let path = path.as_ref();
         let path_display = path.display();
-        info!("Loading GGUF model via Candle: {path_display} (n_ctx={n_ctx})");
+        info!("Loading GGUF model via Candle quantized API: {path_display} (max_seq_len={n_ctx})");
 
         // Validate file exists
         if !path.exists() {
             let path_display = path.display();
             anyhow::bail!("Model file not found: {path_display}");
+        }
+
+        // Validate GGUF extension
+        let ext = path.extension().and_then(|e| e.to_str());
+        if ext != Some("gguf") {
+            anyhow::bail!("Expected .gguf file, got: {ext:?}");
         }
 
         // Select device (prefer CUDA if available, fallback to CPU)
@@ -59,8 +64,6 @@ impl GgufModel {
             info!("Using CPU device for inference");
             Device::Cpu
         };
-
-        let dtype = DType::F32;
 
         // Load tokenizer from same directory
         let tokenizer_path = path
@@ -80,130 +83,40 @@ impl GgufModel {
 
         info!("Tokenizer loaded from {tokenizer_path:?}");
 
-        // Load model config from config.json (if exists) or use default LLaMA config
-        let config_path = path.parent().map(|p| p.join("config.json"));
-        let config: Config = if let Some(ref cp) = config_path {
-            if cp.exists() {
-                // Parse JSON manually since Config doesn't derive Deserialize
-                let json_str = std::fs::read_to_string(cp)?;
-                let json: serde_json::Value = serde_json::from_str(&json_str)?;
+        // Load GGUF model using quantized API
+        let mut file = std::fs::File::open(path)?;
+        let start = std::time::Instant::now();
 
-                Self::config_from_json(&json, n_ctx)?
-            } else {
-                // Default config for LLaMA-style models
-                Self::default_llama_config(n_ctx)
-            }
-        } else {
-            Self::default_llama_config(n_ctx)
-        };
+        let gguf_content = gguf_file::Content::read(&mut file)
+            .map_err(|e| anyhow::anyhow!("Failed to read GGUF file: {e}"))?;
 
-        debug!(
-            "Model config: vocab_size={}, hidden_size={}",
-            config.vocab_size, config.hidden_size
+        let mut total_size = 0_usize;
+        for (_, tensor_info) in gguf_content.tensor_infos.iter() {
+            let elem_count = tensor_info.shape.elem_count();
+            total_size += elem_count * tensor_info.ggml_dtype.type_size()
+                / tensor_info.ggml_dtype.block_size();
+        }
+
+        info!(
+            "Loaded {} tensors ({:.2} MB) in {:.2}s",
+            gguf_content.tensor_infos.len(),
+            total_size as f64 / 1_000_000.0,
+            start.elapsed().as_secs_f32()
         );
 
-        // Initialize KV cache
-        let cache = Cache::new(true, dtype, &config, &device)?;
-
-        // Load model weights
-        let vb = if path.extension().and_then(|e| e.to_str()) == Some("safetensors") {
-            // Load from safetensors
-            unsafe { VarBuilder::from_mmaped_safetensors(&[path.to_path_buf()], dtype, &device)? }
-        } else if path.extension().and_then(|e| e.to_str()) == Some("gguf") {
-            // Load from GGUF using quantized loader
-            let mut file = std::fs::File::open(path)?;
-            let _gguf_content = candle_core::quantized::gguf_file::Content::read(&mut file)
-                .context("Failed to read GGUF file")?;
-
-            // GGUF uses quantized models which have a different API
-            // For production use, convert to safetensors or use quantized_llama directly
-            anyhow::bail!(
-                "GGUF quantized models require quantized_llama API (different from full-precision Llama). \
-                 For production use, please convert to safetensors format: \
-                 https://huggingface.co/docs/transformers/main/en/serialization"
-            );
-        } else {
-            let ext = path.extension();
-            anyhow::bail!("Unsupported model format: {ext:?}");
-        };
-
-        let model = Llama::load(vb, &config).context("Failed to load LLaMA model from weights")?;
+        // Create model from GGUF
+        let model = ModelWeights::from_gguf(gguf_content, &mut file, &device)
+            .context("Failed to load quantized LLaMA model from GGUF")?;
 
         info!("Model loaded successfully");
 
         Ok(Self {
             model,
             tokenizer,
-            cache,
-            config,
             device,
             temp: 0.7,
             max_tokens: 2048,
-        })
-    }
-
-    /// Default LLaMA configuration for 7B-style models.
-    fn default_llama_config(n_ctx: u32) -> Config {
-        Config {
-            hidden_size: 4096,
-            intermediate_size: 11008,
-            vocab_size: 32000,
-            num_hidden_layers: 32,
-            num_attention_heads: 32,
-            num_key_value_heads: 32,
-            rms_norm_eps: 1e-5,
-            rope_theta: 10000.0,
-            use_flash_attn: false,
-            max_position_embeddings: n_ctx as usize,
-            eos_token_id: Some(candle_transformers::models::llama::LlamaEosToks::Single(2)),
-            bos_token_id: Some(1),
-            rope_scaling: None,
-            tie_word_embeddings: false,
-        }
-    }
-
-    /// Parse Config from HuggingFace config.json format.
-    fn config_from_json(json: &serde_json::Value, n_ctx: u32) -> Result<Config> {
-        let get_u64 = |key: &str| -> Result<usize> {
-            json.get(key)
-                .and_then(|v| v.as_u64())
-                .map(|v| v as usize)
-                .ok_or_else(|| anyhow::anyhow!("Missing or invalid field: {key}"))
-        };
-
-        let get_f64 = |key: &str, default: f64| -> f64 {
-            json.get(key).and_then(|v| v.as_f64()).unwrap_or(default)
-        };
-
-        Ok(Config {
-            hidden_size: get_u64("hidden_size")?,
-            intermediate_size: get_u64("intermediate_size")?,
-            vocab_size: get_u64("vocab_size")?,
-            num_hidden_layers: get_u64("num_hidden_layers")?,
-            num_attention_heads: get_u64("num_attention_heads")?,
-            num_key_value_heads: get_u64("num_key_value_heads")
-                .or_else(|_| get_u64("num_attention_heads"))?, // fallback
-            rms_norm_eps: get_f64("rms_norm_eps", 1e-5),
-            rope_theta: get_f64("rope_theta", 10000.0) as f32,
-            use_flash_attn: false, // Disabled by default for safety
-            max_position_embeddings: json
-                .get("max_position_embeddings")
-                .and_then(|v| v.as_u64())
-                .map(|v| v as usize)
-                .unwrap_or(n_ctx as usize),
-            eos_token_id: json
-                .get("eos_token_id")
-                .and_then(|v| v.as_u64())
-                .map(|id| candle_transformers::models::llama::LlamaEosToks::Single(id as u32)),
-            bos_token_id: json
-                .get("bos_token_id")
-                .and_then(|v| v.as_u64())
-                .map(|v| v as u32),
-            rope_scaling: None, // TODO: Parse if needed
-            tie_word_embeddings: json
-                .get("tie_word_embeddings")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false),
+            max_seq_len: n_ctx as usize,
         })
     }
 
@@ -267,10 +180,10 @@ Provide accurate, concise answers focused on finance, trading, and risk manageme
 
         let mut tokens = encoding.get_ids().to_vec();
 
-        if tokens.len() >= self.config.max_position_embeddings {
+        if tokens.len() >= self.max_seq_len {
             let token_count = tokens.len();
-            let max_pos = self.config.max_position_embeddings;
-            anyhow::bail!("Prompt too long: {token_count} tokens (max: {max_pos})");
+            let max_len = self.max_seq_len;
+            anyhow::bail!("Prompt too long: {token_count} tokens (max: {max_len})");
         }
 
         // Setup logits processor with temperature
@@ -292,35 +205,36 @@ Provide accurate, concise answers focused on finance, trading, and risk manageme
             max_tokens
         };
 
-        for (index_pos, index) in (0..max_gen).enumerate() {
-            let (context_size, context_index) = if index > 0 {
-                // Use KV cache: only process new token
-                (1, index_pos)
+        for index in 0..max_gen {
+            let pos = tokens.len();
+
+            // Check sequence length limit
+            if pos >= self.max_seq_len {
+                debug!("Max sequence length reached: {pos}");
+                break;
+            }
+
+            // Get last token for input
+            let input_token = if index == 0 {
+                // First iteration: use all prompt tokens
+                tokens.as_slice()
             } else {
-                // First iteration: process full prompt
-                (tokens.len(), 0)
+                // Subsequent iterations: use only last token
+                &tokens[tokens.len() - 1..]
             };
 
-            let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
-            let input = Tensor::new(ctxt, &self.device)?.unsqueeze(0)?;
+            let input = Tensor::new(input_token, &self.device)?.unsqueeze(0)?;
 
-            // Forward pass
-            let logits = self
-                .model
-                .forward(&input, context_index, &mut self.cache)?
-                .squeeze(0)?;
+            // Forward pass with quantized model (takes position directly)
+            let logits = self.model.forward(&input, pos)?.squeeze(0)?;
 
             // Sample next token
             let next_token = logits_processor.sample(&logits)?;
 
-            // Check for EOS
-            if let Some(candle_transformers::models::llama::LlamaEosToks::Single(eos_id)) =
-                self.config.eos_token_id
-            {
-                if next_token == eos_id {
-                    debug!("EOS token encountered, stopping generation");
-                    break;
-                }
+            // Check for common EOS tokens (2 for LLaMA, 128001/128009 for LLaMA3)
+            if next_token == 2 || next_token == 128001 || next_token == 128009 {
+                debug!("EOS token encountered: {next_token}");
+                break;
             }
 
             tokens.push(next_token);
@@ -375,17 +289,9 @@ mod tests {
     #[test]
     fn test_model_validation() {
         // Test that non-existent file returns error
-        let result = GgufModel::load("/nonexistent/model.safetensors", 8, 4096);
+        let result = GgufModel::load("/nonexistent/model.gguf", 8, 4096);
         assert!(result.is_err());
         let err_msg = result.err().unwrap().to_string();
         assert!(err_msg.contains("Model file not found"));
-    }
-
-    #[test]
-    fn test_default_config() {
-        let config = GgufModel::default_llama_config(4096);
-        assert_eq!(config.max_position_embeddings, 4096);
-        assert_eq!(config.vocab_size, 32000);
-        assert_eq!(config.num_hidden_layers, 32);
     }
 }
