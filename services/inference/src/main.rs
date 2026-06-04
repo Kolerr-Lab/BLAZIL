@@ -20,6 +20,7 @@
 //! ./inference-server --http-port 9000 --model squeezenet.onnx --workers 8
 //! ```
 
+mod aeron_server;
 mod config;
 mod gguf_model;
 mod http_api;
@@ -214,29 +215,55 @@ async fn main() -> Result<()> {
     });
 
     // ── Aeron IPC server ──────────────────────────────────────────────────────
-    // Requires a model — use Aeron backend if present, otherwise skip Aeron.
+    // Spawn dedicated thread for Aeron IPC (GGUF models only).
+    // ONNX models continue using tokio-based AeronInferenceServer.
     if let Some(backend) = aeron_backend {
-        let aeron_server = Arc::new(AeronInferenceServer::new(
-            &config.channel,
-            &config.aeron_dir,
-            backend,
-        ));
+        match backend {
+            AeronBackend::Gguf(gguf_model) => {
+                // Spawn dedicated std::thread for GGUF + Aeron IPC
+                // (Aeron FFI is not Send/Sync — requires OS thread)
+                let aeron_dir = config.aeron_dir.clone();
+                std::thread::Builder::new()
+                    .name("aeron-gguf-listener".to_string())
+                    .spawn(move || {
+                        aeron_server::run(gguf_model, &aeron_dir);
+                    })
+                    .expect("Failed to spawn Aeron IPC thread");
 
-        info!(
-            channel = %config.channel,
-            "🚀 Aeron IPC inference server starting"
-        );
-        info!("blazil-inference-server ready");
+                info!(
+                    aeron_dir = %config.aeron_dir,
+                    "🚀 GGUF Aeron IPC listener started (dedicated thread)"
+                );
+                info!("blazil-inference-server ready (GGUF + HTTP)");
 
-        let server_clone = Arc::clone(&aeron_server);
-        tokio::spawn(async move {
-            shutdown_signal().await;
-            info!("Shutdown signal received");
-            server_clone.shutdown().await;
-        });
+                // Block on HTTP server (Aeron thread runs independently)
+                let _ = http_handle.await;
+            }
+            AeronBackend::Onnx(onnx_model) => {
+                // ONNX models use existing AeronInferenceServer (tokio-based)
+                let aeron_server = Arc::new(AeronInferenceServer::new(
+                    &config.channel,
+                    &config.aeron_dir,
+                    AeronBackend::Onnx(onnx_model),
+                ));
 
-        if let Err(e) = aeron_server.serve().await {
-            error!("Aeron inference server error: {e}");
+                info!(
+                    channel = %config.channel,
+                    "🚀 ONNX Aeron IPC inference server starting"
+                );
+                info!("blazil-inference-server ready (ONNX + HTTP)");
+
+                let server_clone = Arc::clone(&aeron_server);
+                tokio::spawn(async move {
+                    shutdown_signal().await;
+                    info!("Shutdown signal received");
+                    server_clone.shutdown().await;
+                });
+
+                if let Err(e) = aeron_server.serve().await {
+                    error!("Aeron inference server error: {e}");
+                }
+            }
         }
     } else {
         info!("🚀 HTTP-only mode — Aeron IPC disabled (no default model)");

@@ -1,5 +1,6 @@
 //! Library exports for inference service.
 
+pub mod aeron_server;
 pub mod config;
 pub mod gguf_model;
 pub mod http_api;
