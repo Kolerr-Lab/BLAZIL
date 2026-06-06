@@ -26,6 +26,7 @@ mod gguf_model;
 mod http_api;
 mod metrics;
 mod model_registry;
+mod models; // Vendored model architectures with distributed pipeline support
 mod protocol;
 mod server;
 
@@ -223,15 +224,21 @@ async fn main() -> Result<()> {
                 // Spawn dedicated std::thread for GGUF + Aeron IPC
                 // (Aeron FFI is not Send/Sync — requires OS thread)
                 let aeron_dir = config.aeron_dir.clone();
+                let distributed = if config.distributed.enabled {
+                    Some(config.distributed.clone())
+                } else {
+                    None
+                };
                 std::thread::Builder::new()
                     .name("aeron-gguf-listener".to_string())
                     .spawn(move || {
-                        aeron_server::run(gguf_model, &aeron_dir);
+                        aeron_server::run(gguf_model, &aeron_dir, distributed);
                     })
                     .expect("Failed to spawn Aeron IPC thread");
 
                 info!(
                     aeron_dir = %config.aeron_dir,
+                    distributed = config.distributed.enabled,
                     "🚀 GGUF Aeron IPC listener started (dedicated thread)"
                 );
                 info!("blazil-inference-server ready (GGUF + HTTP)");

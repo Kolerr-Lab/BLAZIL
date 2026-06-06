@@ -24,11 +24,31 @@ use serde::{Deserialize, Serialize};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-/// Stream ID for inbound client→server inference requests.
+/// Stream ID for inbound client→server inference requests (legacy single-stage).
 pub const INFERENCE_REQ_STREAM_ID: i32 = 2001;
 
-/// Stream ID for outbound server→client inference responses.
+/// Stream ID for outbound server→client inference responses (legacy single-stage).
 pub const INFERENCE_RSP_STREAM_ID: i32 = 2002;
+
+/// Stream ID for stage→stage activation tensor transfers (distributed pipeline).
+#[allow(dead_code)] // Infrastructure - used in distributed mode
+pub const ACTIVATION_TRANSFER_STREAM_ID: i32 = 2003;
+
+// ── Pipeline Stream IDs (Multi-Stage Distributed Inference) ──────────────────
+
+/// Client → Stage 1: Inference request prompts (Aeron IPC).
+pub const PIPELINE_CLIENT_TO_STAGE1: i32 = 1001;
+
+/// Stage 1 → Stage 2: Activation tensor transfer (Aeron IPC).
+#[allow(dead_code)] // Used via config (dist.next_stream_id)
+pub const PIPELINE_STAGE1_TO_STAGE2: i32 = 2001;
+
+/// Stage 2 → Stage 3: Activation tensor transfer (Aeron IPC).
+#[allow(dead_code)] // Used via config (dist.next_stream_id)
+pub const PIPELINE_STAGE2_TO_STAGE3: i32 = 2002;
+
+/// Stage 3 → Client: Final token streaming response (Aeron IPC).
+pub const PIPELINE_STAGE3_TO_CLIENT: i32 = 1002;
 
 // ── InferenceRequest ──────────────────────────────────────────────────────────
 
@@ -145,6 +165,53 @@ impl Default for InferenceResponse {
     }
 }
 
+// ── ActivationTransfer ────────────────────────────────────────────────────────
+
+/// Activation tensor transfer between pipeline stages (distributed inference).
+///
+/// **Pipeline Parallelism Design:**
+/// - KV Cache is STRICTLY LOCAL to each node (never transferred)
+/// - Only activation tensors flow forward across the network
+/// - Each node processes its assigned layer range and forwards activations
+///
+/// # Flow Example (3-stage Qwen2.5-7B)
+/// ```text
+/// Node 1 (layers 0-9):
+///   Input tokens → Embeddings → Layers 0-9 → Activation Tensor
+///   → UDP transfer to Node 2
+///
+/// Node 2 (layers 10-19):
+///   Receive Activation → Layers 10-19 → Activation Tensor
+///   → UDP transfer to Node 3
+///
+/// Node 3 (layers 20-28 + LM Head):
+///   Receive Activation → Layers 20-28 → LM Head → Output tokens
+///   → SSE stream to client
+/// ```
+///
+/// # Wire Protocol
+/// ```text
+/// Stage N → Aeron:UDP (stream 2003) → Stage N+1
+///   MessagePack(ActivationTransfer { request_id, shape, data })
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[allow(dead_code)] // Infrastructure - used in distributed mode
+pub struct ActivationTransfer {
+    /// Request ID for correlation across pipeline stages.
+    pub request_id: String,
+
+    /// Tensor shape: [batch, seq_len, hidden_dim] (e.g., [1, 512, 4096]).
+    ///
+    /// Required for reconstructing tensor on receiving node.
+    pub shape: Vec<usize>,
+
+    /// Flattened activation tensor data (f32 values).
+    ///
+    /// Total elements = shape.product()
+    /// Memory layout: contiguous row-major (C order)
+    pub data: Vec<f32>,
+}
+
 // ── Serialization Helpers ─────────────────────────────────────────────────────
 
 /// Serialize an `InferenceRequest` to MessagePack bytes.
@@ -167,6 +234,18 @@ pub fn serialize_response(resp: &InferenceResponse) -> anyhow::Result<Vec<u8>> {
 #[allow(dead_code)]
 pub fn deserialize_response(data: &[u8]) -> anyhow::Result<InferenceResponse> {
     rmp_serde::from_slice(data).map_err(|e| anyhow::anyhow!("deserialize response: {e}"))
+}
+
+/// Serialize an `ActivationTransfer` to MessagePack bytes.
+#[allow(dead_code)] // Infrastructure - used in distributed mode
+pub fn serialize_activation(act: &ActivationTransfer) -> anyhow::Result<Vec<u8>> {
+    rmp_serde::to_vec(act).map_err(|e| anyhow::anyhow!("serialize activation: {e}"))
+}
+
+/// Deserialize an `ActivationTransfer` from MessagePack bytes.
+#[allow(dead_code)] // Infrastructure - used in distributed mode
+pub fn deserialize_activation(data: &[u8]) -> anyhow::Result<ActivationTransfer> {
+    rmp_serde::from_slice(data).map_err(|e| anyhow::anyhow!("deserialize activation: {e}"))
 }
 
 #[cfg(test)]

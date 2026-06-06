@@ -61,6 +61,7 @@ pub mod simd;
 pub use cross_shard::{route_cross_shard, CrossShardRoute, CrossShardTransfer};
 pub use event::{EventFlags, TransactionEvent, TransactionResult};
 pub use handler::EventHandler;
+pub use handlers::risk::{FraudScorer, NoopFraudScorer, RiskHandler};
 pub use metrics::{EngineMetrics, ShardMetrics};
 pub use pipeline::{Pipeline, PipelineBuilder, PipelineRunner};
 pub use sharded_pipeline::ShardedPipeline;

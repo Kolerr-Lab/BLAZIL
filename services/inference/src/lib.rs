@@ -6,6 +6,7 @@ pub mod gguf_model;
 pub mod http_api;
 pub mod metrics;
 pub mod model_registry;
+pub mod models; // Vendored model architectures with distributed pipeline support
 pub mod protocol;
 pub mod server;
 

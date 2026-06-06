@@ -55,6 +55,78 @@ pub struct GgufConfig {
     pub max_tokens: usize,
 }
 
+/// Distributed pipeline configuration for multi-stage inference.
+///
+/// Enables splitting a large GGUF model across multiple processes using
+/// Aeron IPC shared memory for zero-copy activation tensor transfers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DistributedConfig {
+    /// Enable distributed pipeline mode.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Current node's stage number (1, 2, or 3).
+    #[serde(default = "default_node_stage")]
+    pub node_stage: usize,
+
+    /// Starting layer index (inclusive) for this stage.
+    #[serde(default)]
+    pub layer_start: usize,
+
+    /// Ending layer index (exclusive) for this stage.
+    #[serde(default)]
+    pub layer_end: usize,
+
+    /// Aeron IPC stream ID for receiving activations from previous stage.
+    /// Stage 1 ignores this (receives prompts from client on stream 1001).
+    #[serde(default)]
+    pub prev_stream_id: i32,
+
+    /// Aeron IPC stream ID for sending activations to next stage.
+    /// Stage 3 ignores this (sends tokens to client on stream 1002).
+    #[serde(default)]
+    pub next_stream_id: i32,
+
+    /// CPU core IDs to pin inference threads to (e.g., [0, 1, 2, 3] for Stage 1).
+    /// Empty array = no pinning.
+    #[serde(default)]
+    pub assigned_cores: Vec<usize>,
+
+    /// Enable aggressive spin-polling (zero-sleep busy-wait during active inference).
+    /// Maximizes throughput at the cost of 100% CPU utilization.
+    #[serde(default = "default_spin_poll")]
+    pub enable_spin_poll: bool,
+
+    /// Boost thread priority to real-time scheduling (requires CAP_SYS_NICE).
+    /// WARNING: May cause system instability if other critical processes starve.
+    #[serde(default = "default_realtime_priority")]
+    pub enable_realtime_priority: bool,
+}
+
+fn default_spin_poll() -> bool {
+    true
+}
+
+fn default_realtime_priority() -> bool {
+    false // Disabled by default (requires elevated privileges)
+}
+
+impl Default for DistributedConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            node_stage: default_node_stage(),
+            layer_start: 0,
+            layer_end: 0,
+            prev_stream_id: 0,
+            next_stream_id: 0,
+            assigned_cores: vec![],
+            enable_spin_poll: default_spin_poll(),
+            enable_realtime_priority: default_realtime_priority(),
+        }
+    }
+}
+
 impl Default for GgufConfig {
     fn default() -> Self {
         Self {
@@ -115,6 +187,10 @@ pub struct ServerConfig {
     /// GGUF model configuration.
     #[serde(default)]
     pub gguf: GgufConfig,
+
+    /// Distributed pipeline configuration (multi-stage inference).
+    #[serde(default)]
+    pub distributed: DistributedConfig,
 }
 
 impl Default for ServerConfig {
@@ -130,6 +206,7 @@ impl Default for ServerConfig {
             model_dir: default_model_dir(),
             api_key: String::new(),
             gguf: GgufConfig::default(),
+            distributed: DistributedConfig::default(),
         }
     }
 }
@@ -236,4 +313,10 @@ fn default_gguf_temp() -> f32 {
 
 fn default_gguf_max_tokens() -> usize {
     2048
+}
+
+// ── Distributed defaults ──────────────────────────────────────────────────────
+
+fn default_node_stage() -> usize {
+    1
 }
