@@ -812,7 +812,7 @@ fn idle_backoff(idle_count: &mut u64, is_idle: bool) {
     if is_idle {
         *idle_count += 1;
 
-        if *idle_count % 100_000 == 0 {
+        if (*idle_count).is_multiple_of(100_000) {
             debug!("Aeron polling active... idle_count={}", idle_count);
         }
 
