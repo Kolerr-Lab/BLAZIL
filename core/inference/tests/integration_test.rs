@@ -91,6 +91,7 @@ fn test_run_inference_squeezenet() {
 }
 
 #[test]
+#[ignore = "CUDA not supported by Tract backend - only CPU available"]
 #[cfg(feature = "cuda")]
 fn test_load_onnx_model_cuda() {
     let model_path = download_test_model(

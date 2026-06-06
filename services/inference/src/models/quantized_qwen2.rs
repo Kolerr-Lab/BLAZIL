@@ -357,7 +357,7 @@ impl ModelWeights {
     /// Intermediate hidden states after executing layers [layer_start, layer_end).
     ///
     /// # Example
-    /// ```rust
+    /// ```rust,ignore
     /// // Stage 1: Embed + layers 0-26
     /// let h1 = model.forward_layer_range(tokens, 0, 27, 0, true, false)?;
     ///

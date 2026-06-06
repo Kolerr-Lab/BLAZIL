@@ -90,7 +90,7 @@ const IDLE_YIELD_THRESHOLD: u64 = 50_000; // Yield for ~1-2ms before microsleep
 /// `true` if pinning succeeded, `false` otherwise.
 ///
 /// # Example
-/// ```rust
+/// ```rust,ignore
 /// // Pin Stage 1 worker to cores 0-3
 /// apply_cpu_affinity(&[0, 1, 2, 3]);
 /// ```

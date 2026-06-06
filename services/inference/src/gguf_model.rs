@@ -93,7 +93,7 @@ impl GgufModel {
     /// - KV Cache remains local (not transferred across network)
     ///
     /// # Example
-    /// ```rust
+    /// ```rust,ignore
     /// // Stage 2: Load layers 10-19 only
     /// let model = GgufModel::load_with_layer_range(
     ///     "model.gguf",
@@ -386,7 +386,7 @@ Provide accurate, concise answers focused on finance, trading, and risk manageme
     /// when Candle exposes `model.layers[idx].forward()` API.
     ///
     /// # Example
-    /// ```rust
+    /// ```rust,ignore
     /// // Stage 1: Execute layers 0-10
     /// let activation = model.forward_layer_range(
     ///     &tokens,
@@ -498,7 +498,7 @@ Provide accurate, concise answers focused on finance, trading, and risk manageme
     /// Reconstructed Candle Tensor ready for layer execution.
     ///
     /// # Example
-    /// ```rust
+    /// ```rust,ignore
     /// // Stage 2: Receive activation from Stage 1
     /// let incoming_tensor = GgufModel::reconstruct_activation(&activation, &device)?;
     /// ```
@@ -532,7 +532,7 @@ Provide accurate, concise answers focused on finance, trading, and risk manageme
     /// - `Ok(Right(text))` — Final generated text (from last stage)
     ///
     /// # Example
-    /// ```rust
+    /// ```rust,ignore
     /// // Stage 2: Continue from Stage 1's activation
     /// match model.generate_from_activation(activation, 10, 20, 100, |tok| { ... })? {
     ///     Either::Left(next_activation) => {
@@ -659,7 +659,7 @@ Provide accurate, concise answers focused on finance, trading, and risk manageme
     /// ActivationState to be sent to next pipeline stage.
     ///
     /// # Example
-    /// ```rust
+    /// ```rust,ignore
     /// // Stage 1: Process prompt through layers 0-10
     /// let activation = model.generate_from_tokens_layer_range(
     ///     "What is quantization?",
