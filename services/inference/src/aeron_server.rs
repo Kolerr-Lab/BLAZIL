@@ -130,19 +130,9 @@ fn apply_cpu_affinity(cores: &[usize]) -> bool {
 fn boost_thread_priority() -> bool {
     unsafe {
         let thread_id = pthread_self();
-        let param = sched_param {
-            sched_priority: 99, // Maximum real-time priority (1-99 scale)
-            __sched_ss_low_priority: 0,
-            __sched_ss_repl_period: libc::timespec {
-                tv_sec: 0,
-                tv_nsec: 0,
-            },
-            __sched_ss_init_budget: libc::timespec {
-                tv_sec: 0,
-                tv_nsec: 0,
-            },
-            __sched_ss_max_repl: 0,
-        };
+        // Use zeroed() to avoid field initialization issues across libc versions
+        let mut param: sched_param = std::mem::zeroed();
+        param.sched_priority = 99; // Maximum real-time priority (1-99 scale)
 
         let result = sched_setscheduler(thread_id as i32, SCHED_FIFO, &param);
         if result == 0 {
