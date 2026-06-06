@@ -139,8 +139,7 @@ fn boost_thread_priority() -> bool {
             info!("✅ Thread priority boosted to real-time (SCHED_FIFO, priority 99)");
             true
         } else {
-            let errno = *libc::__error();
-            warn!("⚠️ Failed to boost thread priority (errno {errno}). Run with CAP_SYS_NICE or as root.");
+            warn!("⚠️ Failed to boost thread priority. Run with CAP_SYS_NICE or as root.");
             false
         }
     }
