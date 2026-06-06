@@ -94,6 +94,7 @@ pub struct InferenceRequest {
 /// assert_eq!(decoded.request_id, resp.request_id);
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct InferenceResponse {
     /// Request ID from the original request.
     pub request_id: String,
@@ -128,6 +129,20 @@ pub struct InferenceResponse {
     ///
     /// Non-empty means inference failed. Client should log and retry.
     pub error: String,
+}
+
+impl Default for InferenceResponse {
+    fn default() -> Self {
+        Self {
+            request_id: String::new(),
+            class_id: None,
+            probabilities: Vec::new(),
+            raw_output: Vec::new(),
+            confidence: 0.0,
+            latency_us: 0,
+            error: String::new(),
+        }
+    }
 }
 
 // ── Serialization Helpers ─────────────────────────────────────────────────────

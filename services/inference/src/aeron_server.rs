@@ -66,8 +66,10 @@ const FRAGMENT_LIMIT: usize = 256;
 /// Max spin retries on Aeron offer backpressure before yielding.
 const OFFER_SPIN_RETRIES: usize = 64;
 
-/// After this many empty polls, yield to other threads.
-const SPIN_BEFORE_YIELD: u32 = 512;
+/// Idle strategy thresholds to prevent CPU starvation of embedded Media Driver.
+/// On macOS (especially Apple Silicon), tight polling can starve driver threads.
+const IDLE_SPIN_THRESHOLD: u64 = 100; // Start spin hints after 100 empty polls
+const IDLE_YIELD_THRESHOLD: u64 = 1000; // Yield to OS after 1000 empty polls
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -140,10 +142,10 @@ pub fn run_with_channel(model: Arc<Mutex<GgufModel>>, aeron_dir: &str, channel: 
         INFERENCE_RSP_STREAM_ID
     );
 
-    // 5. Enter poll loop
+    // 5. Enter poll loop with idle strategy
     info!("✅ Aeron IPC inference server ready — entering poll loop");
 
-    let mut empty_polls: u32 = 0;
+    let mut idle_count: u64 = 0;
     let mut fragments: Vec<Vec<u8>> = Vec::with_capacity(FRAGMENT_LIMIT);
     let mut requests_processed: u64 = 0;
 
@@ -153,6 +155,9 @@ pub fn run_with_channel(model: Arc<Mutex<GgufModel>>, aeron_dir: &str, channel: 
         let fragments_read = sub.poll_fragments(&mut fragments, FRAGMENT_LIMIT);
 
         if fragments_read > 0 {
+            // Reset idle counter when we have work
+            idle_count = 0;
+
             for buffer in &fragments {
                 // Deserialize MessagePack request
                 let req = match deserialize_request(buffer) {
@@ -220,16 +225,19 @@ pub fn run_with_channel(model: Arc<Mutex<GgufModel>>, aeron_dir: &str, channel: 
                     }
                 }
             }
-            empty_polls = 0;
         } else {
-            // No fragments — yield to other threads after N spins
-            empty_polls += 1;
-            if empty_polls >= SPIN_BEFORE_YIELD {
+            // No fragments — implement idle strategy to prevent CPU starvation
+            idle_count += 1;
+
+            if idle_count > IDLE_YIELD_THRESHOLD {
+                // After 1000 empty polls, yield to OS scheduler
+                // This gives CPU time to embedded Media Driver threads
                 std::thread::yield_now();
-                empty_polls = 0;
-            } else {
+            } else if idle_count > IDLE_SPIN_THRESHOLD {
+                // After 100 empty polls, add micro-pause
                 std::hint::spin_loop();
             }
+            // else: tight loop for low latency on first idle cycles
         }
     }
 
