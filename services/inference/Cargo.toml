@@ -72,5 +72,11 @@ subtle = "2"
 num_cpus = "1.16"
 serde_json = "1.0"
 
+[features]
+# Opt-in AVX-512 VNNI optimizations for LLM inference acceleration
+# Requires nightly Rust toolchain and Intel CPU with AVX-512 support
+# Usage: cargo +nightly build --release --features avx512
+avx512 = []
+
 [dev-dependencies]
 tempfile = "3.10"

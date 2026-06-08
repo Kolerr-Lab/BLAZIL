@@ -17,6 +17,9 @@
 //! - Intel Intrinsics Guide: https://www.intel.com/content/www/us/en/docs/intrinsics-guide/
 //! - VNNI: https://en.wikichip.org/wiki/x86/avx512_vnni
 
+// Enable unstable AVX-512 intrinsics when avx512 feature is enabled
+#![cfg_attr(feature = "avx512", feature(stdarch_x86_avx512))]
+
 use std::arch::x86_64::*;
 
 /// Check if CPU supports AVX-512 and VNNI at runtime.
