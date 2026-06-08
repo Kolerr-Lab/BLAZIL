@@ -50,6 +50,10 @@ pub const PIPELINE_STAGE2_TO_STAGE3: i32 = 2002;
 /// Stage 3 → Client: Final token streaming response (Aeron IPC).
 pub const PIPELINE_STAGE3_TO_CLIENT: i32 = 1002;
 
+/// Stage 3 → Stage 1: Decode token feedback for distributed decode loop (Aeron IPC).
+#[allow(dead_code)] // Infrastructure - will be used when Stage 1 orchestration is implemented
+pub const PIPELINE_STAGE3_TO_STAGE1: i32 = 1003;
+
 // ── InferenceRequest ──────────────────────────────────────────────────────────
 
 /// Inference request sent by a client over Aeron IPC.
@@ -200,16 +204,41 @@ pub struct ActivationTransfer {
     /// Request ID for correlation across pipeline stages.
     pub request_id: String,
 
-    /// Tensor shape: [batch, seq_len, hidden_dim] (e.g., [1, 512, 4096]).
-    ///
-    /// Required for reconstructing tensor on receiving node.
+    /// Shape of activation tensor [batch, seq_len, hidden_size].
     pub shape: Vec<usize>,
 
-    /// Flattened activation tensor data (f32 values).
-    ///
-    /// Total elements = shape.product()
-    /// Memory layout: contiguous row-major (C order)
+    /// Flattened activation tensor data.
     pub data: Vec<f32>,
+
+    /// Current sequence position (for KV cache indexing in receiving stage).
+    pub position: usize,
+
+    /// Accumulated token IDs (for context preservation across stages).
+    pub tokens: Vec<u32>,
+}
+
+// ── TokenResponse (Decode Loop Feedback) ─────────────────────────────────────
+
+/// Single token response from Stage 3 back to Stage 1 for decode loop orchestration.
+///
+/// Used in distributed decode: Stage 3 samples one token and sends it back to
+/// Stage 1, which appends it and sends through the pipeline again for next token.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenResponse {
+    /// Request ID for correlation.
+    pub request_id: String,
+
+    /// Sampled token ID.
+    pub token_id: u32,
+
+    /// Decoded token text (UTF-8).
+    pub token_text: String,
+
+    /// Is this an EOS (end-of-sequence) token?
+    pub is_eos: bool,
+
+    /// Current position in sequence (for next iteration).
+    pub position: usize,
 }
 
 // ── Serialization Helpers ─────────────────────────────────────────────────────
@@ -246,6 +275,18 @@ pub fn serialize_activation(act: &ActivationTransfer) -> anyhow::Result<Vec<u8>>
 #[allow(dead_code)] // Infrastructure - used in distributed mode
 pub fn deserialize_activation(data: &[u8]) -> anyhow::Result<ActivationTransfer> {
     rmp_serde::from_slice(data).map_err(|e| anyhow::anyhow!("deserialize activation: {e}"))
+}
+
+/// Serialize a `TokenResponse` to MessagePack bytes.
+#[allow(dead_code)] // Used in distributed decode loop
+pub fn serialize_token_response(tok: &TokenResponse) -> anyhow::Result<Vec<u8>> {
+    rmp_serde::to_vec(tok).map_err(|e| anyhow::anyhow!("serialize token response: {e}"))
+}
+
+/// Deserialize a `TokenResponse` from MessagePack bytes.
+#[allow(dead_code)] // Used in distributed decode loop
+pub fn deserialize_token_response(data: &[u8]) -> anyhow::Result<TokenResponse> {
+    rmp_serde::from_slice(data).map_err(|e| anyhow::anyhow!("deserialize token response: {e}"))
 }
 
 #[cfg(test)]

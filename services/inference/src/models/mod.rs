@@ -18,5 +18,9 @@
 //! 1. **`ModelWeights.layers`**: Changed from private to `pub`
 //! 2. **`forward_layer_range()`**: New method for partial layer execution
 //! 3. **KV Cache Locality**: Maintained per-stage (never transferred)
+//! 4. **AVX-512 VNNI Kernels**: Production SIMD optimizations for RmsNorm, Attention, MLP
 
 pub mod quantized_qwen2;
+
+#[cfg(target_arch = "x86_64")]
+pub mod avx512_kernels;

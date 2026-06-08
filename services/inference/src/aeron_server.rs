@@ -28,6 +28,7 @@
 //! - Predictable drop order (critical for C cleanup)
 //! - No async overhead for tight poll loop
 
+use std::collections::HashMap;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -41,9 +42,10 @@ use blazil_transport::aeron::{
 use crate::config::DistributedConfig;
 use crate::gguf_model::GgufModel;
 use crate::protocol::{
-    deserialize_activation, deserialize_request, serialize_activation, serialize_response,
-    ActivationTransfer, InferenceRequest, InferenceResponse, INFERENCE_REQ_STREAM_ID,
-    INFERENCE_RSP_STREAM_ID, PIPELINE_CLIENT_TO_STAGE1, PIPELINE_STAGE3_TO_CLIENT,
+    deserialize_activation, deserialize_request, deserialize_token_response, serialize_activation,
+    serialize_response, serialize_token_response, ActivationTransfer, InferenceRequest,
+    InferenceResponse, TokenResponse, INFERENCE_REQ_STREAM_ID, INFERENCE_RSP_STREAM_ID,
+    PIPELINE_CLIENT_TO_STAGE1, PIPELINE_STAGE3_TO_CLIENT, PIPELINE_STAGE3_TO_STAGE1,
 };
 
 // ── OS Tuning Imports ──────────────────────────────────────────────────────────
@@ -67,7 +69,7 @@ const DEFAULT_CHANNEL: &str = "aeron:ipc?term-length=67108864";
 const REGISTRATION_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Maximum fragments processed per poll.
-const FRAGMENT_LIMIT: usize = 256;
+const FRAGMENT_LIMIT: usize = 4096;
 
 /// Max spin retries on Aeron offer backpressure before yielding.
 const OFFER_SPIN_RETRIES: usize = 64;
@@ -242,11 +244,16 @@ pub fn run_with_channel(
         "🚀 Starting Aeron IPC inference listener (dedicated thread)"
     );
 
-    // 1. Start embedded Aeron C driver
-    let driver = EmbeddedAeronDriver::new(Some(aeron_dir));
-    driver.start().expect("EmbeddedAeronDriver::start failed");
-
-    info!("✓ Embedded Aeron driver started");
+    // 1. Start or attach to the Aeron C driver.
+    let _driver = if std::env::var("BLAZIL_ATTACH_EXISTING_AERON").as_deref() == Ok("1") {
+        info!("✓ Attaching to existing Aeron driver");
+        None
+    } else {
+        let driver = EmbeddedAeronDriver::new(Some(aeron_dir));
+        driver.start().expect("EmbeddedAeronDriver::start failed");
+        info!("✓ Embedded Aeron driver started");
+        Some(driver)
+    };
 
     // 2. Create Aeron context
     let ctx = AeronContext::new(aeron_dir).expect("AeronContext::new failed");
@@ -347,9 +354,56 @@ fn run_single_stage(model: Arc<Mutex<GgufModel>>, ctx: &AeronContext, channel: &
     }
 }
 
-// ── Stage 1 Handler (Pipeline Entry Point) ───────────────────────────────────
+// ── Decode State Tracking ─────────────────────────────────────────────────────
 
-/// Stage 1: Receive client prompts → Execute layers 0-9 → Forward activations to Stage 2.
+/// Tracks the decode state for a single request flowing through the distributed pipeline.
+///
+/// Stage 1 maintains this state to orchestrate the decode loop: after prefill completes,
+/// each token sampled by Stage 3 is fed back through the pipeline until EOS or max_tokens.
+#[derive(Debug, Clone)]
+#[allow(dead_code)] // Fields used in orchestration logic, not all accessed directly
+struct DecodeState {
+    /// Request identifier (matches InferenceRequest.request_id)
+    request_id: String,
+
+    /// Accumulated token IDs (includes prompt tokens + generated tokens)
+    tokens: Vec<u32>,
+
+    /// Accumulated generated text (for final response)
+    generated_text: String,
+
+    /// Current sequence position (for KV cache indexing)
+    current_position: usize,
+
+    /// Prompt length (number of tokens from prefill, excluding generated tokens)
+    prompt_length: usize,
+
+    /// Maximum tokens to generate (from InferenceRequest.max_tokens)
+    max_tokens: usize,
+
+    /// Request start time (for latency tracking)
+    start_time: Instant,
+}
+
+// ── Stage 1 Handler (Pipeline Entry Point + Decode Orchestrator) ─────────────
+
+/// Stage 1: Distributed Decode Orchestrator
+///
+/// **Responsibilities:**
+/// 1. Receive client prompts → Tokenize → Run layers 0-10 (prefill) → Forward to Stage 2
+/// 2. Subscribe to token feedback from Stage 3 (Stream 1003)
+/// 3. Orchestrate decode loop:
+///    - Receive sampled token from Stage 3
+///    - If EOS or max_tokens: Send final response to client, cleanup state
+///    - Else: Run single token through layers 0-10 (decode) → Forward to Stage 2
+/// 4. Track concurrent requests with thread-safe state management
+///
+/// **Architecture:**
+/// ```text
+/// Client → S1 (prefill) → S2 → S3 → sample token → S1 (feedback)
+///            ↑                                          ↓
+///            └──────── decode orchestration ←──────────┘
+/// ```
 fn run_stage1_pipeline(
     model: Arc<Mutex<GgufModel>>,
     ctx: &AeronContext,
@@ -357,18 +411,16 @@ fn run_stage1_pipeline(
     dist: DistributedConfig,
 ) {
     info!(
-        "🚀 Stage 1 Pipeline: layers {}-{} → Stream {}",
+        "🚀 Stage 1 Pipeline (Decode Orchestrator): layers {}-{} → Stream {}",
         dist.layer_start, dist.layer_end, dist.next_stream_id
     );
 
     // ── Bare-Metal OS Tuning ──────────────────────────────────────────────────
 
-    // Apply CPU affinity pinning
     if !dist.assigned_cores.is_empty() {
         apply_cpu_affinity(&dist.assigned_cores);
     }
 
-    // Boost thread priority to real-time (if enabled)
     if dist.enable_realtime_priority {
         boost_thread_priority();
     }
@@ -377,6 +429,8 @@ fn run_stage1_pipeline(
         "⚙️  OS tuning: cores={:?}, spin_poll={}, realtime={}",
         dist.assigned_cores, dist.enable_spin_poll, dist.enable_realtime_priority
     );
+
+    // ── Aeron Subscriptions & Publications ────────────────────────────────────
 
     // Subscribe to client requests (Stream 1001)
     let sub_client = AeronSubscription::new(
@@ -387,21 +441,57 @@ fn run_stage1_pipeline(
     )
     .expect("Stage 1: Failed to subscribe to client stream");
 
+    // Subscribe to token feedback from Stage 3 (Stream 1003) - NEW for decode orchestration
+    let sub_tokens = AeronSubscription::new(
+        ctx,
+        channel,
+        PIPELINE_STAGE3_TO_STAGE1,
+        REGISTRATION_TIMEOUT,
+    )
+    .expect("Stage 1: Failed to subscribe to token feedback stream");
+
     // Publish activations to Stage 2 (Stream 2001)
     let pub_stage2 = AeronPublication::new(ctx, channel, dist.next_stream_id, REGISTRATION_TIMEOUT)
         .expect("Stage 1: Failed to publish to Stage 2 stream");
 
-    info!("✅ Stage 1 ready: listening for client prompts");
+    // Publish final responses to client (Stream 1002)
+    let pub_client = AeronPublication::new(
+        ctx,
+        channel,
+        PIPELINE_STAGE3_TO_CLIENT,
+        REGISTRATION_TIMEOUT,
+    )
+    .expect("Stage 1: Failed to publish to client stream");
 
+    info!("✅ Stage 1 ready: orchestrating distributed decode loop");
+
+    // ── Thread-Safe State Management ──────────────────────────────────────────
+
+    // Track decode state for all active requests
+    let decode_states: Arc<Mutex<HashMap<String, DecodeState>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+
+    // Channels for async activation forwarding and response publishing
     let (activation_tx, activation_rx): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = mpsc::channel();
-    let mut fragments: Vec<Vec<u8>> = Vec::with_capacity(FRAGMENT_LIMIT);
+    let (response_tx, response_rx): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = mpsc::channel();
+
+    // Fragment buffers for Aeron polling
+    let mut client_fragments: Vec<Vec<u8>> = Vec::with_capacity(FRAGMENT_LIMIT);
+    let mut token_fragments: Vec<Vec<u8>> = Vec::with_capacity(FRAGMENT_LIMIT);
+
+    // ── Main Orchestration Loop ───────────────────────────────────────────────
 
     loop {
-        fragments.clear();
-        let fragments_read = sub_client.poll_fragments(&mut fragments, FRAGMENT_LIMIT);
+        // ═══════════════════════════════════════════════════════════════════════
+        // 1. Poll CLIENT REQUESTS (new prompts for prefill)
+        // ═══════════════════════════════════════════════════════════════════════
 
-        if fragments_read > 0 {
-            for buffer in &fragments {
+        client_fragments.clear();
+        let client_fragments_read =
+            sub_client.poll_fragments(&mut client_fragments, FRAGMENT_LIMIT);
+
+        if client_fragments_read > 0 {
+            for buffer in &client_fragments {
                 let req = match deserialize_request(buffer) {
                     Ok(r) => r,
                     Err(e) => {
@@ -412,29 +502,49 @@ fn run_stage1_pipeline(
 
                 info!(
                     request_id = %req.request_id,
-                    "Stage 1: Processing prompt for layers {}-{}",
+                    "Stage 1: NEW REQUEST - Starting prefill for layers {}-{}",
                     dist.layer_start, dist.layer_end
                 );
-
-                let model_clone = Arc::clone(&model);
-                let tx_clone = activation_tx.clone();
-                let layer_start = dist.layer_start;
-                let layer_end = dist.layer_end;
-                let request_id = req.request_id.clone();
 
                 // Convert input_data (UTF-8 bytes) to prompt string
                 let prompt = match String::from_utf8(req.input_data.clone()) {
                     Ok(s) => s,
                     Err(e) => {
-                        error!(request_id = %request_id, "Stage 1: Invalid UTF-8 in input_data: {e}");
+                        error!(request_id = %req.request_id, "Stage 1: Invalid UTF-8 in input_data: {e}");
                         continue;
                     }
                 };
 
+                // Initialize decode state for this request
+                // Note: InferenceRequest doesn't have max_tokens field yet (image inference protocol)
+                // Using default max_tokens=32 for now. TODO: Add max_tokens to InferenceRequest
+                let initial_state = DecodeState {
+                    request_id: req.request_id.clone(),
+                    tokens: vec![],
+                    generated_text: String::new(),
+                    current_position: 0,
+                    prompt_length: 0, // Will be updated after prefill
+                    max_tokens: 32,   // Default: generate up to 32 tokens
+                    start_time: Instant::now(),
+                };
+
+                {
+                    let mut states = decode_states.lock().unwrap();
+                    states.insert(req.request_id.clone(), initial_state);
+                }
+
+                // Spawn prefill thread (run prompt through layers 0-10)
+                let model_clone = Arc::clone(&model);
+                let tx_clone = activation_tx.clone();
+                let layer_start = dist.layer_start;
+                let layer_end = dist.layer_end;
+                let request_id = req.request_id.clone();
+                let states_clone = Arc::clone(&decode_states);
+
                 std::thread::spawn(move || {
                     let start = Instant::now();
 
-                    // Execute layers layer_start..layer_end
+                    // Execute layers 0-10 on full prompt (prefill)
                     let activation_state = {
                         let mut model_guard = model_clone.lock().unwrap();
                         match model_guard.generate_from_tokens_layer_range(
@@ -444,7 +554,202 @@ fn run_stage1_pipeline(
                         ) {
                             Ok(state) => state,
                             Err(e) => {
-                                error!(request_id = %request_id, "Stage 1: Layer execution failed: {e}");
+                                error!(request_id = %request_id, "Stage 1: Prefill failed: {e}");
+                                // Cleanup failed request
+                                let mut states = states_clone.lock().unwrap();
+                                states.remove(&request_id);
+                                return;
+                            }
+                        }
+                    };
+
+                    // Update decode state with prompt tokens
+                    {
+                        let mut states = states_clone.lock().unwrap();
+                        if let Some(state) = states.get_mut(&request_id) {
+                            state.tokens = activation_state.tokens.clone();
+                            state.current_position = activation_state.position;
+                            state.prompt_length = activation_state.tokens.len();
+                            // Track prompt length
+                        }
+                    }
+
+                    // Convert ActivationState to ActivationTransfer for serialization
+                    let activation = ActivationTransfer {
+                        request_id: request_id.clone(),
+                        shape: activation_state.shape,
+                        data: activation_state.data,
+                        position: activation_state.position,
+                        tokens: activation_state.tokens,
+                    };
+
+                    let elapsed = start.elapsed().as_micros();
+                    info!(
+                        request_id = %request_id,
+                        latency_us = elapsed,
+                        tokens = activation.tokens.len(),
+                        position = activation.position,
+                        "Stage 1: PREFILL complete, forwarding {} floats to Stage 2",
+                        activation.data.len()
+                    );
+
+                    if let Ok(act_bytes) = serialize_activation(&activation) {
+                        let _ = tx_clone.send(act_bytes);
+                    }
+                });
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // 2. Poll TOKEN FEEDBACK from Stage 3 (decode continuation)
+        // ═══════════════════════════════════════════════════════════════════════
+
+        token_fragments.clear();
+        let token_fragments_read = sub_tokens.poll_fragments(&mut token_fragments, FRAGMENT_LIMIT);
+
+        if token_fragments_read > 0 {
+            for buffer in &token_fragments {
+                let token_resp = match deserialize_token_response(buffer) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        debug!("Stage 1: Failed to deserialize token response: {e}");
+                        continue;
+                    }
+                };
+
+                let request_id = token_resp.request_id.clone();
+                let mut should_cleanup = false;
+                let mut final_response_bytes: Option<Vec<u8>> = None;
+
+                // Process token response (critical section)
+                {
+                    let mut states = decode_states.lock().unwrap();
+                    if let Some(state) = states.get_mut(&request_id) {
+                        // Append generated token
+                        state.tokens.push(token_resp.token_id);
+                        state.generated_text.push_str(&token_resp.token_text);
+                        // Update position for NEXT decode step (current total tokens)
+                        state.current_position = state.tokens.len();
+
+                        let tokens_generated = state.tokens.len() - state.prompt_length;
+
+                        info!(
+                            request_id = %request_id,
+                            token_id = token_resp.token_id,
+                            token_text = %token_resp.token_text,
+                            position = token_resp.position,
+                            is_eos = token_resp.is_eos,
+                            tokens_generated = tokens_generated,
+                            max_tokens = state.max_tokens,
+                            "Stage 1: TOKEN RECEIVED from Stage 3"
+                        );
+
+                        // Check termination conditions: EOS or reached max generated tokens
+                        let should_terminate =
+                            token_resp.is_eos || tokens_generated >= state.max_tokens;
+
+                        if should_terminate {
+                            // Generate final response
+                            let latency_us = state.start_time.elapsed().as_micros() as u64;
+                            let raw_output: Vec<f32> =
+                                state.generated_text.bytes().map(|b| b as f32).collect();
+                            let tokens_generated = state.tokens.len() - state.prompt_length;
+
+                            let response = InferenceResponse {
+                                request_id: request_id.clone(),
+                                class_id: None,
+                                probabilities: vec![],
+                                raw_output,
+                                confidence: 1.0,
+                                latency_us,
+                                error: String::new(),
+                            };
+
+                            info!(
+                                request_id = %request_id,
+                                latency_us = latency_us,
+                                tokens_generated = tokens_generated,
+                                reason = if token_resp.is_eos { "EOS" } else { "max_tokens" },
+                                "Stage 1: DECODE COMPLETE - Sending final response to client"
+                            );
+
+                            if let Ok(resp_bytes) = serialize_response(&response) {
+                                final_response_bytes = Some(resp_bytes);
+                            }
+
+                            should_cleanup = true;
+                        }
+                    } else {
+                        warn!(
+                            request_id = %request_id,
+                            "Stage 1: Received token for unknown request (already completed?)"
+                        );
+                    }
+                }
+
+                // Send final response to client if request is complete
+                if let Some(resp_bytes) = final_response_bytes {
+                    let _ = response_tx.send(resp_bytes);
+                }
+
+                // Cleanup completed request
+                if should_cleanup {
+                    let mut states = decode_states.lock().unwrap();
+                    states.remove(&request_id);
+                    continue; // Skip decode continuation for completed request
+                }
+
+                // ───────────────────────────────────────────────────────────────
+                // DECODE CONTINUATION: Run single token through layers 0-10
+                // ───────────────────────────────────────────────────────────────
+
+                let model_clone = Arc::clone(&model);
+                let tx_clone = activation_tx.clone();
+                let layer_start = dist.layer_start;
+                let layer_end = dist.layer_end;
+                let states_clone = Arc::clone(&decode_states);
+
+                std::thread::spawn(move || {
+                    let start = Instant::now();
+
+                    // Get current state snapshot
+                    let (last_token, position, total_tokens) = {
+                        let states = states_clone.lock().unwrap();
+                        if let Some(state) = states.get(&request_id) {
+                            let last_token = *state.tokens.last().unwrap_or(&0);
+                            let total_tokens = state.tokens.len();
+                            (last_token, state.current_position, total_tokens)
+                        } else {
+                            return; // Request was cleaned up
+                        }
+                    };
+
+                    info!(
+                        request_id = %request_id,
+                        last_token = last_token,
+                        position = position,
+                        total_tokens = total_tokens,
+                        "Stage 1: DECODE CONTINUATION - Running single token through layers 0-10"
+                    );
+
+                    // Execute layers 0-10 on SINGLE TOKEN (decode step)
+                    let activation_state = {
+                        let mut model_guard = model_clone.lock().unwrap();
+                        match model_guard.decode_single_token(
+                            last_token,
+                            position,
+                            layer_start,
+                            layer_end,
+                        ) {
+                            Ok(state) => state,
+                            Err(e) => {
+                                error!(
+                                    request_id = %request_id,
+                                    "Stage 1: Decode step failed: {e}"
+                                );
+                                // Cleanup failed request
+                                let mut states = states_clone.lock().unwrap();
+                                states.remove(&request_id);
                                 return;
                             }
                         }
@@ -455,14 +760,23 @@ fn run_stage1_pipeline(
                         request_id: request_id.clone(),
                         shape: activation_state.shape,
                         data: activation_state.data,
+                        position: activation_state.position,
+                        tokens: activation_state.tokens,
                     };
 
                     let elapsed = start.elapsed().as_micros();
                     info!(
                         request_id = %request_id,
+                        position = activation.position,
+                        tokens = activation.tokens.len(),
+                        "Stage 1: DECODE STEP complete, forwarding {} floats to Stage 2",
+                        activation.data.len()
+                    );
+                    debug!(
+                        request_id = %request_id,
                         latency_us = elapsed,
-                        "Stage 1: Layers {}-{} complete, forwarding {} floats",
-                        layer_start, layer_end, activation.data.len()
+                        position = position,
+                        "Stage 1: DECODE STEP complete, forwarding to Stage 2"
                     );
 
                     if let Ok(act_bytes) = serialize_activation(&activation) {
@@ -472,12 +786,26 @@ fn run_stage1_pipeline(
             }
         }
 
-        // Forward activations to Stage 2
+        // ═══════════════════════════════════════════════════════════════════════
+        // 3. Forward activations to Stage 2
+        // ═══════════════════════════════════════════════════════════════════════
+
         while let Ok(act_bytes) = activation_rx.try_recv() {
             publish_with_retry(&pub_stage2, &act_bytes);
         }
 
-        // Aggressive spin-polling for zero-latency IPC
+        // ═══════════════════════════════════════════════════════════════════════
+        // 4. Send final responses to client
+        // ═══════════════════════════════════════════════════════════════════════
+
+        while let Ok(resp_bytes) = response_rx.try_recv() {
+            publish_with_retry(&pub_client, &resp_bytes);
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // 5. Aggressive spin-polling for zero-latency IPC
+        // ═══════════════════════════════════════════════════════════════════════
+
         aggressive_spin_poll(dist.enable_spin_poll);
     }
 }
@@ -526,86 +854,101 @@ fn run_stage2_pipeline(
 
     let (activation_tx, activation_rx): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = mpsc::channel();
     let mut fragments: Vec<Vec<u8>> = Vec::with_capacity(FRAGMENT_LIMIT);
+    let mut pending_activation = Vec::new();
 
     loop {
         fragments.clear();
         let fragments_read = sub_stage1.poll_fragments(&mut fragments, FRAGMENT_LIMIT);
 
         if fragments_read > 0 {
-            for buffer in &fragments {
-                let act_in = match deserialize_activation(buffer) {
-                    Ok(a) => a,
-                    Err(e) => {
-                        error!("Stage 2: Failed to deserialize activation: {e}");
-                        continue;
+            for fragment in &fragments {
+                pending_activation.extend_from_slice(fragment);
+            }
+
+            let act_in = match deserialize_activation(&pending_activation) {
+                Ok(a) => a,
+                Err(e) => {
+                    debug!(
+                        fragments = fragments_read,
+                        bytes = pending_activation.len(),
+                        "Stage 2: Waiting for complete activation: {e}"
+                    );
+                    continue;
+                }
+            };
+            let bytes_read = pending_activation.len();
+            pending_activation.clear();
+
+            info!(
+                request_id = %act_in.request_id,
+                fragments = fragments_read,
+                bytes = bytes_read,
+                "Stage 2: Received {} floats from Stage 1, processing layers {}-{}",
+                act_in.data.len(), dist.layer_start, dist.layer_end
+            );
+
+            let model_clone = Arc::clone(&model);
+            let tx_clone = activation_tx.clone();
+            let layer_start = dist.layer_start;
+            let layer_end = dist.layer_end;
+            let request_id = act_in.request_id.clone();
+
+            std::thread::spawn(move || {
+                let start = Instant::now();
+
+                // Convert ActivationTransfer to ActivationState
+                let activation_state = crate::gguf_model::ActivationState {
+                    shape: act_in.shape.clone(),
+                    data: act_in.data.clone(),
+                    position: act_in.position,
+                    tokens: act_in.tokens.clone(),
+                };
+
+                // Execute layers layer_start..layer_end
+                let output_state = {
+                    let mut model_guard = model_clone.lock().unwrap();
+                    match model_guard.generate_from_activation(
+                        &activation_state,
+                        layer_start,
+                        layer_end,
+                        0,      // max_tokens unused for middle stages
+                        |_| {}, // No token callback for middle stages
+                    ) {
+                        Ok(crate::gguf_model::Either::Left(state)) => state,
+                        Ok(crate::gguf_model::Either::Right(_)) => {
+                            error!(request_id = %request_id, "Stage 2: Unexpected final output");
+                            return;
+                        }
+                        Err(e) => {
+                            error!(request_id = %request_id, "Stage 2: Layer execution failed: {e}");
+                            return;
+                        }
                     }
                 };
 
+                // Convert ActivationState to ActivationTransfer for serialization
+                let activation = ActivationTransfer {
+                    request_id: request_id.clone(),
+                    shape: output_state.shape.clone(),
+                    data: output_state.data,
+                    position: output_state.position,
+                    tokens: output_state.tokens,
+                };
+
+                let elapsed = start.elapsed().as_micros();
                 info!(
-                    request_id = %act_in.request_id,
-                    "Stage 2: Received {} floats from Stage 1, processing layers {}-{}",
-                    act_in.data.len(), dist.layer_start, dist.layer_end
+                    request_id = %request_id,
+                    latency_us = elapsed,
+                    position = activation.position,
+                    tokens = activation.tokens.len(),
+                    "Stage 2: Layers {}-{} complete, forwarding {} floats",
+                    layer_start, layer_end, activation.data.len()
                 );
 
-                let model_clone = Arc::clone(&model);
-                let tx_clone = activation_tx.clone();
-                let layer_start = dist.layer_start;
-                let layer_end = dist.layer_end;
-                let request_id = act_in.request_id.clone();
-
-                std::thread::spawn(move || {
-                    let start = Instant::now();
-
-                    // Convert ActivationTransfer to ActivationState
-                    let activation_state = crate::gguf_model::ActivationState {
-                        shape: act_in.shape.clone(),
-                        data: act_in.data.clone(),
-                        position: 0,    // Will be updated by model execution
-                        tokens: vec![], // Not needed for middle stages
-                    };
-
-                    // Execute layers layer_start..layer_end
-                    let output_state = {
-                        let mut model_guard = model_clone.lock().unwrap();
-                        match model_guard.generate_from_activation(
-                            &activation_state,
-                            layer_start,
-                            layer_end,
-                            0,      // max_tokens unused for middle stages
-                            |_| {}, // No token callback for middle stages
-                        ) {
-                            Ok(crate::gguf_model::Either::Left(state)) => state,
-                            Ok(crate::gguf_model::Either::Right(_)) => {
-                                error!(request_id = %request_id, "Stage 2: Unexpected final output");
-                                return;
-                            }
-                            Err(e) => {
-                                error!(request_id = %request_id, "Stage 2: Layer execution failed: {e}");
-                                return;
-                            }
-                        }
-                    };
-
-                    // Convert ActivationState to ActivationTransfer for serialization
-                    let activation = ActivationTransfer {
-                        request_id: request_id.clone(),
-                        shape: output_state.shape,
-                        data: output_state.data,
-                    };
-
-                    let elapsed = start.elapsed().as_micros();
-                    info!(
-                        request_id = %request_id,
-                        latency_us = elapsed,
-                        "Stage 2: Layers {}-{} complete, forwarding {} floats",
-                        layer_start, layer_end, activation.data.len()
-                    );
-
-                    if let Ok(act_bytes) = serialize_activation(&activation) {
-                        let _ = tx_clone.send(act_bytes);
-                    }
-                });
-            }
+                if let Ok(act_bytes) = serialize_activation(&activation) {
+                    let _ = tx_clone.send(act_bytes);
+                }
+            });
         }
 
         // Forward activations to Stage 3
@@ -654,112 +997,129 @@ fn run_stage3_pipeline(
         AeronSubscription::new(ctx, channel, dist.prev_stream_id, REGISTRATION_TIMEOUT)
             .expect("Stage 3: Failed to subscribe to Stage 2 stream");
 
-    // Publish final tokens to client (Stream 1002)
-    let pub_client = AeronPublication::new(
+    // Publish token responses back to Stage 1 for decode orchestration (Stream 1003)
+    let pub_stage1 = AeronPublication::new(
         ctx,
         channel,
-        PIPELINE_STAGE3_TO_CLIENT,
+        PIPELINE_STAGE3_TO_STAGE1,
         REGISTRATION_TIMEOUT,
     )
-    .expect("Stage 3: Failed to publish to client stream");
+    .expect("Stage 3: Failed to publish to Stage 1 feedback stream");
 
     info!("✅ Stage 3 ready: listening for Stage 2 activations");
 
     let (response_tx, response_rx): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = mpsc::channel();
     let mut fragments: Vec<Vec<u8>> = Vec::with_capacity(FRAGMENT_LIMIT);
+    let mut pending_activation = Vec::new();
 
     loop {
         fragments.clear();
         let fragments_read = sub_stage2.poll_fragments(&mut fragments, FRAGMENT_LIMIT);
 
         if fragments_read > 0 {
-            for buffer in &fragments {
-                let act_in = match deserialize_activation(buffer) {
-                    Ok(a) => a,
-                    Err(e) => {
-                        error!("Stage 3: Failed to deserialize activation: {e}");
-                        continue;
+            for fragment in &fragments {
+                pending_activation.extend_from_slice(fragment);
+            }
+
+            let act_in = match deserialize_activation(&pending_activation) {
+                Ok(a) => a,
+                Err(e) => {
+                    debug!(
+                        fragments = fragments_read,
+                        bytes = pending_activation.len(),
+                        "Stage 3: Waiting for complete activation: {e}"
+                    );
+                    continue;
+                }
+            };
+            let bytes_read = pending_activation.len();
+            pending_activation.clear();
+
+            info!(
+                request_id = %act_in.request_id,
+                fragments = fragments_read,
+                bytes = bytes_read,
+                shape = ?act_in.shape,
+                "Stage 3: Received {} floats from Stage 2 with shape {:?}, processing layers {}-{} + LM Head",
+                act_in.data.len(), act_in.shape, dist.layer_start, dist.layer_end
+            );
+
+            let model_clone = Arc::clone(&model);
+            let tx_clone = response_tx.clone();
+            let layer_start = dist.layer_start;
+            let layer_end = dist.layer_end;
+            let request_id = act_in.request_id.clone();
+
+            std::thread::spawn(move || {
+                let start = Instant::now();
+
+                info!(
+                    request_id = %request_id,
+                    position = act_in.position,
+                    tokens = act_in.tokens.len(),
+                    "Stage 3: Creating ActivationState with shape {:?}, data_len={}",
+                    act_in.shape, act_in.data.len()
+                );
+
+                // Convert ActivationTransfer to ActivationState
+                let activation_state = crate::gguf_model::ActivationState {
+                    shape: act_in.shape.clone(),
+                    data: act_in.data.clone(),
+                    position: act_in.position,
+                    tokens: act_in.tokens.clone(),
+                };
+
+                // Execute final layers + LM head, sample ONE token (distributed decode)
+                let sampled_token = {
+                    let mut model_guard = model_clone.lock().unwrap();
+                    match model_guard.generate_from_activation(
+                        &activation_state,
+                        layer_start,
+                        layer_end,
+                        0, // max_tokens unused - we sample exactly 1 token
+                        |_token| {
+                            // Token text already captured in SampledToken
+                        },
+                    ) {
+                        Ok(crate::gguf_model::Either::Right(token)) => token,
+                        Ok(crate::gguf_model::Either::Left(_)) => {
+                            error!(request_id = %request_id, "Stage 3: Unexpected intermediate output");
+                            return;
+                        }
+                        Err(e) => {
+                            error!(request_id = %request_id, "Stage 3: Layer execution failed: {e}");
+                            return;
+                        }
                     }
                 };
 
+                // Create TokenResponse for Stage 1 decode orchestration
+                let token_response = TokenResponse {
+                    request_id: request_id.clone(),
+                    token_id: sampled_token.token_id,
+                    token_text: sampled_token.token_text.clone(),
+                    is_eos: sampled_token.is_eos,
+                    position: sampled_token.position,
+                };
+
                 info!(
-                    request_id = %act_in.request_id,
-                    "Stage 3: Received {} floats from Stage 2, processing layers {}-{} + LM Head",
-                    act_in.data.len(), dist.layer_start, dist.layer_end
+                    request_id = %request_id,
+                    token_id = sampled_token.token_id,
+                    is_eos = sampled_token.is_eos,
+                    latency_us = start.elapsed().as_micros(),
+                    "Stage 3: Sampled token '{}', sending to Stage 1",
+                    sampled_token.token_text
                 );
 
-                let model_clone = Arc::clone(&model);
-                let tx_clone = response_tx.clone();
-                let layer_start = dist.layer_start;
-                let layer_end = dist.layer_end;
-                let request_id = act_in.request_id.clone();
-
-                std::thread::spawn(move || {
-                    let start = Instant::now();
-
-                    // Convert ActivationTransfer to ActivationState
-                    let activation_state = crate::gguf_model::ActivationState {
-                        shape: act_in.shape.clone(),
-                        data: act_in.data.clone(),
-                        position: 0,    // Will be updated by model execution
-                        tokens: vec![], // Restored from Stage 1 metadata if needed
-                    };
-
-                    // Execute final layers + LM head, generate tokens
-                    let generated_text = {
-                        let mut model_guard = model_clone.lock().unwrap();
-                        match model_guard.generate_from_activation(
-                            &activation_state,
-                            layer_start,
-                            layer_end,
-                            2048, // max_tokens - use full generation capacity
-                            |_token| {
-                                // TODO: Stream tokens back to client in real-time
-                                // For now, accumulate in returned string
-                            },
-                        ) {
-                            Ok(crate::gguf_model::Either::Right(text)) => text,
-                            Ok(crate::gguf_model::Either::Left(_)) => {
-                                error!(request_id = %request_id, "Stage 3: Unexpected intermediate output");
-                                return;
-                            }
-                            Err(e) => {
-                                error!(request_id = %request_id, "Stage 3: Layer execution failed: {e}");
-                                return;
-                            }
-                        }
-                    };
-
-                    // Convert generated text to raw_output format (UTF-8 bytes as f32)
-                    let raw_output: Vec<f32> = generated_text.bytes().map(|b| b as f32).collect();
-
-                    let response = InferenceResponse {
-                        request_id: request_id.clone(),
-                        class_id: None,
-                        probabilities: vec![],
-                        raw_output,
-                        confidence: 1.0,
-                        latency_us: start.elapsed().as_micros() as u64,
-                        error: String::new(),
-                    };
-
-                    info!(
-                        request_id = %response.request_id,
-                        latency_us = response.latency_us,
-                        "Stage 3: Final layers {}-{} complete, sending {} chars to client",
-                        layer_start, layer_end, generated_text.len()
-                    );
-
-                    if let Ok(resp_bytes) = serialize_response(&response) {
-                        let _ = tx_clone.send(resp_bytes);
-                    }
-                });
-            }
+                if let Ok(token_bytes) = serialize_token_response(&token_response) {
+                    let _ = tx_clone.send(token_bytes);
+                }
+            });
         }
 
-        // Send final responses to client
-        while let Ok(resp_bytes) = response_rx.try_recv() {
-            publish_with_retry(&pub_client, &resp_bytes);
+        // Send token responses back to Stage 1 for decode loop orchestration
+        while let Ok(token_bytes) = response_rx.try_recv() {
+            publish_with_retry(&pub_stage1, &token_bytes);
         }
 
         // Aggressive spin-polling for zero-latency IPC

@@ -18,7 +18,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use candle_core::quantized::gguf_file;
-use candle_core::{Device, Tensor};
+use candle_core::{Device, IndexOp, Tensor};
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 // Use vendored quantized_qwen2 with exposed layers field for distributed pipeline
 use crate::models::quantized_qwen2::ModelWeights;
@@ -42,6 +42,25 @@ pub struct ActivationState {
 
     /// Token history up to this point
     pub tokens: Vec<u32>,
+}
+
+/// Sampled token metadata for distributed decode.
+///
+/// Returned by Stage 3 after sampling one token from logits.
+/// Contains all information needed for Stage 1 to orchestrate the next decode step.
+#[derive(Debug, Clone)]
+pub struct SampledToken {
+    /// Token ID from vocabulary
+    pub token_id: u32,
+
+    /// Decoded token text (UTF-8)
+    pub token_text: String,
+
+    /// Whether this is an EOS (end-of-sequence) token
+    pub is_eos: bool,
+
+    /// Position in sequence where this token was sampled
+    pub position: usize,
 }
 
 /// GGUF model wrapper with Clarken identity injection.
@@ -503,13 +522,17 @@ Provide accurate, concise answers focused on finance, trading, and risk manageme
     /// let incoming_tensor = GgufModel::reconstruct_activation(&activation, &device)?;
     /// ```
     pub fn reconstruct_activation(activation: &ActivationState, device: &Device) -> Result<Tensor> {
+        info!(
+            "📥 Reconstructing activation: shape={:?}, data_len={}, pos={}",
+            activation.shape,
+            activation.data.len(),
+            activation.position
+        );
+
         let tensor = Tensor::from_vec(activation.data.clone(), activation.shape.as_slice(), device)
             .context("Failed to reconstruct tensor from activation data")?;
 
-        debug!(
-            "Reconstructed activation: shape={:?}, pos={}",
-            activation.shape, activation.position
-        );
+        info!("✅ Reconstructed tensor: dims={:?}", tensor.dims());
 
         Ok(tensor)
     }
@@ -548,9 +571,9 @@ Provide accurate, concise answers focused on finance, trading, and risk manageme
         activation: &ActivationState,
         layer_start: usize,
         layer_end: usize,
-        max_tokens: usize,
+        _max_tokens: usize,
         mut on_token: F,
-    ) -> Result<Either<ActivationState, String>>
+    ) -> Result<Either<ActivationState, SampledToken>>
     where
         F: FnMut(&str),
     {
@@ -567,24 +590,30 @@ Provide accurate, concise answers focused on finance, trading, and risk manageme
         let total_layers = self.model.layers.len();
         let is_final_stage = layer_end == total_layers;
 
-        // Execute layer range on incoming hidden state (no embeddings, final projection if last stage)
-        let output_tensor = self.model.forward_layer_range(
+        info!(
+            "🔍 Calling forward_layer_range: incoming_hidden dims={:?}, layer_start={}, layer_end={}, pos={}, is_final={}",
+            incoming_hidden.dims(), layer_start, layer_end, activation.position, is_final_stage
+        );
+
+        // Execute layer range WITHOUT final projection (we'll handle it manually)
+        let hidden_output = self.model.forward_layer_range(
             &incoming_hidden,
             layer_start,
             layer_end,
             activation.position,
-            false,          // No embedding - we already have hidden states
-            is_final_stage, // Final projection if last stage
+            false, // No embedding - we already have hidden states
+            false, // NO final projection yet - we handle last token extraction first
         )?;
 
         if !is_final_stage {
             // Intermediate stage: Extract activation for next stage
-            let shape = output_tensor.dims().to_vec();
-            let data = output_tensor.flatten_all()?.to_vec1::<f32>()?;
+            let shape = hidden_output.dims().to_vec();
+            let data = hidden_output.flatten_all()?.to_vec1::<f32>()?;
 
-            debug!(
-                "✅ Stage {layer_start}..{layer_end} intermediate output: shape={:?}",
-                shape
+            info!(
+                "✅ Stage {layer_start}..{layer_end} intermediate output: shape={:?}, data_len={}",
+                shape,
+                data.len()
             );
 
             return Ok(Either::Left(ActivationState {
@@ -595,54 +624,64 @@ Provide accurate, concise answers focused on finance, trading, and risk manageme
             }));
         }
 
-        // Final stage: Generate tokens from logits
-        let mut tokens = activation.tokens.clone();
-        let mut logits_processor = self.create_logits_processor();
-        let mut generated = String::new();
+        // === FINAL STAGE: Extract last token using pointer arithmetic ===
+        // Input shape: [batch=1, seq_len, hidden_size]
+        // We need: [1, hidden_size] for the LAST token (rank-2, NOT rank-1!)
 
-        let max_gen = if max_tokens == 0 {
-            self.max_tokens
-        } else {
-            max_tokens
-        };
-
-        for _ in 0..max_gen {
-            let pos = tokens.len();
-
-            if pos >= self.max_seq_len {
-                debug!("Max sequence length reached");
-                break;
-            }
-
-            // For first iteration, use the output_tensor we already computed
-            // For subsequent iterations, need to execute forward from last token
-            let logits = if pos == activation.position {
-                output_tensor.clone()
-            } else {
-                // Execute full model forward on last token
-                let input = Tensor::new(&tokens[tokens.len() - 1..], &self.device)?.unsqueeze(0)?;
-                self.model.forward(&input, pos)?.squeeze(0)?
-            };
-
-            // Sample next token
-            let next_token = logits_processor.sample(&logits)?;
-
-            if self.is_eos_token(next_token) {
-                debug!("EOS token encountered: {next_token}");
-                break;
-            }
-
-            tokens.push(next_token);
-
-            if let Ok(token_str) = self.tokenizer.decode(&[next_token], false) {
-                let filtered = self.filter_token(&token_str);
-                on_token(&filtered);
-                generated.push_str(&filtered);
-            }
+        let dims = hidden_output.dims();
+        if dims.len() != 3 {
+            anyhow::bail!("Expected rank-3 hidden output [batch, seq, hidden], got {dims:?}");
         }
 
-        debug!("✅ Final stage generated {} tokens", generated.len());
-        Ok(Either::Right(generated))
+        let seq_len = dims[1];
+        // Extract last token but keep batch dimension: [1, 123, 3584] → [1, 3584]
+        let last_token_hidden = hidden_output.i((.., seq_len - 1, ..))?;
+
+        info!(
+            "✅ Extracted last token: seq_len={}, last_token_shape={:?}",
+            seq_len,
+            last_token_hidden.dims()
+        );
+
+        // Now apply final norm + LM head on the extracted last token [1, 3584]
+        info!(
+            "🔍 Calling apply_final_projection with shape={:?}",
+            last_token_hidden.dims()
+        );
+        let output_tensor = self.model.apply_final_projection(&last_token_hidden)?;
+        info!(
+            "✅ apply_final_projection complete, output shape={:?}",
+            output_tensor.dims()
+        );
+
+        // Final stage: Sample ONE token from logits (distributed decode)
+        // In distributed mode, Stage 3 returns after one token. Stage 1 orchestrates
+        // the decode loop by sending each new token back through the pipeline.
+        let _tokens = activation.tokens.clone();
+        let mut logits_processor = self.create_logits_processor();
+
+        // Sample first token from prefill result
+        let logits = output_tensor.squeeze(0)?; // [1, vocab_size] → [vocab_size]
+        let next_token = logits_processor.sample(&logits)?;
+
+        let is_eos = self.is_eos_token(next_token);
+        let mut generated = String::new();
+        if let Ok(token_str) = self.tokenizer.decode(&[next_token], false) {
+            let filtered = self.filter_token(&token_str);
+            on_token(&filtered);
+            generated.push_str(&filtered);
+        }
+
+        debug!(
+            "✅ Stage 3 sampled token {} (EOS={}, distributed decode mode)",
+            next_token, is_eos
+        );
+        Ok(Either::Right(SampledToken {
+            token_id: next_token,
+            token_text: generated,
+            is_eos,
+            position: activation.position + 1,
+        }))
     }
 
     /// Generate from initial tokens with layer range restriction (Stage 1 entry point).
@@ -702,6 +741,44 @@ Provide accurate, concise answers focused on finance, trading, and risk manageme
 
         // Execute forward pass for layer range
         self.forward_layer_range(&tokens, tokens.len(), layer_start, layer_end)
+    }
+
+    /// Execute a decode step: run a single token through layers (for distributed decode orchestration).
+    ///
+    /// # Arguments
+    /// * `token_id` - Single token ID to process
+    /// * `position` - Sequence position (for KV cache indexing)
+    /// * `layer_start` - First layer to execute (inclusive)
+    /// * `layer_end` - Last layer to execute (exclusive)
+    ///
+    /// # Returns
+    /// ActivationState to be sent to next pipeline stage.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// // Stage 1 decode orchestration: process single token through layers 0-10
+    /// let activation = model.decode_single_token(
+    ///     token_id,
+    ///     current_position,
+    ///     0,
+    ///     10
+    /// )?;
+    /// // Send activation to Stage 2
+    /// ```
+    pub fn decode_single_token(
+        &mut self,
+        token_id: u32,
+        position: usize,
+        layer_start: usize,
+        layer_end: usize,
+    ) -> Result<ActivationState> {
+        debug!(
+            "Decode step: token_id={}, position={}, layers={}..{}",
+            token_id, position, layer_start, layer_end
+        );
+
+        // Execute forward pass with single token
+        self.forward_layer_range(&[token_id], position, layer_start, layer_end)
     }
 
     // Helper methods
