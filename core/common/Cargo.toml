@@ -1,6 +1,6 @@
 [package]
 name = "blazil-common"
-version = "0.5.0"
+version = "0.5.1"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
