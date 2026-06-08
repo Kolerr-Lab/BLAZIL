@@ -22,5 +22,7 @@
 
 pub mod quantized_qwen2;
 
-#[cfg(target_arch = "x86_64")]
-pub mod avx512_kernels;
+// AVX-512 kernels require nightly Rust (unstable features)
+// Disabled for stable CI builds - functionality has fallback paths
+// #[cfg(target_arch = "x86_64")]
+// pub mod avx512_kernels;

@@ -24,8 +24,9 @@ use candle_nn::{Embedding, Module};
 use candle_transformers::{quantized_nn::RmsNorm, utils::repeat_kv};
 use std::collections::HashMap;
 
-#[cfg(target_arch = "x86_64")]
-use super::avx512_kernels;
+// AVX-512 kernels disabled (requires nightly Rust)
+// #[cfg(target_arch = "x86_64")]
+// use super::avx512_kernels;
 
 #[derive(Debug, Clone)]
 struct Mlp {
@@ -34,22 +35,22 @@ struct Mlp {
     feed_forward_w3: QMatMul,
 }
 
-/// Optimized SiLU activation with AVX-512 VNNI fast path.
+/// SiLU activation using Candle's implementation.
 ///
-/// Falls back to Candle's implementation if AVX-512 unavailable.
-/// Performance: ~16 GFLOPS vs ~4 GFLOPS (scalar) on i9-12900K.
+/// Note: AVX-512 optimized path disabled (requires nightly Rust).
 fn silu_optimized(x: &Tensor) -> Result<Tensor> {
-    #[cfg(target_arch = "x86_64")]
-    {
-        if avx512_kernels::is_avx512_vnni_available() {
-            // Fast path: AVX-512 in-place SiLU
-            let mut data = x.to_vec1::<f32>()?;
-            unsafe { avx512_kernels::silu_avx512(&mut data) };
-            return Tensor::from_vec(data, x.shape(), x.device());
-        }
-    }
+    // AVX-512 fast path disabled for stable Rust builds
+    // #[cfg(target_arch = "x86_64")]
+    // {
+    //     if avx512_kernels::is_avx512_vnni_available() {
+    //         // Fast path: AVX-512 in-place SiLU
+    //         let mut data = x.to_vec1::<f32>()?;
+    //         unsafe { avx512_kernels::silu_avx512(&mut data) };
+    //         return Tensor::from_vec(data, x.shape(), x.device());
+    //     }
+    // }
 
-    // Fallback: Candle's SiLU
+    // Use Candle's SiLU implementation
     candle_nn::ops::silu(x)
 }
 
@@ -216,20 +217,20 @@ impl ModelWeights {
         reader: &mut R,
         device: &Device,
     ) -> Result<Self> {
-        // Log SIMD capabilities at model load
-        #[cfg(target_arch = "x86_64")]
-        {
-            let avx512_available = avx512_kernels::is_avx512_vnni_available();
-            tracing::info!(
-                "🚀 AVX-512 VNNI detected: {} | SiLU optimization: {}",
-                avx512_available,
-                if avx512_available {
-                    "ENABLED ⚡"
-                } else {
-                    "disabled (using scalar fallback)"
-                }
-            );
-        }
+        // SIMD capabilities logging disabled (AVX-512 requires nightly Rust)
+        // #[cfg(target_arch = "x86_64")]
+        // {
+        //     let avx512_available = avx512_kernels::is_avx512_vnni_available();
+        //     tracing::info!(
+        //         "🚀 AVX-512 VNNI detected: {} | SiLU optimization: {}",
+        //         avx512_available,
+        //         if avx512_available {
+        //             "ENABLED ⚡"
+        //         } else {
+        //             "disabled (using scalar fallback)"
+        //         }
+        //     );
+        // }
         #[cfg(not(target_arch = "x86_64"))]
         {
             tracing::info!("🚀 Non-x86_64 architecture: using scalar operations");
