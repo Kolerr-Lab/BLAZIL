@@ -3,8 +3,8 @@ name = "blazil-inference"
 version = "0.5.2"
 edition = "2021"
 authors = ["Blazil Team <lab.kolerr@kolerr.com>"]
-license.workspace = true
-repository.workspace = true
+license = "BSL-1.1"
+repository = "https://github.com/Kolerr-Lab/BLAZIL"
 rust-version = "1.88"
 
 [dependencies]
