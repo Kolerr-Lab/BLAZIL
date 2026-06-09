@@ -1,11 +1,11 @@
 [package]
 name = "blazil-dataloader"
-version = "0.5.1"
+version = "0.5.2"
 edition = "2021"
 authors = ["Blazil Team <lab.kolerr@kolerr.com>"]
 license = "BSL-1.1"
-repository.workspace = true
-rust-version.workspace = true
+repository = "https://github.com/Kolerr-Lab/BLAZIL"
+rust-version = "1.88.0"
 
 [dependencies]
 # Blazil core
