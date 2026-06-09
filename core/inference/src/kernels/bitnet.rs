@@ -382,11 +382,7 @@ mod tests {
             let diff = (exp - act).abs();
             assert!(
                 diff < TOLERANCE,
-                "row {}: expected ~{:.2}, got {:.2}, diff {:.2}",
-                i,
-                exp,
-                act,
-                diff
+                "row {i}: expected ~{exp:.2}, got {act:.2}, diff {diff:.2}",
             );
         }
     }
@@ -417,11 +413,7 @@ mod tests {
             let diff = (orig - rest).abs();
             assert!(
                 diff < TOLERANCE,
-                "index {}: original {:.2}, restored {:.2}, diff {:.2}",
-                i,
-                orig,
-                rest,
-                diff
+                "index {i}: original {orig:.2}, restored {rest:.2}, diff {diff:.2}",
             );
         }
     }
@@ -439,7 +431,7 @@ mod tests {
             expected: 128,
             actual: 64,
         };
-        let msg = format!("{}", err);
+        let msg = format!("{err}");
         assert!(msg.contains("128"));
         assert!(msg.contains("64"));
     }
