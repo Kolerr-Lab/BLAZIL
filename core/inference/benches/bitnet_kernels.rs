@@ -32,7 +32,7 @@ fn bench_bitnet_linear(c: &mut Criterion) {
     ];
 
     for (rows, cols) in sizes {
-        let param = format!("{}x{}", rows, cols);
+        let param = format!("{rows}x{cols}");
         let throughput = Throughput::Elements((rows * cols) as u64);
         group.throughput(throughput);
 
@@ -98,7 +98,7 @@ fn bench_weight_packing(c: &mut Criterion) {
             .collect();
 
         group.bench_with_input(
-            BenchmarkId::from_parameter(format!("{}x{}", rows, cols)),
+            BenchmarkId::from_parameter(format!("{rows}x{cols}")),
             &(&weights, rows, cols),
             |b, &(wts, r, c)| {
                 b.iter(|| {
