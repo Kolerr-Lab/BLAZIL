@@ -6,10 +6,10 @@ license = "BSL-1.1"
 repository = "https://github.com/Kolerr-Lab/BLAZIL"
 
 [dependencies]
-serde = { workspace = true }
-thiserror = { workspace = true }
-uuid = { workspace = true, features = ["serde"] }
-bytes = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+thiserror = "1"
+uuid = { version = "1", features = ["serde", "v4"] }
+bytes = "1"
 rust_decimal = { version = "1", features = ["serde"] }
 iso_currency = "0.4"
 
