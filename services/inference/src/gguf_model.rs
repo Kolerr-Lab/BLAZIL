@@ -21,6 +21,7 @@ use candle_core::quantized::gguf_file;
 use candle_core::{Device, IndexOp, Tensor};
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 // Use vendored quantized_qwen2 with exposed layers field for distributed pipeline
+use crate::config::HybridMatrixConfig;
 use crate::models::quantized_qwen2::ModelWeights;
 use tokenizers::Tokenizer;
 use tracing::{debug, info};
@@ -85,12 +86,18 @@ impl GgufModel {
     /// - `path` — Path to .gguf file
     /// - `_n_threads` — Number of CPU threads (unused, kept for API compatibility)
     /// - `n_ctx` — Context window size (used as max_seq_len)
+    /// - `hybrid_matrix_config` — Optional hybrid matrix quantization config
     ///
     /// # Implementation
     /// Uses Candle's quantized Qwen2 GGUF loader (ModelWeights::from_gguf).
     /// Loads tokenizer from same directory (tokenizer.json).
-    pub fn load<P: AsRef<Path>>(path: P, _n_threads: u32, n_ctx: u32) -> Result<Self> {
-        Self::load_with_layer_range(path, _n_threads, n_ctx, None)
+    pub fn load<P: AsRef<Path>>(
+        path: P,
+        _n_threads: u32,
+        n_ctx: u32,
+        hybrid_matrix_config: Option<HybridMatrixConfig>,
+    ) -> Result<Self> {
+        Self::load_with_layer_range(path, _n_threads, n_ctx, None, hybrid_matrix_config)
     }
 
     /// Load a GGUF model with optional layer range filtering (distributed pipeline).
@@ -100,6 +107,7 @@ impl GgufModel {
     /// - `_n_threads` — Number of CPU threads (unused, kept for API compatibility)
     /// - `n_ctx` — Context window size (used as max_seq_len)
     /// - `layer_range` — Optional (start, end) layer indices for partial loading
+    /// - `hybrid_matrix_config` — Optional hybrid matrix quantization config
     ///
     /// # Distributed Pipeline Mode
     /// When `layer_range` is specified, only loads tensors for the given layer range.
@@ -118,7 +126,8 @@ impl GgufModel {
     ///     "model.gguf",
     ///     10,
     ///     4096,
-    ///     Some((10, 19))
+    ///     Some((10, 19)),
+    ///     None
     /// )?;
     /// ```
     pub fn load_with_layer_range<P: AsRef<Path>>(
@@ -126,6 +135,7 @@ impl GgufModel {
         _n_threads: u32,
         n_ctx: u32,
         layer_range: Option<(usize, usize)>,
+        hybrid_matrix_config: Option<HybridMatrixConfig>,
     ) -> Result<Self> {
         let path = path.as_ref();
         let path_display = path.display();
@@ -213,7 +223,7 @@ impl GgufModel {
         );
 
         // Create model from GGUF
-        let model = ModelWeights::from_gguf(gguf_content, &mut file, &device)
+        let model = ModelWeights::from_gguf(gguf_content, &mut file, &device, hybrid_matrix_config)
             .context("Failed to load quantized Qwen2 model from GGUF")?;
 
         info!("Model loaded successfully");
@@ -838,7 +848,7 @@ mod tests {
     #[test]
     fn test_model_validation() {
         // Test that non-existent file returns error
-        let result = GgufModel::load("/nonexistent/model.gguf", 8, 4096);
+        let result = GgufModel::load("/nonexistent/model.gguf", 8, 4096, None);
         assert!(result.is_err());
         let err_msg = result.err().unwrap().to_string();
         assert!(err_msg.contains("Model file not found"));

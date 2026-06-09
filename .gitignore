@@ -109,3 +109,6 @@ tools/bench-dashboard/.next/
 
 # Zig binary (downloaded in CI, should not be committed)
 infra/docker/zig-*.tar.xz
+
+# Internal documentation (not for public repo)
+KOLERR_ECOSYSTEM_CONTEXT.md

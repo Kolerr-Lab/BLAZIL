@@ -481,7 +481,7 @@ dependencies = [
 
 [[package]]
 name = "blazil-common"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "bytes",
  "iso_currency",
@@ -494,7 +494,7 @@ dependencies = [
 
 [[package]]
 name = "blazil-dataloader"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "anyhow",
  "blazil-common",
@@ -532,7 +532,7 @@ dependencies = [
 
 [[package]]
 name = "blazil-inference"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "anyhow",
  "blazil-common",

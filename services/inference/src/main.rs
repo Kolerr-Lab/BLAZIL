@@ -173,8 +173,13 @@ async fn main() -> Result<()> {
                     let path_clone = path.clone();
                     let n_threads = config.gguf.n_threads;
                     let n_ctx = config.gguf.n_ctx;
+                    let hybrid_matrix = if config.hybrid_matrix.enabled {
+                        Some(config.hybrid_matrix.clone())
+                    } else {
+                        None
+                    };
                     let mut model = tokio::task::spawn_blocking(move || {
-                        GgufModel::load(&path_clone, n_threads, n_ctx)
+                        GgufModel::load(&path_clone, n_threads, n_ctx, hybrid_matrix)
                     })
                     .await
                     .context("spawn_blocking join error")?

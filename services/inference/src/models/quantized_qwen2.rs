@@ -27,11 +27,186 @@ use std::collections::HashMap;
 #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
 use super::avx512_kernels;
 
+use crate::config::HybridMatrixConfig;
+
+fn should_enable_hybrid_matrix(config: &HybridMatrixConfig, total_layers: usize) -> bool {
+    if config.stage1_end >= config.stage2_end || config.stage2_end >= config.total_layers {
+        tracing::error!(
+            "Invalid Hybrid Matrix stage boundaries: stage1_end={}, stage2_end={}, total={}",
+            config.stage1_end,
+            config.stage2_end,
+            config.total_layers
+        );
+        return false;
+    }
+    if total_layers != config.total_layers {
+        tracing::error!(
+            "Hybrid Matrix layer count mismatch: model={}, config={}",
+            total_layers,
+            config.total_layers
+        );
+        return false;
+    }
+    true
+}
+
+/// Quantization stage for Hybrid Matrix architecture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QuantizationStage {
+    Int8Stage1,
+    BitNet,
+    Int8Stage3,
+}
+
+impl QuantizationStage {
+    fn for_layer(layer_idx: usize, config: &HybridMatrixConfig) -> Self {
+        if layer_idx < config.stage1_end {
+            Self::Int8Stage1
+        } else if layer_idx < config.stage2_end {
+            Self::BitNet
+        } else {
+            Self::Int8Stage3
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Int8Stage1 => "Stage1(INT8)",
+            Self::BitNet => "Stage2(BitNet)",
+            Self::Int8Stage3 => "Stage3(INT8)",
+        }
+    }
+}
+
+/// Hybrid-quantized weight matrix for extreme compression.
+#[derive(Debug, Clone)]
+struct HybridWeights {
+    stage: QuantizationStage,
+    rows: usize,
+    cols: usize,
+    bitnet_packed: Option<Vec<u64>>,
+    int8_weights: Option<Vec<i8>>,
+    int8_scale: Option<f32>,
+}
+
+impl HybridWeights {
+    /// Create hybrid weights from dequantized F32 tensor.
+    fn from_f32_tensor(
+        tensor: &Tensor,
+        layer_idx: usize,
+        config: &HybridMatrixConfig,
+    ) -> Result<Self> {
+        let stage = QuantizationStage::for_layer(layer_idx, config);
+        let dims = tensor.dims();
+        if dims.len() != 2 {
+            candle_core::bail!("Expected 2D weight tensor, got {:?}", dims);
+        }
+        let rows = dims[0];
+        let cols = dims[1];
+
+        let weights_f32 = tensor.to_vec2::<f32>()?;
+        let flattened: Vec<f32> = weights_f32.into_iter().flatten().collect();
+
+        match stage {
+            QuantizationStage::BitNet => {
+                let packed = blazil_inference::pack_weights_1bit(
+                    &flattened,
+                    rows,
+                    cols,
+                    config.bitnet_threshold,
+                );
+                Ok(Self {
+                    stage,
+                    rows,
+                    cols,
+                    bitnet_packed: Some(packed),
+                    int8_weights: None,
+                    int8_scale: None,
+                })
+            }
+            QuantizationStage::Int8Stage1 | QuantizationStage::Int8Stage3 => {
+                let (quantized, scale) = blazil_inference::quantize_int8(&flattened);
+                Ok(Self {
+                    stage,
+                    rows,
+                    cols,
+                    bitnet_packed: None,
+                    int8_weights: Some(quantized),
+                    int8_scale: Some(scale),
+                })
+            }
+        }
+    }
+
+    /// Forward pass with hybrid quantization.
+    fn forward(&self, input: &Tensor) -> Result<Tensor> {
+        let input_f32 = input.to_vec2::<f32>()?;
+        let batch_size = input_f32.len();
+
+        if batch_size == 0 {
+            candle_core::bail!("Empty input tensor");
+        }
+        if input_f32[0].len() != self.cols {
+            candle_core::bail!(
+                "Input dim mismatch: expected {}, got {}",
+                self.cols,
+                input_f32[0].len()
+            );
+        }
+
+        let mut output = vec![vec![0.0f32; self.rows]; batch_size];
+
+        match self.stage {
+            QuantizationStage::BitNet => {
+                let packed = self.bitnet_packed.as_ref().unwrap();
+                for (batch_idx, input_row) in input_f32.iter().enumerate() {
+                    let mut output_row = vec![0.0f32; self.rows];
+                    blazil_inference::bitnet_linear_1bit(
+                        input_row,
+                        packed,
+                        self.rows,
+                        self.cols,
+                        &mut output_row,
+                    )
+                    .map_err(|e| {
+                        candle_core::Error::Msg(format!("BitNet forward failed: {}", e))
+                    })?;
+                    output[batch_idx] = output_row;
+                }
+            }
+            QuantizationStage::Int8Stage1 | QuantizationStage::Int8Stage3 => {
+                let weights_int8 = self.int8_weights.as_ref().unwrap();
+                let scale = self.int8_scale.unwrap();
+                let weights_f32 = blazil_inference::dequantize_int8(weights_int8, scale);
+
+                for (batch_idx, input_row) in input_f32.iter().enumerate() {
+                    for i in 0..self.rows {
+                        let mut sum = 0.0f32;
+                        for j in 0..self.cols {
+                            sum += input_row[j] * weights_f32[i * self.cols + j];
+                        }
+                        output[batch_idx][i] = sum;
+                    }
+                }
+            }
+        }
+
+        Tensor::from_vec(
+            output.into_iter().flatten().collect(),
+            (batch_size, self.rows),
+            input.device(),
+        )
+    }
+}
+
 #[derive(Debug, Clone)]
 struct Mlp {
     feed_forward_w1: QMatMul,
     feed_forward_w2: QMatMul,
     feed_forward_w3: QMatMul,
+    hybrid_w1: Option<HybridWeights>,
+    hybrid_w2: Option<HybridWeights>,
+    hybrid_w3: Option<HybridWeights>,
 }
 
 /// Optimized SiLU activation with AVX-512 VNNI fast path.
@@ -55,9 +230,17 @@ fn silu_optimized(x: &Tensor) -> Result<Tensor> {
 
 impl Module for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let w1 = self.feed_forward_w1.forward(xs)?;
-        let w3 = self.feed_forward_w3.forward(xs)?;
-        self.feed_forward_w2.forward(&(silu_optimized(&w1)? * w3)?)
+        if let (Some(hw1), Some(hw2), Some(hw3)) =
+            (&self.hybrid_w1, &self.hybrid_w2, &self.hybrid_w3)
+        {
+            let w1 = hw1.forward(xs)?;
+            let w3 = hw3.forward(xs)?;
+            hw2.forward(&(silu_optimized(&w1)? * w3)?)
+        } else {
+            let w1 = self.feed_forward_w1.forward(xs)?;
+            let w3 = self.feed_forward_w3.forward(xs)?;
+            self.feed_forward_w2.forward(&(silu_optimized(&w1)? * w3)?)
+        }
     }
 }
 
@@ -85,6 +268,10 @@ pub struct LayerWeights {
     span_attn: tracing::Span,
     span_rot: tracing::Span,
     span_mlp: tracing::Span,
+    hybrid_wq: Option<HybridWeights>,
+    hybrid_wk: Option<HybridWeights>,
+    hybrid_wv: Option<HybridWeights>,
+    hybrid_wo: Option<HybridWeights>,
 }
 
 fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: &Tensor) -> Result<Tensor> {
@@ -116,9 +303,17 @@ impl LayerWeights {
         let _enter = self.span_attn.enter();
         let (b_sz, seq_len, n_embd) = x.dims3()?;
 
-        let q = self.attention_wq.forward(x)?;
-        let k = self.attention_wk.forward(x)?;
-        let v = self.attention_wv.forward(x)?;
+        let (q, k, v) = if let (Some(hwq), Some(hwk), Some(hwv)) =
+            (&self.hybrid_wq, &self.hybrid_wk, &self.hybrid_wv)
+        {
+            (hwq.forward(x)?, hwk.forward(x)?, hwv.forward(x)?)
+        } else {
+            (
+                self.attention_wq.forward(x)?,
+                self.attention_wk.forward(x)?,
+                self.attention_wv.forward(x)?,
+            )
+        };
 
         let q = q.broadcast_add(&self.attention_bq)?;
         let k = k.broadcast_add(&self.attention_bk)?;
@@ -137,9 +332,6 @@ impl LayerWeights {
             .transpose(1, 2)?
             .contiguous()?;
 
-        // let (q, k) = self
-        //     .rotary_embedding
-        //     .apply_rotary_emb_qkv(&q, &k, index_pos)?;
         let q = self.apply_rotary_emb(&q, index_pos)?;
         let k = self.apply_rotary_emb(&k, index_pos)?;
 
@@ -157,7 +349,6 @@ impl LayerWeights {
         };
         self.kv_cache = Some((k.clone(), v.clone()));
 
-        // Support for MQA, useful for 70B models and mistral.
         let k = repeat_kv(k, self.n_head / self.n_kv_head)?;
         let v = repeat_kv(v, self.n_head / self.n_kv_head)?;
 
@@ -170,10 +361,15 @@ impl LayerWeights {
             }
         };
         let att = candle_nn::ops::softmax_last_dim(&att)?;
-        // Convert to contiguous as matmul doesn't support strided vs for now.
         let y = att.matmul(&v.contiguous()?)?;
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
-        let y = self.attention_wo.forward(&y)?;
+
+        let y = if let Some(hwo) = &self.hybrid_wo {
+            hwo.forward(&y)?
+        } else {
+            self.attention_wo.forward(&y)?
+        };
+
         Ok(y)
     }
 }
@@ -188,6 +384,9 @@ pub struct ModelWeights {
     masks: HashMap<usize, Tensor>,
     span: tracing::Span,
     span_output: tracing::Span,
+    /// Hybrid matrix quantization configuration (ClarkenAI Edge).
+    /// When enabled, applies stage-specific quantization (INT8 → 1-bit BitNet → INT8).
+    hybrid_matrix_config: Option<HybridMatrixConfig>,
 }
 
 fn precomput_freqs_cis(
@@ -215,6 +414,7 @@ impl ModelWeights {
         ct: gguf_file::Content,
         reader: &mut R,
         device: &Device,
+        hybrid_matrix_config: Option<HybridMatrixConfig>,
     ) -> Result<Self> {
         // Log SIMD capabilities at model load
         #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
@@ -249,6 +449,27 @@ impl ModelWeights {
         let rope_freq_base = md_get("qwen2.rope.freq_base")
             .and_then(|m| m.to_f32())
             .unwrap_or(10000f32);
+
+        // Validate and log Hybrid Matrix configuration
+        let hybrid_matrix_enabled = if let Some(ref config) = hybrid_matrix_config {
+            should_enable_hybrid_matrix(config, block_count)
+        } else {
+            false
+        };
+
+        if hybrid_matrix_enabled {
+            let config = hybrid_matrix_config.as_ref().unwrap();
+            tracing::info!(
+                "🎯 Hybrid Matrix Quantization ENABLED: Stage1(INT8)=0..{}, Stage2(BitNet)={}..{}, Stage3(INT8)={}..{}",
+                config.stage1_end,
+                config.stage1_end,
+                config.stage2_end,
+                config.stage2_end,
+                config.total_layers
+            );
+        } else {
+            tracing::info!("🎯 Hybrid Matrix Quantization: DISABLED (using Q4_K_M from GGUF)");
+        }
 
         let head_dim = embedding_length / head_count;
 
@@ -285,6 +506,34 @@ impl ModelWeights {
             let attention_wo =
                 ct.tensor(reader, &format!("{prefix}.attn_output.weight"), device)?;
 
+            let (hybrid_wq, hybrid_wk, hybrid_wv, hybrid_wo) = if hybrid_matrix_enabled {
+                let config = hybrid_matrix_config.as_ref().unwrap();
+                (
+                    Some(HybridWeights::from_f32_tensor(
+                        &attention_wq.dequantize(device)?,
+                        layer_idx,
+                        config,
+                    )?),
+                    Some(HybridWeights::from_f32_tensor(
+                        &attention_wk.dequantize(device)?,
+                        layer_idx,
+                        config,
+                    )?),
+                    Some(HybridWeights::from_f32_tensor(
+                        &attention_wv.dequantize(device)?,
+                        layer_idx,
+                        config,
+                    )?),
+                    Some(HybridWeights::from_f32_tensor(
+                        &attention_wo.dequantize(device)?,
+                        layer_idx,
+                        config,
+                    )?),
+                )
+            } else {
+                (None, None, None, None)
+            };
+
             let mlp = {
                 let feed_forward_w1 =
                     ct.tensor(reader, &format!("{prefix}.ffn_gate.weight"), device)?;
@@ -292,10 +541,37 @@ impl ModelWeights {
                     ct.tensor(reader, &format!("{prefix}.ffn_down.weight"), device)?;
                 let feed_forward_w3 =
                     ct.tensor(reader, &format!("{prefix}.ffn_up.weight"), device)?;
+
+                let (hybrid_w1, hybrid_w2, hybrid_w3) = if hybrid_matrix_enabled {
+                    let config = hybrid_matrix_config.as_ref().unwrap();
+                    (
+                        Some(HybridWeights::from_f32_tensor(
+                            &feed_forward_w1.dequantize(device)?,
+                            layer_idx,
+                            config,
+                        )?),
+                        Some(HybridWeights::from_f32_tensor(
+                            &feed_forward_w2.dequantize(device)?,
+                            layer_idx,
+                            config,
+                        )?),
+                        Some(HybridWeights::from_f32_tensor(
+                            &feed_forward_w3.dequantize(device)?,
+                            layer_idx,
+                            config,
+                        )?),
+                    )
+                } else {
+                    (None, None, None)
+                };
+
                 Mlp {
                     feed_forward_w1: QMatMul::from_qtensor(feed_forward_w1)?,
                     feed_forward_w2: QMatMul::from_qtensor(feed_forward_w2)?,
                     feed_forward_w3: QMatMul::from_qtensor(feed_forward_w3)?,
+                    hybrid_w1,
+                    hybrid_w2,
+                    hybrid_w3,
                 }
             };
 
@@ -328,6 +604,10 @@ impl ModelWeights {
                 span_attn,
                 span_rot,
                 span_mlp,
+                hybrid_wq,
+                hybrid_wk,
+                hybrid_wv,
+                hybrid_wo,
             });
         }
 
@@ -342,6 +622,11 @@ impl ModelWeights {
             masks: HashMap::new(),
             span,
             span_output,
+            hybrid_matrix_config: if hybrid_matrix_enabled {
+                hybrid_matrix_config
+            } else {
+                None
+            },
         })
     }
 
@@ -534,18 +819,30 @@ impl ModelWeights {
 
         // Execute layers in specified range
         for layer_idx in layer_start..layer_end {
-            tracing::info!(
-                "🔄 Layer {}: layer_in.dims={:?}",
-                layer_idx,
-                layer_in.dims()
-            );
+            // Log quantization stage if hybrid matrix is enabled
+            if let Some(ref config) = self.hybrid_matrix_config {
+                let stage = QuantizationStage::for_layer(layer_idx, config);
+                tracing::debug!(
+                    "🔄 Layer {}: {} quantization (layer_in.dims={:?})",
+                    layer_idx,
+                    stage.name(),
+                    layer_in.dims()
+                );
+            } else {
+                tracing::info!(
+                    "🔄 Layer {}: layer_in.dims={:?}",
+                    layer_idx,
+                    layer_in.dims()
+                );
+            }
+
             let layer = &mut self.layers[layer_idx];
             let x = layer_in;
             let residual = &x;
             let x = layer.attention_norm.forward(&x)?;
             let attn = layer.forward_attn(&x, mask.as_ref(), index_pos)?;
             let x = (attn + residual)?;
-            tracing::info!(
+            tracing::debug!(
                 "  ✓ Layer {} attn complete: x.dims={:?}",
                 layer_idx,
                 x.dims()
@@ -557,7 +854,7 @@ impl ModelWeights {
             let x = layer.ffn_norm.forward(&x)?;
             let x = layer.mlp.forward(&x)?;
             let x = (x + residual)?;
-            tracing::info!(
+            tracing::debug!(
                 "  ✓ Layer {} MLP complete: x.dims={:?}",
                 layer_idx,
                 x.dims()
