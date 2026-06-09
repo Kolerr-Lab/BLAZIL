@@ -55,6 +55,7 @@
 
 pub mod config;
 pub mod error;
+pub mod kernels;
 pub mod model;
 pub mod onnx;
 pub mod pipeline;
@@ -64,3 +65,8 @@ pub use error::{Error, Result};
 pub use model::{InferenceModel, Prediction};
 pub use onnx::OnnxModel;
 pub use pipeline::{InferenceBatch, InferencePipeline};
+
+// Re-export kernel functions for convenience
+pub use kernels::{
+    bitnet_linear_1bit, dequantize_int8, pack_weights_1bit, quantize_int8, KernelError,
+};

@@ -55,3 +55,7 @@ tensorrt = []
 [[bench]]
 name = "inference_throughput"
 harness = false
+
+[[bench]]
+name = "bitnet_kernels"
+harness = false
