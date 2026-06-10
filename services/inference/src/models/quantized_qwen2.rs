@@ -168,9 +168,7 @@ impl HybridWeights {
                         self.cols,
                         &mut output_row,
                     )
-                    .map_err(|e| {
-                        candle_core::Error::Msg(format!("BitNet forward failed: {}", e))
-                    })?;
+                    .map_err(|e| candle_core::Error::Msg(format!("BitNet forward failed: {e}")))?;
                     output[batch_idx] = output_row;
                 }
             }
