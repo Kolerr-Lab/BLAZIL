@@ -324,7 +324,10 @@ Provide accurate, concise answers focused on finance, trading, and risk manageme
         };
 
         for index in 0..max_gen {
-            let pos = tokens.len();
+            // Position calculation:
+            // - Prefill (index==0): pos=0, processing full prompt
+            // - Decode (index>0): pos=tokens.len()-1, processing last token
+            let pos = if index == 0 { 0 } else { tokens.len() - 1 };
 
             // Check sequence length limit
             if pos >= self.max_seq_len {
@@ -750,7 +753,8 @@ Provide accurate, concise answers focused on finance, trading, and risk manageme
         }
 
         // Execute forward pass for layer range
-        self.forward_layer_range(&tokens, tokens.len(), layer_start, layer_end)
+        // Position=0 for prefill (processing full prompt), not tokens.len()!
+        self.forward_layer_range(&tokens, 0, layer_start, layer_end)
     }
 
     /// Execute a decode step: run a single token through layers (for distributed decode orchestration).

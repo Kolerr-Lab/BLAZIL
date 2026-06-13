@@ -1,0 +1,22 @@
+# Blazil Inference Server - Stage 3 (Layers 20-28 + LM Head)
+channel = "aeron:ipc?term-length=67108864"
+aeron_dir = "/tmp/aeron-inference"
+http_port = 8092
+model_dir = "/tmp/blazil-models"
+model_path = "/Users/rickyanhnguyen/models/Qwen2.5-7B-Instruct-Q4_K_M.gguf"
+
+[gguf]
+n_threads = 14
+n_ctx = 4096
+temperature = 0.7
+max_tokens = 32
+
+[distributed]
+enabled = true
+node_stage = 3
+layer_start = 20
+layer_end = 28
+prev_stream_id = 2002
+next_stream_id = 1002
+enable_spin_poll = false
+enable_realtime_priority = false

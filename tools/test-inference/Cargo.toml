@@ -1,0 +1,24 @@
+[package]
+name = "test-inference"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "test-inference"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+rmp-serde = "1"
+serde = { workspace = true }
+
+# Aeron transport
+blazil-transport = { path = "../../core/transport" }
+
+# Inference protocol
+blazil-inference-service = { path = "../../services/inference" }

@@ -1,0 +1,26 @@
+# Blazil Inference Server - Hybrid Matrix Test (Standalone)
+channel = "aeron:ipc?term-length=67108864"
+aeron_dir = "/tmp/aeron-inference-hybrid"
+http_port = 8090
+model_dir = "/tmp/blazil-models"
+model_path = "/Users/rickyanhnguyen/models/Qwen2.5-7B-Instruct-Q4_K_M.gguf"
+
+[gguf]
+n_threads = 14
+n_ctx = 4096
+temperature = 0.7
+max_tokens = 64
+
+# Hybrid Matrix Quantization for Qwen2.5-7B (28 layers)
+# Stage 1 (INT8):   Layers 0-9
+# Stage 2 (BitNet): Layers 10-18  (64× compression)
+# Stage 3 (INT8):   Layers 19-27
+[hybrid_matrix]
+enabled = false  # TEMP: Test baseline
+stage1_end = 10
+stage2_end = 19
+total_layers = 28
+bitnet_threshold = 0.0
+
+[distributed]
+enabled = false

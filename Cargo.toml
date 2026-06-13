@@ -11,6 +11,7 @@ members = [
     "core/inference",
     "bench",
     "tools/ml-bench",
+    "tools/test-inference",
     "services/inference",
     "libs/audit",
     "libs/screening",

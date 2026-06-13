@@ -139,61 +139,77 @@ impl HybridWeights {
     }
 
     /// Forward pass with hybrid quantization.
+    /// Handles both rank-2 [batch, in_features] and rank-3 [batch, seq_len, in_features] inputs.
+    /// Uses Candle's optimized matmul for performance.
     fn forward(&self, input: &Tensor) -> Result<Tensor> {
-        let input_f32 = input.to_vec2::<f32>()?;
-        let batch_size = input_f32.len();
+        let dims = input.dims();
 
-        if batch_size == 0 {
-            candle_core::bail!("Empty input tensor");
-        }
-        if input_f32[0].len() != self.cols {
-            candle_core::bail!(
-                "Input dim mismatch: expected {}, got {}",
-                self.cols,
-                input_f32[0].len()
-            );
-        }
+        // Handle both rank-2 and rank-3 inputs
+        let (input_2d, original_shape) = match dims.len() {
+            2 => {
+                // Already rank-2: [batch, in_features]
+                (input.clone(), None)
+            }
+            3 => {
+                // Rank-3: [batch, seq_len, in_features] -> flatten to [batch * seq_len, in_features]
+                let (batch, seq_len, in_features) = (dims[0], dims[1], dims[2]);
+                let flattened = input.reshape(&[batch * seq_len, in_features])?;
+                (flattened, Some((batch, seq_len)))
+            }
+            _ => {
+                candle_core::bail!(
+                    "HybridWeights::forward: expected rank-2 or rank-3 input, got rank-{} {:?}",
+                    dims.len(),
+                    dims
+                );
+            }
+        };
 
-        let mut output = vec![vec![0.0f32; self.rows]; batch_size];
-
-        match self.stage {
+        // Create weight tensor based on stage (ensure F32 dtype to match input)
+        let weight_tensor = match self.stage {
             QuantizationStage::BitNet => {
+                // For BitNet, unpack 1-bit weights to f32
                 let packed = self.bitnet_packed.as_ref().unwrap();
-                for (batch_idx, input_row) in input_f32.iter().enumerate() {
-                    let mut output_row = vec![0.0f32; self.rows];
-                    blazil_inference::bitnet_linear_1bit(
-                        input_row,
-                        packed,
-                        self.rows,
-                        self.cols,
-                        &mut output_row,
-                    )
-                    .map_err(|e| candle_core::Error::Msg(format!("BitNet forward failed: {e}")))?;
-                    output[batch_idx] = output_row;
+                let total_weights = self.rows * self.cols;
+                let mut weights_f32 = Vec::with_capacity(total_weights);
+
+                for byte in packed.iter() {
+                    for bit_pos in 0..8 {
+                        if weights_f32.len() >= total_weights {
+                            break;
+                        }
+                        let bit = (byte >> bit_pos) & 1;
+                        weights_f32.push(if bit == 0 { -1.0f32 } else { 1.0f32 });
+                    }
+                    if weights_f32.len() >= total_weights {
+                        break;
+                    }
                 }
+
+                Tensor::from_vec(weights_f32, (self.rows, self.cols), input_2d.device())?
+                    .to_dtype(candle_core::DType::F32)?
             }
             QuantizationStage::Int8Stage1 | QuantizationStage::Int8Stage3 => {
+                // For INT8, dequantize to f32
                 let weights_int8 = self.int8_weights.as_ref().unwrap();
                 let scale = self.int8_scale.unwrap();
                 let weights_f32 = blazil_inference::dequantize_int8(weights_int8, scale);
-
-                for (batch_idx, input_row) in input_f32.iter().enumerate() {
-                    for i in 0..self.rows {
-                        let mut sum = 0.0f32;
-                        for j in 0..self.cols {
-                            sum += input_row[j] * weights_f32[i * self.cols + j];
-                        }
-                        output[batch_idx][i] = sum;
-                    }
-                }
+                Tensor::from_vec(weights_f32, (self.rows, self.cols), input_2d.device())?
+                    .to_dtype(candle_core::DType::F32)?
             }
-        }
+        };
 
-        Tensor::from_vec(
-            output.into_iter().flatten().collect(),
-            (batch_size, self.rows),
-            input.device(),
-        )
+        // Use Candle's optimized matmul: input_2d @ weight_tensor^T
+        // input_2d: [batch, in_features], weight_tensor: [out_features, in_features]
+        // Result: [batch, out_features]
+        let output_2d = input_2d.matmul(&weight_tensor.t()?)?;
+
+        // Reshape back to rank-3 if original input was rank-3
+        if let Some((batch, seq_len)) = original_shape {
+            output_2d.reshape(&[batch, seq_len, self.rows])
+        } else {
+            Ok(output_2d)
+        }
     }
 }
 
@@ -301,11 +317,24 @@ impl LayerWeights {
         let _enter = self.span_attn.enter();
         let (b_sz, seq_len, n_embd) = x.dims3()?;
 
+        tracing::debug!(
+            "🔍 forward_attn START: x={:?}, index_pos={}",
+            x.dims(),
+            index_pos
+        );
+        if let Some(m) = mask {
+            tracing::debug!("   mask: {:?}", m.dims());
+        } else {
+            tracing::debug!("   mask: None");
+        }
+
         let (q, k, v) = if let (Some(hwq), Some(hwk), Some(hwv)) =
             (&self.hybrid_wq, &self.hybrid_wk, &self.hybrid_wv)
         {
+            tracing::debug!("   Using Hybrid Matrix weights");
             (hwq.forward(x)?, hwk.forward(x)?, hwv.forward(x)?)
         } else {
+            tracing::debug!("   Using Q4_K_M weights");
             (
                 self.attention_wq.forward(x)?,
                 self.attention_wk.forward(x)?,
@@ -313,9 +342,23 @@ impl LayerWeights {
             )
         };
 
+        tracing::debug!(
+            "   q/k/v after projection: q={:?}, k={:?}, v={:?}",
+            q.dims(),
+            k.dims(),
+            v.dims()
+        );
+
         let q = q.broadcast_add(&self.attention_bq)?;
         let k = k.broadcast_add(&self.attention_bk)?;
         let v = v.broadcast_add(&self.attention_bv)?;
+
+        tracing::debug!(
+            "   After bias add: q={:?}, k={:?}, v={:?}",
+            q.dims(),
+            k.dims(),
+            v.dims()
+        );
 
         let q = q
             .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
@@ -330,8 +373,17 @@ impl LayerWeights {
             .transpose(1, 2)?
             .contiguous()?;
 
+        tracing::debug!(
+            "   After reshape+transpose: q={:?}, k={:?}, v={:?}",
+            q.dims(),
+            k.dims(),
+            v.dims()
+        );
+
         let q = self.apply_rotary_emb(&q, index_pos)?;
         let k = self.apply_rotary_emb(&k, index_pos)?;
+
+        tracing::debug!("   After rotary: q={:?}, k={:?}", q.dims(), k.dims());
 
         let (k, v) = match &self.kv_cache {
             None => (k, v),
@@ -347,26 +399,44 @@ impl LayerWeights {
         };
         self.kv_cache = Some((k.clone(), v.clone()));
 
+        tracing::debug!("   After KV cache: k={:?}, v={:?}", k.dims(), v.dims());
+
         let k = repeat_kv(k, self.n_head / self.n_kv_head)?;
         let v = repeat_kv(v, self.n_head / self.n_kv_head)?;
 
+        tracing::debug!("   After repeat_kv: k={:?}, v={:?}", k.dims(), v.dims());
+
         let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
+        tracing::debug!("   Attention scores: att={:?}", att.dims());
+
         let att = match mask {
             None => att,
             Some(mask) => {
+                tracing::debug!(
+                    "   Applying mask: mask={:?}, att={:?}",
+                    mask.dims(),
+                    att.dims()
+                );
                 let mask = mask.broadcast_as(att.shape())?;
+                tracing::debug!("   Mask after broadcast: {:?}", mask.dims());
                 masked_fill(&att, &mask, &self.neg_inf)?
             }
         };
         let att = candle_nn::ops::softmax_last_dim(&att)?;
         let y = att.matmul(&v.contiguous()?)?;
+        tracing::debug!("   After attention matmul: y={:?}", y.dims());
+
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
+        tracing::debug!("   After final reshape: y={:?}", y.dims());
 
         let y = if let Some(hwo) = &self.hybrid_wo {
             hwo.forward(&y)?
         } else {
             self.attention_wo.forward(&y)?
         };
+
+        tracing::debug!("   After output projection: y={:?}", y.dims());
+        tracing::debug!("✅ forward_attn END");
 
         Ok(y)
     }
@@ -675,12 +745,14 @@ impl ModelWeights {
 
     fn mask(&mut self, t: usize, device: &Device) -> Result<Tensor> {
         if let Some(mask) = self.masks.get(&t) {
+            tracing::debug!("📋 Using cached mask: shape={:?}", mask.dims());
             Ok(mask.clone())
         } else {
             let mask: Vec<_> = (0..t)
                 .flat_map(|i| (0..t).map(move |j| u8::from(j > i)))
                 .collect();
             let mask = Tensor::from_slice(&mask, (t, t), device)?;
+            tracing::debug!("📋 Created new mask: shape={:?}", mask.dims());
             self.masks.insert(t, mask.clone());
             Ok(mask)
         }
@@ -795,17 +867,28 @@ impl ModelWeights {
         }
 
         let mask = if seq_len == 1 {
+            tracing::debug!("⚡ Decode mode: seq_len=1, no mask needed");
             None
         } else {
-            Some(self.mask(seq_len, x.device())?)
+            tracing::debug!("🔍 Prefill mode: seq_len={}, creating mask", seq_len);
+            let m = self.mask(seq_len, x.device())?;
+            tracing::debug!("✅ Mask created: {:?}", m.dims());
+            Some(m)
         };
 
         let _enter = self.span.enter();
 
         // Stage 1: Apply token embeddings
         let mut layer_in = if apply_embeddings {
-            self.tok_embeddings.forward(x)?
+            let emb = self.tok_embeddings.forward(x)?;
+            tracing::debug!(
+                "🎯 Embeddings applied: x.dims={:?} -> emb.dims={:?}",
+                x.dims(),
+                emb.dims()
+            );
+            emb
         } else {
+            tracing::debug!("⏭️  Skipping embeddings (not first stage)");
             x.clone()
         };
 
@@ -817,21 +900,13 @@ impl ModelWeights {
 
         // Execute layers in specified range
         for layer_idx in layer_start..layer_end {
+            tracing::debug!("\n━━━ Layer {} START ━━━", layer_idx);
+            tracing::debug!("   Input: {:?}", layer_in.dims());
+
             // Log quantization stage if hybrid matrix is enabled
             if let Some(ref config) = self.hybrid_matrix_config {
                 let stage = QuantizationStage::for_layer(layer_idx, config);
-                tracing::debug!(
-                    "🔄 Layer {}: {} quantization (layer_in.dims={:?})",
-                    layer_idx,
-                    stage.name(),
-                    layer_in.dims()
-                );
-            } else {
-                tracing::info!(
-                    "🔄 Layer {}: layer_in.dims={:?}",
-                    layer_idx,
-                    layer_in.dims()
-                );
+                tracing::debug!("   Quantization: {}", stage.name());
             }
 
             let layer = &mut self.layers[layer_idx];

@@ -1,0 +1,7 @@
+channel = "aeron:ipc?term-length=67108864"
+aeron_dir = "/tmp/aeron-inference-hybrid"
+http_port = 8090
+model_path = "/Users/rickyanhnguyen/models/Qwen2.5-7B-Instruct-Q4_K_M.gguf"
+
+[hybrid_matrix]
+enabled = false  # BASELINE: Use original Q4_K_M quantization only
