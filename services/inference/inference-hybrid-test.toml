@@ -16,7 +16,7 @@ max_tokens = 64
 # Stage 2 (BitNet): Layers 10-18  (64× compression)
 # Stage 3 (INT8):   Layers 19-27
 [hybrid_matrix]
-enabled = false  # TEMP: Test baseline
+enabled = true  # ENABLED: Test Hybrid Matrix with RoPE fix
 stage1_end = 10
 stage2_end = 19
 total_layers = 28

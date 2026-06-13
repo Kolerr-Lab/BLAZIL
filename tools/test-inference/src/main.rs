@@ -143,7 +143,7 @@ fn main() -> Result<()> {
             }
             Err(e) => {
                 if send_start.elapsed().as_secs() > 5 {
-                    anyhow::bail!("Failed to send request after 5 seconds: {}", e);
+                    anyhow::bail!("Failed to send request after 5 seconds: {e}");
                 }
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
@@ -218,7 +218,7 @@ fn main() -> Result<()> {
     }
 
     if !received_response {
-        anyhow::bail!("No response received after {} seconds", POLL_TIMEOUT_SECS);
+        anyhow::bail!("No response received after {POLL_TIMEOUT_SECS} seconds");
     }
 
     info!("🎉 Test completed successfully!");
