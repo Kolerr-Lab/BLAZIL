@@ -1,14 +1,16 @@
 # Clarken Console And Benchmark Board
 
 **Version**: 0.1.0  
-**Purpose**: Live Clarken chat workspace plus the legacy benchmark board for metrics streaming and ops review.
+**Purpose**: Operator console for local Cortex/Clarken validation plus the legacy benchmark board for metrics streaming and ops review.
 
 ## Overview
 
 This Next.js app now serves two adjacent experiences:
 
-- **Clarken console**: Product-facing chat UI over `/api/chat` and the inference service `/v1/chat` path.
+- **Clarken console**: Local operator-facing chat harness over `/api/chat` and the inference service `/v1/chat` path.
 - **Benchmark board**: Legacy WebSocket metrics surface for throughput, latency, event flow, and run summaries.
+
+This app is a lab and operations surface. It is not the target end-user product surface for Ankatos.
 
 ## Quick Start
 
@@ -36,6 +38,7 @@ npm run start
 - Live prompt submission
 - Service health check
 - Operator settings hidden behind console controls
+- Useful for branding, latency, and smoke validation while Cortex/Blazil are under active development
 
 ### Benchmark Board
 - Throughput/RPS timeline
@@ -58,6 +61,7 @@ npm run start
 ## Related
 
 - **Cloud bench runbook**: `docs/runbooks/clarkenai-cloud-bench.md`
+- **Target-state boundary**: `docs/architecture/002-ankatos-cortex-blazil-boundary.md`
 - **Cloud bench launcher**: `scripts/clarkenai-70b-bench.sh`
 - **Metrics source**: `tools/ml-bench/` for the legacy benchmark board
 - **Fintech dashboard**: `tools/fintech-dashboard/`

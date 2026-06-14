@@ -1,6 +1,6 @@
-# ClarkenAI 70B Cloud Bench Runbook
+# Cortex v1 / ClarkenAI 70B Cloud Bench Runbook
 
-This is the canonical workflow for ClarkenAI CPU cloud benchmarking.
+This is the canonical workflow for CPU cloud benchmarking of Cortex v1 running on ClarkenAI 70B with the Blazil Super Engine.
 
 It replaces the older ONNX/ml-bench AWS benchmark documents and scripts. Do not use the retired `ai-aws-*`, `ai-benchmark.sh`, or `gen-ai-report.sh` path for Clarken validation.
 
@@ -12,6 +12,15 @@ It replaces the older ONNX/ml-bench AWS benchmark documents and scripts. Do not 
 - Target setup: `scripts/clarkenai-aws-setup.sh`
 - Target model fetch: `scripts/get-clarkenai-70b-model.sh`
 - Target preset: `services/inference/inference-chat-70b-ready.toml`
+
+## Deployment Boundary
+
+This host is an inference bench host, not a full Clarken SaaS deployment host.
+
+- Required on the host: Blazil runtime, model artifacts, benchmark scripts, and evidence output.
+- Not required on the host: the legacy Clarken web app, billing stack, auth stack, or conversation SaaS surface.
+- If a higher-level Ankatos or Cortex control plane needs to call this runtime later, use a network contract such as HTTP/SSE or gRPC.
+- Aeron IPC remains an internal co-located fast path. Do not treat it as the cross-host product boundary.
 
 ## Preconditions
 
@@ -124,6 +133,7 @@ Only call a cloud run credible when all of these are true:
 - HTTP smoke chat passes
 - Aeron bench records more than a single sample for the target run
 - artifacts are committed or copied off the instance intact
+- the run can be explained without depending on the legacy Clarken SaaS stack
 
 ## 7. Retired Path
 

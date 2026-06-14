@@ -265,9 +265,7 @@ fn main() -> Result<()> {
     if !received_response {
         let total_wait = poll_start.elapsed().as_secs();
         anyhow::bail!(
-            "No final response after {}s total ({}s inactivity timeout)",
-            total_wait,
-            poll_timeout_secs
+            "No final response after {total_wait}s total ({poll_timeout_secs}s inactivity timeout)"
         );
     }
 

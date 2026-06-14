@@ -27,6 +27,7 @@ This directory contains operational runbooks for managing Blazil in production.
 
 ### AI Inference
 - `clarkenai-cloud-bench.md` - Canonical Clarken 70B CPU cloud benchmark workflow
+- `../architecture/002-ankatos-cortex-blazil-boundary.md` - Target-state boundary for Ankatos, Cortex v1, and Blazil
 
 ## TODO
 

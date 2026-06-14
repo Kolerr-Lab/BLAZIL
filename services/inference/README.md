@@ -87,15 +87,16 @@ Repeat until EOS or max_tokens
 - Model file: `Qwen2.5-7B-Instruct-Q4_K_M.gguf` in `/Users/rickyanhnguyen/models/`
 - Tokenizer: `tokenizer.json` in `/Users/rickyanhnguyen/models/`
 
-### Chat + Dashboard Profiles
+### Cortex Profiles And Operator Surfaces
 
-- `inference-chat-7b-test.toml`: temporary local test profile for the AI dashboard chat pane.
-- `inference-chat-70b-ready.toml`: cloud preset for ClarkenAI 70B Core with env-driven model path, API key, and runtime knobs.
-- `inference-chat-70b-edge-ready.toml`: Ankatos OS edge preset for ClarkenAI 70B Edge with the same env-driven wiring.
+- `inference-chat-7b-test.toml`: temporary local lab profile for the operator console and smoke tests.
+- `inference-chat-70b-ready.toml`: cloud preset for Cortex v1 on ClarkenAI 70B Core with env-driven model path, API key, and runtime knobs.
+- `inference-chat-70b-edge-ready.toml`: edge preset for Cortex v1 on ClarkenAI 70B Edge under Ankatos.
 
-Both profiles now carry an explicit `[identity]` policy so the service presents itself as a Clarken product line and suppresses upstream model/vendor names in user-facing responses.
+All profiles carry an explicit `[identity]` policy so the service presents itself as the Clarken/Cortex product line and suppresses upstream model/vendor names in user-facing responses.
 
 The canonical cloud benchmark workflow now lives in `docs/runbooks/clarkenai-cloud-bench.md`.
+The target-state system boundary now lives in `docs/architecture/002-ankatos-cortex-blazil-boundary.md`.
 
 Quick 7B test:
 
@@ -104,7 +105,7 @@ cd services/inference
 cargo run --release -- --config inference-chat-7b-test.toml
 ```
 
-Then open the AI dashboard and point the chat pane at:
+If you need a local operator-facing harness, open the console and point it at:
 
 ```text
 serverUrl = http://localhost:8092
@@ -153,39 +154,29 @@ cargo +1.88.0 run --release -- \
 
 ### Send Inference Request
 
-**Terminal 4 (ClarkenAI API - Aeron Client):**
+**Direct HTTP smoke request:**
 ```bash
-cd ../../apps/api
-cargo +1.88.0 run --release
-```
-
-**Terminal 5 (Test Request):**
-```bash
-curl -X POST http://localhost:3000/v1/chat/completions \
+curl -X POST http://localhost:8092/v1/chat \
+  -H "Authorization: Bearer devkey" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "qwen2.5-7b",
-    "messages": [{"role": "user", "content": "Say hello in 3 words"}],
+    "request_id": "smoke-readme-001",
+    "prompt": "Say hello in 3 words",
     "max_tokens": 32
   }'
 ```
+
+If a higher-level product surface needs to call this runtime, treat it as a network client of Blazil. Do not treat the old co-located Clarken chat stack as the target production boundary for Ankatos.
 
 ### Expected Output
 
 ```json
 {
-  "id": "0d79bbfa-9473-4e6d-a5b9-f28815e72658",
-  "object": "chat.completion",
-  "created": 1717862575,
-  "model": "qwen2.5-7b",
-  "choices": [{
-    "index": 0,
-    "message": {
-      "role": "assistant",
-      "content": ". You are an high-risk, low-latency trading the Blaz, a next generation AISpeed..."
-    },
-    "finish_reason": "length"
-  }]
+  "request_id": "smoke-readme-001",
+  "output_text": "Hello from Clarken.",
+  "latency_us": 19700000,
+  "first_token_latency_us": 640000,
+  "tokens_generated": 6
 }
 ```
 

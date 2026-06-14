@@ -457,6 +457,7 @@ graph LR
 - **Implementation details:** [docs/DATASETS_IMPLEMENTATION.md](docs/DATASETS_IMPLEMENTATION.md)
 - **Inference audit:** [docs/AI_INFERENCE_AUDIT.md](docs/AI_INFERENCE_AUDIT.md)
 - **Cloud benchmark runbook:** [docs/runbooks/clarkenai-cloud-bench.md](docs/runbooks/clarkenai-cloud-bench.md)
+- **Ankatos / Cortex boundary:** [docs/architecture/002-ankatos-cortex-blazil-boundary.md](docs/architecture/002-ankatos-cortex-blazil-boundary.md)
 - **Metrics & records:** [docs/AI_METRICS_AND_RECORDS.md](docs/AI_METRICS_AND_RECORDS.md)
 
 **Architecture decisions:**
@@ -483,7 +484,7 @@ graph LR
 | **v0.3.3 Hardening** | ✅ Done | Same TPS | Cross-shard 2PC (TigerBeetle pending/post/void), K8s Ingress + cert-manager mTLS, Prometheus PVC, SBOM + Cosign CI signing, 3 ADRs, 8 runbooks |
 | **v0.4 Fintech Scale** | 🔭 Future | 1M+ TPS target | 4× AWS i8g.16xlarge Graviton 4 sharded VSR cluster, production benchmark pending |
 | **v0.5 AI LLM** | ✅ Verified | 32 tokens in 19.7s (M4 CPU) | Qwen2.5-7B distributed 3-stage pipeline, Language Drift fix, production-ready multi-token generation |
-| **v0.5 AI Production** | 🔭 Future | TBD RPS | Tract ONNX inference production benchmark on AWS i4i.4xlarge, cost efficiency validation |
+| **v0.5 AI Production** | 🔭 Future | TBD RPS | Cortex v1 on ClarkenAI 70B plus Blazil Super Engine, cloud cost validation, Ankatos runtime integration |
 
 ---
 
