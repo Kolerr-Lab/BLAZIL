@@ -29,6 +29,7 @@
 //! - No async overhead for tight poll loop
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -329,13 +330,87 @@ fn run_single_stage(model: Arc<Mutex<GgufModel>>, ctx: &AeronContext, channel: &
                     "Processing inference request"
                 );
 
+                // SLA-first: publish immediate ACK so client doesn't time out waiting for first byte.
+                let ack = build_streaming_ack(&req.request_id);
+                if let Ok(ack_bytes) = serialize_response(&ack) {
+                    let _ = response_tx.send(ack_bytes);
+                }
+
                 let model_clone = Arc::clone(&model);
                 let tx_clone = response_tx.clone();
 
                 std::thread::spawn(move || {
+                    let request_id_for_heartbeat = req.request_id.clone();
+                    let request_id_for_logs = req.request_id.clone();
+                    let heartbeat_done = Arc::new(AtomicBool::new(false));
+                    let heartbeat_done_clone = Arc::clone(&heartbeat_done);
+                    let heartbeat_tx = tx_clone.clone();
+
+                    std::thread::spawn(move || {
+                        while !heartbeat_done_clone.load(Ordering::Relaxed) {
+                            std::thread::sleep(Duration::from_secs(5));
+                            if heartbeat_done_clone.load(Ordering::Relaxed) {
+                                break;
+                            }
+
+                            let heartbeat = build_streaming_ack(&request_id_for_heartbeat);
+                            if let Ok(bytes) = serialize_response(&heartbeat) {
+                                debug!(request_id = %request_id_for_heartbeat, "Sending heartbeat frame");
+                                let _ = heartbeat_tx.send(bytes);
+                            }
+                        }
+                    });
+
                     let start = Instant::now();
-                    let mut response = process_gguf_inference(&model_clone, req, None);
+                    let tx_chunks = tx_clone.clone();
+                    let chunk_counter = Arc::new(Mutex::new(0usize));
+                    let chunk_counter_cb = Arc::clone(&chunk_counter);
+                    let mut response = process_gguf_inference_streaming(
+                        &model_clone,
+                        req,
+                        None,
+                        move |request_id, token_chunk| {
+                            if token_chunk.is_empty() {
+                                return;
+                            }
+
+                            let chunk_raw_output: Vec<f32> =
+                                token_chunk.bytes().map(|b| b as f32).collect();
+                            let chunk_response = InferenceResponse {
+                                request_id: request_id.to_string(),
+                                class_id: None,
+                                probabilities: vec![],
+                                raw_output: chunk_raw_output,
+                                confidence: 0.0,
+                                latency_us: 0,
+                                error: String::new(),
+                            };
+
+                            if let Ok(bytes) = serialize_response(&chunk_response) {
+                                if let Ok(mut count) = chunk_counter_cb.lock() {
+                                    *count += 1;
+                                    info!(
+                                        request_id = %request_id,
+                                        chunk_index = *count,
+                                        chunk_len = token_chunk.len(),
+                                        "Streaming token chunk"
+                                    );
+                                }
+                                let _ = tx_chunks.send(bytes);
+                            }
+                        },
+                    );
                     response.latency_us = start.elapsed().as_micros() as u64;
+                    heartbeat_done.store(true, Ordering::Relaxed);
+
+                    let chunk_count = chunk_counter.lock().map(|count| *count).unwrap_or(0);
+                    info!(
+                        request_id = %request_id_for_logs,
+                        latency_us = response.latency_us,
+                        streamed_chunks = chunk_count,
+                        final_text_bytes = response.raw_output.len(),
+                        "Inference finished, sending final response"
+                    );
 
                     if let Ok(resp_bytes) = serialize_response(&response) {
                         let _ = tx_clone.send(resp_bytes);
@@ -1194,11 +1269,15 @@ fn idle_backoff(idle_count: &mut u64, is_idle: bool) {
 ///
 /// When `layer_range` is provided, executes only the specified layer range
 /// and returns intermediate activations instead of final tokens.
-fn process_gguf_inference(
+fn process_gguf_inference_streaming<F>(
     model: &Arc<Mutex<GgufModel>>,
     req: InferenceRequest,
     layer_range: Option<(usize, usize)>,
-) -> InferenceResponse {
+    mut on_chunk: F,
+) -> InferenceResponse
+where
+    F: FnMut(&str, &str) + Send + 'static,
+{
     // Decode input_data as UTF-8 text (prompt)
     let prompt = match String::from_utf8(req.input_data.clone()) {
         Ok(s) => s,
@@ -1251,8 +1330,10 @@ fn process_gguf_inference(
 
     // Generate streaming text (collect all tokens)
     let mut generated_text = String::new();
+    let request_id_for_chunks = req.request_id.clone();
     let generation_result = model_guard.generate_streaming(&prompt, max_tokens_override, |token| {
         generated_text.push_str(token);
+        on_chunk(&request_id_for_chunks, token);
     });
 
     drop(model_guard); // Release mutex ASAP
@@ -1281,6 +1362,18 @@ fn process_gguf_inference(
         raw_output,
         confidence: 1.0, // Not applicable for text generation
         latency_us: 0,   // Set by caller
+        error: String::new(),
+    }
+}
+
+fn build_streaming_ack(request_id: &str) -> InferenceResponse {
+    InferenceResponse {
+        request_id: request_id.to_string(),
+        class_id: None,
+        probabilities: vec![],
+        raw_output: vec![],
+        confidence: 0.0,
+        latency_us: 0,
         error: String::new(),
     }
 }

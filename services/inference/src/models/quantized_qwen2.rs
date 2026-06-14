@@ -23,6 +23,8 @@ use candle_core::{
 use candle_nn::{Embedding, Module};
 use candle_transformers::{quantized_nn::RmsNorm, utils::repeat_kv};
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
 use super::avx512_kernels;
@@ -48,6 +50,19 @@ fn should_enable_hybrid_matrix(config: &HybridMatrixConfig, total_layers: usize)
         return false;
     }
     true
+}
+
+/// KV cache snapshot for prefix-only incremental prefill.
+/// Stores frozen KV cache after processing fixed system prefix to accelerate subsequent prefills.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct KVCacheSnapshot {
+    /// Frozen KV cache per layer after system prefix completion
+    pub layer_kvs: Vec<(Tensor, Tensor)>,
+    /// System prefix token count (matched tokens can skip computation)
+    pub prefix_len: usize,
+    /// Hash/signature of system prompt to detect changes
+    pub prefix_hash: u64,
 }
 
 /// Quantization stage for Hybrid Matrix architecture.
@@ -78,6 +93,13 @@ impl QuantizationStage {
     }
 }
 
+fn uses_bitnet_weights(layer_idx: usize, config: &HybridMatrixConfig) -> bool {
+    matches!(
+        QuantizationStage::for_layer(layer_idx, config),
+        QuantizationStage::BitNet
+    )
+}
+
 /// Hybrid-quantized weight matrix for extreme compression.
 #[derive(Debug, Clone)]
 struct HybridWeights {
@@ -85,8 +107,8 @@ struct HybridWeights {
     rows: usize,
     cols: usize,
     bitnet_packed: Option<Vec<u64>>,
-    int8_weights: Option<Vec<i8>>,
-    int8_scale: Option<f32>,
+    bitnet_row_scales: Option<Vec<f32>>,
+    int8_weight_tensor: Option<Tensor>,
 }
 
 impl HybridWeights {
@@ -104,11 +126,39 @@ impl HybridWeights {
         let rows = dims[0];
         let cols = dims[1];
 
+        tracing::debug!(
+            "🔍 from_f32_tensor: layer={}, stage={}, shape=[{}, {}], dtype={:?}",
+            layer_idx,
+            stage.name(),
+            rows,
+            cols,
+            tensor.dtype()
+        );
+
         let weights_f32 = tensor.to_vec2::<f32>()?;
+
+        // Log first few values to verify dequantization
+        tracing::debug!(
+            "   First row samples (before quantization): [{:.6}, {:.6}, {:.6}, {:.6}]",
+            weights_f32.get(0).and_then(|r| r.get(0)).unwrap_or(&0.0),
+            weights_f32.get(0).and_then(|r| r.get(1)).unwrap_or(&0.0),
+            weights_f32.get(0).and_then(|r| r.get(2)).unwrap_or(&0.0),
+            weights_f32.get(0).and_then(|r| r.get(3)).unwrap_or(&0.0)
+        );
+
         let flattened: Vec<f32> = weights_f32.into_iter().flatten().collect();
 
         match stage {
             QuantizationStage::BitNet => {
+                let mut row_scales = Vec::with_capacity(rows);
+                for row in 0..rows {
+                    let row_start = row * cols;
+                    let row_end = row_start + cols;
+                    let row_slice = &flattened[row_start..row_end];
+                    let mean_abs = row_slice.iter().map(|v| v.abs()).sum::<f32>() / cols as f32;
+                    row_scales.push(mean_abs.max(1e-8));
+                }
+
                 let packed = blazil_inference::pack_weights_1bit(
                     &flattened,
                     rows,
@@ -120,19 +170,22 @@ impl HybridWeights {
                     rows,
                     cols,
                     bitnet_packed: Some(packed),
-                    int8_weights: None,
-                    int8_scale: None,
+                    bitnet_row_scales: Some(row_scales),
+                    int8_weight_tensor: None,
                 })
             }
             QuantizationStage::Int8Stage1 | QuantizationStage::Int8Stage3 => {
                 let (quantized, scale) = blazil_inference::quantize_int8(&flattened);
+                let dequantized = blazil_inference::dequantize_int8(&quantized, scale);
+                let weight_tensor = Tensor::from_vec(dequantized, (rows, cols), &Device::Cpu)?
+                    .to_dtype(candle_core::DType::F32)?;
                 Ok(Self {
                     stage,
                     rows,
                     cols,
                     bitnet_packed: None,
-                    int8_weights: Some(quantized),
-                    int8_scale: Some(scale),
+                    bitnet_row_scales: None,
+                    int8_weight_tensor: Some(weight_tensor),
                 })
             }
         }
@@ -143,6 +196,13 @@ impl HybridWeights {
     /// Uses Candle's optimized matmul for performance.
     fn forward(&self, input: &Tensor) -> Result<Tensor> {
         let dims = input.dims();
+        let forward_start = Instant::now();
+
+        tracing::debug!(
+            "🔧 HybridWeights::forward: stage={}, input_shape={:?}",
+            self.stage.name(),
+            dims
+        );
 
         // Handle both rank-2 and rank-3 inputs
         let (input_2d, original_shape) = match dims.len() {
@@ -165,49 +225,134 @@ impl HybridWeights {
             }
         };
 
-        // Create weight tensor based on stage (ensure F32 dtype to match input)
-        let weight_tensor = match self.stage {
+        // Stage-specific projection.
+        let output_2d = match self.stage {
             QuantizationStage::BitNet => {
-                // For BitNet, unpack 1-bit weights to f32
+                let stage_start = Instant::now();
                 let packed = self.bitnet_packed.as_ref().unwrap();
-                let total_weights = self.rows * self.cols;
-                let mut weights_f32 = Vec::with_capacity(total_weights);
+                let row_scales = self.bitnet_row_scales.as_ref().unwrap();
+                let extract_start = Instant::now();
+                let inputs = input_2d.to_vec2::<f32>()?;
+                let extract_ms = extract_start.elapsed().as_secs_f64() * 1000.0;
+                let batch = inputs.len();
+                let kernel_start = Instant::now();
+                let mut output_flat = vec![0f32; batch * self.rows];
 
-                for byte in packed.iter() {
-                    for bit_pos in 0..8 {
-                        if weights_f32.len() >= total_weights {
-                            break;
+                if batch > 1 {
+                    let input_flat: Vec<f32> = inputs.into_iter().flatten().collect();
+                    blazil_inference::bitnet_linear_1bit_batched_parallel(
+                        &input_flat,
+                        batch,
+                        packed,
+                        self.rows,
+                        self.cols,
+                        &mut output_flat,
+                    )
+                    .map_err(|err| {
+                        candle_core::Error::Msg(format!("BitNet kernel failed: {err}"))
+                    })?;
+
+                    for row_out in output_flat.chunks_mut(self.rows) {
+                        for (v, scale) in row_out.iter_mut().zip(row_scales.iter()) {
+                            *v *= *scale;
                         }
-                        let bit = (byte >> bit_pos) & 1;
-                        weights_f32.push(if bit == 0 { -1.0f32 } else { 1.0f32 });
                     }
-                    if weights_f32.len() >= total_weights {
-                        break;
+                } else {
+                    for input_row in &inputs {
+                        let mut row_out = vec![0f32; self.rows];
+                        let kernel_result = if self.rows >= 1024 {
+                            blazil_inference::bitnet_linear_1bit_parallel(
+                                input_row,
+                                packed,
+                                self.rows,
+                                self.cols,
+                                &mut row_out,
+                            )
+                        } else {
+                            blazil_inference::bitnet_linear_1bit(
+                                input_row,
+                                packed,
+                                self.rows,
+                                self.cols,
+                                &mut row_out,
+                            )
+                        };
+                        if let Err(err) = kernel_result {
+                            candle_core::bail!("BitNet kernel failed: {err}");
+                        }
+                        for (v, scale) in row_out.iter_mut().zip(row_scales.iter()) {
+                            *v *= *scale;
+                        }
+                        output_flat.copy_from_slice(&row_out);
                     }
                 }
 
-                Tensor::from_vec(weights_f32, (self.rows, self.cols), input_2d.device())?
-                    .to_dtype(candle_core::DType::F32)?
+                let kernel_ms = kernel_start.elapsed().as_secs_f64() * 1000.0;
+                let materialize_start = Instant::now();
+                let output = Tensor::from_vec(output_flat, (batch, self.rows), input_2d.device())?;
+                let materialize_ms = materialize_start.elapsed().as_secs_f64() * 1000.0;
+                let total_ms = stage_start.elapsed().as_secs_f64() * 1000.0;
+
+                if total_ms >= 5.0 {
+                    tracing::info!(
+                        "⏱️ Stage2(BitNet) total_ms={:.3} extract_ms={:.3} kernel_ms={:.3} materialize_ms={:.3} batch={} rows={} cols={} input_shape={:?}",
+                        total_ms,
+                        extract_ms,
+                        kernel_ms,
+                        materialize_ms,
+                        batch,
+                        self.rows,
+                        self.cols,
+                        dims
+                    );
+                } else {
+                    tracing::debug!(
+                        "⏱️ Stage2(BitNet) total_ms={:.3} extract_ms={:.3} kernel_ms={:.3} materialize_ms={:.3} batch={} rows={} cols={} input_shape={:?}",
+                        total_ms,
+                        extract_ms,
+                        kernel_ms,
+                        materialize_ms,
+                        batch,
+                        self.rows,
+                        self.cols,
+                        dims
+                    );
+                }
+                output
             }
             QuantizationStage::Int8Stage1 | QuantizationStage::Int8Stage3 => {
-                // For INT8, dequantize to f32
-                let weights_int8 = self.int8_weights.as_ref().unwrap();
-                let scale = self.int8_scale.unwrap();
-                let weights_f32 = blazil_inference::dequantize_int8(weights_int8, scale);
-                Tensor::from_vec(weights_f32, (self.rows, self.cols), input_2d.device())?
-                    .to_dtype(candle_core::DType::F32)?
+                let stage_start = Instant::now();
+                let weight_tensor = self.int8_weight_tensor.as_ref().unwrap();
+                let out = input_2d.matmul(&weight_tensor.t()?)?;
+                tracing::debug!(
+                    "⏱️ {} core_time_ms={:.3} input_shape={:?}",
+                    self.stage.name(),
+                    stage_start.elapsed().as_secs_f64() * 1000.0,
+                    dims
+                );
+                out
             }
         };
 
-        // Use Candle's optimized matmul: input_2d @ weight_tensor^T
-        // input_2d: [batch, in_features], weight_tensor: [out_features, in_features]
-        // Result: [batch, out_features]
-        let output_2d = input_2d.matmul(&weight_tensor.t()?)?;
+        tracing::debug!("   Output shape: {:?}", output_2d.dims());
 
         // Reshape back to rank-3 if original input was rank-3
         if let Some((batch, seq_len)) = original_shape {
-            output_2d.reshape(&[batch, seq_len, self.rows])
+            let out = output_2d.reshape(&[batch, seq_len, self.rows])?;
+            tracing::debug!(
+                "⏱️ HybridWeights::forward total_ms={:.3} stage={} input_shape={:?}",
+                forward_start.elapsed().as_secs_f64() * 1000.0,
+                self.stage.name(),
+                dims
+            );
+            Ok(out)
         } else {
+            tracing::debug!(
+                "⏱️ HybridWeights::forward total_ms={:.3} stage={} input_shape={:?}",
+                forward_start.elapsed().as_secs_f64() * 1000.0,
+                self.stage.name(),
+                dims
+            );
             Ok(output_2d)
         }
     }
@@ -455,6 +600,9 @@ pub struct ModelWeights {
     /// Hybrid matrix quantization configuration (ClarkenAI Edge).
     /// When enabled, applies stage-specific quantization (INT8 → 1-bit BitNet → INT8).
     hybrid_matrix_config: Option<HybridMatrixConfig>,
+    /// Prefix-KV snapshot for delta-only prefill acceleration.
+    /// After system prefix is fully processed once, frozen KV cache enables skipping prefix recomputation.
+    prefix_kv_snapshot: Arc<Mutex<Option<KVCacheSnapshot>>>,
 }
 
 fn precomput_freqs_cis(
@@ -574,7 +722,9 @@ impl ModelWeights {
             let attention_wo =
                 ct.tensor(reader, &format!("{prefix}.attn_output.weight"), device)?;
 
-            let (hybrid_wq, hybrid_wk, hybrid_wv, hybrid_wo) = if hybrid_matrix_enabled {
+            let (hybrid_wq, hybrid_wk, hybrid_wv, hybrid_wo) = if hybrid_matrix_enabled
+                && uses_bitnet_weights(layer_idx, hybrid_matrix_config.as_ref().unwrap())
+            {
                 let config = hybrid_matrix_config.as_ref().unwrap();
                 (
                     Some(HybridWeights::from_f32_tensor(
@@ -610,7 +760,9 @@ impl ModelWeights {
                 let feed_forward_w3 =
                     ct.tensor(reader, &format!("{prefix}.ffn_up.weight"), device)?;
 
-                let (hybrid_w1, hybrid_w2, hybrid_w3) = if hybrid_matrix_enabled {
+                let (hybrid_w1, hybrid_w2, hybrid_w3) = if hybrid_matrix_enabled
+                    && uses_bitnet_weights(layer_idx, hybrid_matrix_config.as_ref().unwrap())
+                {
                     let config = hybrid_matrix_config.as_ref().unwrap();
                     (
                         Some(HybridWeights::from_f32_tensor(
@@ -695,6 +847,7 @@ impl ModelWeights {
             } else {
                 None
             },
+            prefix_kv_snapshot: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -725,6 +878,133 @@ impl ModelWeights {
         for layer in &mut self.layers {
             layer.clear_kv_cache();
         }
+    }
+
+    /// Capture current KV cache state as frozen snapshot for system prefix.
+    /// Call after system prompt prefill completes to enable delta-prefill on subsequent user queries.
+    #[allow(dead_code)]
+    pub fn capture_kv_snapshot(&self, prefix_len: usize, prefix_hash: u64) {
+        let layer_kvs: Vec<(Tensor, Tensor)> = self
+            .layers
+            .iter()
+            .filter_map(|layer| layer.kv_cache.clone())
+            .collect();
+
+        if layer_kvs.len() == self.layers.len() {
+            let snapshot = KVCacheSnapshot {
+                layer_kvs,
+                prefix_len,
+                prefix_hash,
+            };
+            if let Ok(mut snap) = self.prefix_kv_snapshot.lock() {
+                *snap = Some(snapshot);
+                tracing::info!(
+                    "📸 KV snapshot captured: prefix_len={}, hash={:x}, layers={}",
+                    prefix_len,
+                    prefix_hash,
+                    self.layers.len()
+                );
+            }
+        } else {
+            tracing::warn!(
+                "⚠️ KV snapshot capture failed: only {}/{} layers have cache",
+                layer_kvs.len(),
+                self.layers.len()
+            );
+        }
+    }
+
+    /// Restore frozen KV snapshot into layers (resets KV cache to system prefix endpoint).
+    #[allow(dead_code)]
+    pub fn restore_kv_snapshot(&mut self) -> Result<bool> {
+        if let Ok(snap_lock) = self.prefix_kv_snapshot.lock() {
+            if let Some(snapshot) = snap_lock.as_ref() {
+                for (layer, (k, v)) in self.layers.iter_mut().zip(snapshot.layer_kvs.iter()) {
+                    layer.kv_cache = Some((k.clone(), v.clone()));
+                }
+                tracing::debug!(
+                    "🔄 KV snapshot restored: prefix_len={}",
+                    snapshot.prefix_len
+                );
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Restore snapshot only when prefix hash/length match.
+    /// Returns `Some(prefix_len)` when restored, otherwise `None`.
+    #[allow(dead_code)]
+    pub fn restore_kv_snapshot_for_prefix(
+        &mut self,
+        prefix_tokens: &[u32],
+    ) -> Result<Option<usize>> {
+        let expected_hash = Self::compute_prefix_hash(prefix_tokens);
+        if let Ok(snap_lock) = self.prefix_kv_snapshot.lock() {
+            if let Some(snapshot) = snap_lock.as_ref() {
+                if snapshot.prefix_hash != expected_hash
+                    || snapshot.prefix_len != prefix_tokens.len()
+                {
+                    tracing::info!(
+                        "🧪 KV snapshot mismatch: expected_len={}, expected_hash={:x}, snapshot_len={}, snapshot_hash={:x}",
+                        prefix_tokens.len(),
+                        expected_hash,
+                        snapshot.prefix_len,
+                        snapshot.prefix_hash
+                    );
+                    return Ok(None);
+                }
+
+                let prefix_len = snapshot.prefix_len;
+                for (layer, (k, v)) in self.layers.iter_mut().zip(snapshot.layer_kvs.iter()) {
+                    layer.kv_cache = Some((k.clone(), v.clone()));
+                }
+                tracing::info!(
+                    "✨ KV snapshot matched and restored: prefix_len={}, hash={:x}",
+                    prefix_len,
+                    expected_hash
+                );
+                return Ok(Some(prefix_len));
+            }
+
+            tracing::info!(
+                "🧪 KV snapshot unavailable: expected_len={}, expected_hash={:x}",
+                prefix_tokens.len(),
+                expected_hash
+            );
+        } else {
+            tracing::warn!("⚠️ Failed to lock KV snapshot mutex during restore");
+        }
+        Ok(None)
+    }
+
+    /// Compute simple hash for system prefix tokens (for change detection).
+    #[allow(dead_code)]
+    pub fn compute_prefix_hash(tokens: &[u32]) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        tokens.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    /// Finalize prefill phase and capture KV snapshot for system prefix (after full chat setup).
+    /// Call after processing system prompt tokens to enable delta-only prefill on subsequent user queries.
+    ///
+    /// # Arguments
+    /// - `prefix_tokens` — System prompt tokens (used for hash/change detection)
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// // After system prompt fully processed through all pipeline stages
+    /// model.finalize_prefill_and_capture_snapshot(&system_tokens)?;
+    /// ```
+    #[allow(dead_code)]
+    pub fn finalize_prefill_and_capture_snapshot(&self, prefix_tokens: &[u32]) -> Result<()> {
+        let prefix_len = prefix_tokens.len();
+        let prefix_hash = Self::compute_prefix_hash(prefix_tokens);
+        self.capture_kv_snapshot(prefix_len, prefix_hash);
+        Ok(())
     }
 
     /// Check if this is a brand new request that requires KV cache clearing.
@@ -758,34 +1038,76 @@ impl ModelWeights {
         }
     }
 
+    fn mask_with_past(&self, t: usize, past_len: usize, device: &Device) -> Result<Tensor> {
+        let total_k_len = past_len + t;
+        let mask: Vec<_> = (0..t)
+            .flat_map(|i| (0..total_k_len).map(move |j| u8::from(j > past_len + i)))
+            .collect();
+        Ok(Tensor::from_slice(&mask, (t, total_k_len), device)?)
+    }
+
     pub fn forward(&mut self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
+        let forward_start = Instant::now();
         let (_b_sz, seq_len) = x.dims2()?;
+        let hmq_enabled = self
+            .hybrid_matrix_config
+            .as_ref()
+            .map(|cfg| cfg.enabled)
+            .unwrap_or(false);
         let mask = if seq_len == 1 {
             None
+        } else if index_pos > 0 {
+            Some(self.mask_with_past(seq_len, index_pos, x.device())?)
         } else {
             Some(self.mask(seq_len, x.device())?)
         };
         let _enter = self.span.enter();
         let mut layer_in = self.tok_embeddings.forward(x)?;
-        for layer in self.layers.iter_mut() {
+        for (layer_idx, layer) in self.layers.iter_mut().enumerate() {
+            let layer_start = Instant::now();
             let x = layer_in;
             let residual = &x;
             let x = layer.attention_norm.forward(&x)?;
+            let attn_start = Instant::now();
             let attn = layer.forward_attn(&x, mask.as_ref(), index_pos)?;
+            let attn_ms = attn_start.elapsed().as_secs_f64() * 1000.0;
             let x = (attn + residual)?;
 
             // MLP
             let _enter = layer.span_mlp.enter();
             let residual = &x;
             let x = layer.ffn_norm.forward(&x)?;
+            let mlp_start = Instant::now();
             let x = layer.mlp.forward(&x)?;
+            let mlp_ms = mlp_start.elapsed().as_secs_f64() * 1000.0;
             let x = (x + residual)?;
+            let layer_ms = layer_start.elapsed().as_secs_f64() * 1000.0;
+            if hmq_enabled && seq_len > 1 && layer_ms >= 5.0 {
+                tracing::info!(
+                    "⏱️ HMQ layer={} seq_len={} index_pos={} attn_ms={:.3} mlp_ms={:.3} total_ms={:.3}",
+                    layer_idx,
+                    seq_len,
+                    index_pos,
+                    attn_ms,
+                    mlp_ms,
+                    layer_ms
+                );
+            }
             layer_in = x
         }
         let x = self.norm.forward(&layer_in)?;
         let x = x.i((.., seq_len - 1, ..))?;
         let _enter = self.span_output.enter();
-        self.output.forward(&x)
+        let logits = self.output.forward(&x)?;
+        if hmq_enabled && seq_len > 1 {
+            tracing::info!(
+                "⏱️ HMQ forward total_ms={:.3} seq_len={} index_pos={}",
+                forward_start.elapsed().as_secs_f64() * 1000.0,
+                seq_len,
+                index_pos
+            );
+        }
+        Ok(logits)
     }
 
     /// Execute forward pass for a specific layer range (distributed pipeline).
@@ -874,6 +1196,21 @@ impl ModelWeights {
             let m = self.mask(seq_len, x.device())?;
             tracing::debug!("✅ Mask created: {:?}", m.dims());
             Some(m)
+        };
+
+        // 📸 Prefix-KV snapshot: attempt delta-only prefill acceleration
+        // If snapshot restored, KV cache pre-populated with system prefix state
+        let _snapshot_active = if apply_embeddings && seq_len > 1 && layer_start == 0 {
+            // Prefill at stage 1: try restore snapshot for delta mode
+            match self.restore_kv_snapshot() {
+                Ok(true) => {
+                    tracing::info!("✨ KV snapshot RESTORED: delta-only prefill enabled");
+                    true
+                }
+                _ => false,
+            }
+        } else {
+            false
         };
 
         let _enter = self.span.enter();

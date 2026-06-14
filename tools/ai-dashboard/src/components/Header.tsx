@@ -76,7 +76,7 @@ export function Header({
             BLAZIL
           </div>
           <div className="text-[10px] text-[var(--text-muted)] -mt-0.5">
-            AI INFERENCE DASHBOARD
+            CLARKEN CONSOLE + BENCHMARKS
           </div>
         </div>
 
@@ -139,20 +139,44 @@ export function Header({
 
       {/* Right: Connection */}
       <div className="flex items-center gap-2">
-        <input
-          type="text"
-          value={wsUrl}
-          onChange={(e) => onWsUrlChange(e.target.value)}
-          disabled={isRunning}
-          className="hidden md:block text-xs font-mono rounded-lg px-3 py-1.5 w-56 outline-none"
-          style={{
-            background: "var(--bg-card)",
-            border: "1px solid var(--border)",
-            color: "var(--text)",
-            opacity: isRunning ? 0.6 : 1,
-          }}
-          placeholder="ws://host:9090/ws"
-        />
+        <details className="hidden lg:block relative">
+          <summary
+            className="list-none cursor-pointer text-[11px] font-semibold px-3 py-1.5 rounded-lg"
+            style={{
+              background: "rgba(255,255,255,0.04)",
+              border: "1px solid var(--border)",
+              color: "var(--text-muted)",
+            }}
+          >
+            Operator settings
+          </summary>
+          <div
+            className="absolute right-0 mt-2 w-72 rounded-xl p-3 flex flex-col gap-2"
+            style={{
+              background: "rgba(8,11,18,0.98)",
+              border: "1px solid var(--border)",
+              boxShadow: "0 18px 48px rgba(0,0,0,0.35)",
+            }}
+          >
+            <div className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: "var(--text-muted)" }}>
+              Metrics stream endpoint
+            </div>
+            <input
+              type="text"
+              value={wsUrl}
+              onChange={(e) => onWsUrlChange(e.target.value)}
+              disabled={isRunning}
+              className="text-xs font-mono rounded-lg px-3 py-2 outline-none w-full"
+              style={{
+                background: "var(--bg-card)",
+                border: "1px solid var(--border)",
+                color: "var(--text)",
+                opacity: isRunning ? 0.6 : 1,
+              }}
+              placeholder="ws://host:9090/ws"
+            />
+          </div>
+        </details>
         {isRunning ? (
           <button
             onClick={onDisconnect}

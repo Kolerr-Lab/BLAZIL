@@ -87,6 +87,40 @@ Repeat until EOS or max_tokens
 - Model file: `Qwen2.5-7B-Instruct-Q4_K_M.gguf` in `/Users/rickyanhnguyen/models/`
 - Tokenizer: `tokenizer.json` in `/Users/rickyanhnguyen/models/`
 
+### Chat + Dashboard Profiles
+
+- `inference-chat-7b-test.toml`: temporary local test profile for the AI dashboard chat pane.
+- `inference-chat-70b-ready.toml`: cloud preset for ClarkenAI 70B Core with env-driven model path, API key, and runtime knobs.
+- `inference-chat-70b-edge-ready.toml`: Ankatos OS edge preset for ClarkenAI 70B Edge with the same env-driven wiring.
+
+Both profiles now carry an explicit `[identity]` policy so the service presents itself as a Clarken product line and suppresses upstream model/vendor names in user-facing responses.
+
+The canonical cloud benchmark workflow now lives in `docs/runbooks/clarkenai-cloud-bench.md`.
+
+Quick 7B test:
+
+```bash
+cd services/inference
+cargo run --release -- --config inference-chat-7b-test.toml
+```
+
+Then open the AI dashboard and point the chat pane at:
+
+```text
+serverUrl = http://localhost:8092
+apiKey = devkey
+tenantId = dashboard
+```
+
+When the 70B artifact is available on cloud, switch to:
+
+```bash
+cd services/inference
+export CLARKENAI_MODEL_PATH=/opt/clarkenai/models/Qwen2.5-72B-Instruct-Q4_K_M.gguf
+export BLAZIL_INFERENCE_API_KEY=replace-with-a-real-secret
+cargo run --release -- --config inference-chat-70b-ready.toml
+```
+
 ### Launch 3-Stage Pipeline
 
 **Terminal 1 (Stage 1):**

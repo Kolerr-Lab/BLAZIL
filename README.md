@@ -456,7 +456,7 @@ graph LR
 
 - **Implementation details:** [docs/DATASETS_IMPLEMENTATION.md](docs/DATASETS_IMPLEMENTATION.md)
 - **Inference audit:** [docs/AI_INFERENCE_AUDIT.md](docs/AI_INFERENCE_AUDIT.md)
-- **Performance baselines:** [docs/AI_BASELINES.md](docs/AI_BASELINES.md)
+- **Cloud benchmark runbook:** [docs/runbooks/clarkenai-cloud-bench.md](docs/runbooks/clarkenai-cloud-bench.md)
 - **Metrics & records:** [docs/AI_METRICS_AND_RECORDS.md](docs/AI_METRICS_AND_RECORDS.md)
 
 **Architecture decisions:**

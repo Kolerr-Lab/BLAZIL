@@ -27,13 +27,31 @@ use blazil_inference_service::protocol::{
     INFERENCE_RSP_STREAM_ID,
 };
 
+fn env_or_default(key: &str, default: &str) -> String {
+    std::env::var(key).unwrap_or_else(|_| default.to_string())
+}
+
+fn env_u64_or_default(key: &str, default: u64) -> u64 {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(default)
+}
+
+fn env_usize_or_default(key: &str, default: usize) -> usize {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(default)
+}
+
 // ── Configuration ─────────────────────────────────────────────────────────────
 
 /// Aeron IPC channel (must match server configuration).
-const AERON_CHANNEL: &str = "aeron:ipc?term-length=67108864";
+const DEFAULT_AERON_CHANNEL: &str = "aeron:ipc?term-length=67108864";
 
 /// Aeron IPC directory (must match server).
-const AERON_DIR: &str = "/tmp/aeron-inference-hybrid";
+const DEFAULT_AERON_DIR: &str = "/tmp/aeron-inference-hybrid";
 
 /// Timeout for publication/subscription registration.
 const REGISTRATION_TIMEOUT: Duration = Duration::from_secs(5);
@@ -41,8 +59,8 @@ const REGISTRATION_TIMEOUT: Duration = Duration::from_secs(5);
 /// Maximum fragments to poll per iteration.
 const FRAGMENT_LIMIT: usize = 256;
 
-/// Poll timeout (seconds to wait for response).
-const POLL_TIMEOUT_SECS: u64 = 30;
+/// Inactivity timeout (seconds without any server frame before failing).
+const DEFAULT_POLL_TIMEOUT_SECS: u64 = 30;
 
 // ── Main Test Client ──────────────────────────────────────────────────────────
 
@@ -55,35 +73,45 @@ fn main() -> Result<()> {
 
     info!("🚀 Blazil Inference Test Client starting...");
 
+    let aeron_dir = env_or_default("TEST_INFERENCE_AERON_DIR", DEFAULT_AERON_DIR);
+    let aeron_channel = env_or_default("TEST_INFERENCE_AERON_CHANNEL", DEFAULT_AERON_CHANNEL);
+    let poll_timeout_secs = env_u64_or_default(
+        "TEST_INFERENCE_POLL_TIMEOUT_SECS",
+        DEFAULT_POLL_TIMEOUT_SECS,
+    );
+    let request_id = env_or_default("TEST_INFERENCE_REQUEST_ID", "test-001");
+    let prompt = env_or_default("TEST_INFERENCE_PROMPT", "What is 2 + 2?");
+    let max_tokens = env_usize_or_default("TEST_INFERENCE_MAX_TOKENS", 16);
+
     // Attach to existing Aeron driver (server already started one)
-    info!("✅ Attaching to existing Aeron driver (dir: {})", AERON_DIR);
+    info!("✅ Attaching to existing Aeron driver (dir: {})", aeron_dir);
 
     // Create Aeron context (no need to start driver, reuse existing one)
-    let ctx = AeronContext::new(AERON_DIR)?;
+    let ctx = AeronContext::new(&aeron_dir)?;
     info!("✅ Aeron context created");
 
     // Create publication to server (stream 2001)
     let pub_to_server = AeronPublication::new(
         &ctx,
-        AERON_CHANNEL,
+        &aeron_channel,
         INFERENCE_REQ_STREAM_ID,
         REGISTRATION_TIMEOUT,
     )?;
     info!(
         "✅ Publication created: {} → stream {}",
-        AERON_CHANNEL, INFERENCE_REQ_STREAM_ID
+        aeron_channel, INFERENCE_REQ_STREAM_ID
     );
 
     // Create subscription from server (stream 2002)
     let sub_from_server = AeronSubscription::new(
         &ctx,
-        AERON_CHANNEL,
+        &aeron_channel,
         INFERENCE_RSP_STREAM_ID,
         REGISTRATION_TIMEOUT,
     )?;
     info!(
         "✅ Subscription created: {} ← stream {}",
-        AERON_CHANNEL, INFERENCE_RSP_STREAM_ID
+        aeron_channel, INFERENCE_RSP_STREAM_ID
     );
 
     // Wait for publication to connect
@@ -110,16 +138,10 @@ fn main() -> Result<()> {
 
     // ── Send Inference Request ────────────────────────────────────────────────
 
-    let request_id = "test-001";
-
-    // Raw prompt - server will inject system prompt and handle formatting
-    let prompt = "What is 2 + 2?";
-    let max_tokens = 16;
-
     info!("📤 Sending raw prompt (server handles formatting)");
 
     let request = InferenceRequest {
-        request_id: request_id.to_string(),
+        request_id: request_id.clone(),
         input_data: prompt.as_bytes().to_vec(),
         input_shape: vec![max_tokens as u32, 0, 0], // First element = max_tokens
         model_version: "v1".to_string(),
@@ -154,39 +176,58 @@ fn main() -> Result<()> {
 
     info!(
         "⏳ Waiting for response (timeout: {}s)...",
-        POLL_TIMEOUT_SECS
+        poll_timeout_secs
     );
 
     let poll_start = Instant::now();
+    let mut last_fragment_at = Instant::now();
     let mut fragments: Vec<Vec<u8>> = Vec::with_capacity(FRAGMENT_LIMIT);
     let mut received_response = false;
+    let mut streamed_text = String::new();
+    let mut saw_chunk = false;
 
-    while poll_start.elapsed().as_secs() < POLL_TIMEOUT_SECS {
+    while last_fragment_at.elapsed().as_secs() < poll_timeout_secs {
         fragments.clear();
 
         let fragments_read = sub_from_server.poll_fragments(&mut fragments, FRAGMENT_LIMIT);
 
         if fragments_read > 0 {
+            last_fragment_at = Instant::now();
             info!("📥 Received {} fragment(s)", fragments_read);
 
             for buffer in &fragments {
                 match deserialize_response(buffer) {
                     Ok(response) => {
-                        received_response = true;
-
                         if !response.error.is_empty() {
                             error!("❌ Inference error: {}", response.error);
+                            anyhow::bail!("Inference error: {}", response.error);
+                        }
+
+                        // Decode raw_output (f32 bytes) back to UTF-8 text.
+                        let text_bytes: Vec<u8> =
+                            response.raw_output.iter().map(|&f| f as u8).collect();
+                        let piece = String::from_utf8_lossy(&text_bytes);
+
+                        // `latency_us == 0` => ACK/chunk frame, `latency_us > 0` => final frame.
+                        if response.latency_us == 0 {
+                            if !piece.is_empty() {
+                                streamed_text.push_str(&piece);
+                                saw_chunk = true;
+                            }
                             continue;
                         }
 
-                        // Decode raw_output (f32 bytes) back to UTF-8 text
-                        let text_bytes: Vec<u8> =
-                            response.raw_output.iter().map(|&f| f as u8).collect();
-                        let generated_text = String::from_utf8_lossy(&text_bytes);
+                        received_response = true;
+
+                        let final_text = if saw_chunk {
+                            streamed_text.clone()
+                        } else {
+                            piece.to_string()
+                        };
 
                         // Calculate metrics
                         let latency_ms = response.latency_us as f64 / 1000.0;
-                        let token_count = generated_text.split_whitespace().count();
+                        let token_count = final_text.split_whitespace().count();
                         let tokens_per_sec = if latency_ms > 0.0 {
                             (token_count as f64 / latency_ms) * 1000.0
                         } else {
@@ -196,10 +237,14 @@ fn main() -> Result<()> {
                         // Print results
                         info!("✅ Response received:");
                         info!("   Request ID: {}", response.request_id);
-                        info!("   Generated text: '{}'", generated_text.trim());
+                        info!("   Generated text: '{}'", final_text.trim());
                         info!("   Latency: {:.2} ms", latency_ms);
                         info!("   Tokens: ~{}", token_count);
                         info!("   Throughput: {:.2} tokens/sec", tokens_per_sec);
+                        println!(
+                            "BENCH_RESULT request_id={} latency_ms={:.2} tokens={} tokens_per_sec={:.4}",
+                            response.request_id, latency_ms, token_count, tokens_per_sec
+                        );
 
                         break;
                     }
@@ -218,7 +263,12 @@ fn main() -> Result<()> {
     }
 
     if !received_response {
-        anyhow::bail!("No response received after {POLL_TIMEOUT_SECS} seconds");
+        let total_wait = poll_start.elapsed().as_secs();
+        anyhow::bail!(
+            "No final response after {}s total ({}s inactivity timeout)",
+            total_wait,
+            poll_timeout_secs
+        );
     }
 
     info!("🎉 Test completed successfully!");

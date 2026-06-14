@@ -17,6 +17,36 @@ use blazil_common::error::{BlazerError, BlazerResult};
 
 use super::driver::aeron_errmsg_string;
 
+const DEFAULT_AERON_CLIENT_LIVENESS_TIMEOUT: &str = "120s";
+const DEFAULT_AERON_DRIVER_TIMEOUT_MS: &str = "120000";
+const DEFAULT_AERON_PUBLICATION_UNBLOCK_TIMEOUT: &str = "180s";
+
+fn set_aeron_timeout_env_defaults() {
+    if std::env::var_os("AERON_CLIENT_LIVENESS_TIMEOUT").is_none() {
+        unsafe {
+            std::env::set_var(
+                "AERON_CLIENT_LIVENESS_TIMEOUT",
+                DEFAULT_AERON_CLIENT_LIVENESS_TIMEOUT,
+            );
+        }
+    }
+
+    if std::env::var_os("AERON_DRIVER_TIMEOUT").is_none() {
+        unsafe {
+            std::env::set_var("AERON_DRIVER_TIMEOUT", DEFAULT_AERON_DRIVER_TIMEOUT_MS);
+        }
+    }
+
+    if std::env::var_os("AERON_PUBLICATION_UNBLOCK_TIMEOUT").is_none() {
+        unsafe {
+            std::env::set_var(
+                "AERON_PUBLICATION_UNBLOCK_TIMEOUT",
+                DEFAULT_AERON_PUBLICATION_UNBLOCK_TIMEOUT,
+            );
+        }
+    }
+}
+
 // ── AeronContext ──────────────────────────────────────────────────────────────
 
 /// Safe wrapper around `aeron_context_t` + `aeron_t`.
@@ -39,6 +69,8 @@ impl AeronContext {
     /// Returns [`BlazerError::Transport`] if the C context or client cannot be
     /// initialised, or if the client fails to start its conductor thread.
     pub fn new(aeron_dir: &str) -> BlazerResult<Self> {
+        set_aeron_timeout_env_defaults();
+
         let aeron_dir_c = CString::new(aeron_dir)
             .map_err(|e| BlazerError::Transport(format!("Invalid aeron dir: {e}")))?;
 

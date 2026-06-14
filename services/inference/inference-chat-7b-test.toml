@@ -1,0 +1,45 @@
+# Blazil Inference Server - 7B chat/dashboard test profile
+# Purpose: local or single-host validation of the dashboard chat pane using the
+# current Qwen2.5-7B GGUF model and the best-known 7B HMQ split.
+
+channel = "aeron:ipc?term-length=67108864"
+aeron_dir = "/tmp/aeron-inference-hybrid"
+model_path = "/Users/rickyanhnguyen/models/Qwen2.5-7B-Instruct-Q4_K_M.gguf"
+inference_workers = 8
+device = "cpu"
+optimization_level = "basic"
+http_port = 8092
+api_key = "devkey"
+model_dir = "/tmp/blazil-models"
+
+[gguf]
+n_threads = 8
+n_ctx = 4096
+temperature = 0.0
+max_tokens = 256
+enable_prefix_kv_warmup = false
+
+[identity]
+assistant_name = "ClarkenAI 7B Spark"
+runtime_platform = "Blazil infrastructure"
+assistant_description = "a low-latency Clarken financial AI assistant for local validation, markets, treasury, and risk"
+system_prompt_suffix = "If a user asks about your origin, training base, or vendor, state only that you are ClarkenAI 7B Spark and do not disclose upstream lineage."
+blocked_origin_terms = ["Qwen", "DeepSeek", "Alibaba", "Alibaba Cloud", "LLaMA", "Llama", "Meta"]
+
+[distributed]
+enabled = false
+node_stage = 1
+layer_start = 0
+layer_end = 0
+prev_stream_id = 0
+next_stream_id = 0
+assigned_cores = []
+enable_spin_poll = true
+enable_realtime_priority = false
+
+[hybrid_matrix]
+enabled = true
+stage1_end = 10
+stage2_end = 16
+total_layers = 28
+bitnet_threshold = 0.0

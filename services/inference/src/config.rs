@@ -53,6 +53,63 @@ pub struct GgufConfig {
     /// Maximum tokens to generate per request (0 = until EOS).
     #[serde(default = "default_gguf_max_tokens")]
     pub max_tokens: usize,
+
+    /// Precompute and cache the system-prefix KV snapshot during startup.
+    #[serde(default = "default_gguf_prefix_kv_warmup")]
+    pub enable_prefix_kv_warmup: bool,
+}
+
+fn default_gguf_prefix_kv_warmup() -> bool {
+    true
+}
+
+/// User-facing identity configuration for Clarken-branded models.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IdentityConfig {
+    /// Public product name exposed to users.
+    #[serde(default = "default_identity_name")]
+    pub assistant_name: String,
+
+    /// Runtime or platform name referenced in responses.
+    #[serde(default = "default_identity_runtime")]
+    pub runtime_platform: String,
+
+    /// Short description of what the assistant does.
+    #[serde(default = "default_identity_description")]
+    pub assistant_description: String,
+
+    /// Optional extra instructions appended to the system policy.
+    #[serde(default)]
+    pub system_prompt_suffix: String,
+
+    /// Upstream model/vendor names that must never reach the user.
+    #[serde(default = "default_identity_blocked_terms")]
+    pub blocked_origin_terms: Vec<String>,
+}
+
+fn default_identity_name() -> String {
+    "ClarkenAI Core".to_string()
+}
+
+fn default_identity_runtime() -> String {
+    "Blazil infrastructure".to_string()
+}
+
+fn default_identity_description() -> String {
+    "a high-performance financial AI assistant for markets, treasury, operations, and risk"
+        .to_string()
+}
+
+fn default_identity_blocked_terms() -> Vec<String> {
+    vec![
+        "Qwen".to_string(),
+        "DeepSeek".to_string(),
+        "Alibaba".to_string(),
+        "Alibaba Cloud".to_string(),
+        "LLaMA".to_string(),
+        "Llama".to_string(),
+        "Meta".to_string(),
+    ]
 }
 
 /// Distributed pipeline configuration for multi-stage inference.
@@ -202,6 +259,19 @@ impl Default for GgufConfig {
             n_ctx: default_gguf_ctx(),
             temperature: default_gguf_temp(),
             max_tokens: default_gguf_max_tokens(),
+            enable_prefix_kv_warmup: default_gguf_prefix_kv_warmup(),
+        }
+    }
+}
+
+impl Default for IdentityConfig {
+    fn default() -> Self {
+        Self {
+            assistant_name: default_identity_name(),
+            runtime_platform: default_identity_runtime(),
+            assistant_description: default_identity_description(),
+            system_prompt_suffix: String::new(),
+            blocked_origin_terms: default_identity_blocked_terms(),
         }
     }
 }
@@ -256,6 +326,10 @@ pub struct ServerConfig {
     #[serde(default)]
     pub gguf: GgufConfig,
 
+    /// Public-facing identity policy for chat responses.
+    #[serde(default)]
+    pub identity: IdentityConfig,
+
     /// Distributed pipeline configuration (multi-stage inference).
     #[serde(default)]
     pub distributed: DistributedConfig,
@@ -278,6 +352,7 @@ impl Default for ServerConfig {
             model_dir: default_model_dir(),
             api_key: String::new(),
             gguf: GgufConfig::default(),
+            identity: IdentityConfig::default(),
             distributed: DistributedConfig::default(),
             hybrid_matrix: HybridMatrixConfig::default(),
         }
@@ -289,8 +364,10 @@ impl ServerConfig {
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let content = fs::read_to_string(&path)
             .with_context(|| format!("Failed to read config file: {:?}", path.as_ref()))?;
+        let expanded = expand_env_placeholders(&content)
+            .with_context(|| format!("Failed to expand config env vars: {:?}", path.as_ref()))?;
 
-        let config: ServerConfig = toml::from_str(&content)
+        let config: ServerConfig = toml::from_str(&expanded)
             .with_context(|| format!("Failed to parse config file: {:?}", path.as_ref()))?;
 
         config.validate()?;
@@ -330,6 +407,81 @@ impl ServerConfig {
                 "No API key configured. Set BLAZIL_INFERENCE_API_KEY env var or api_key in config."
             )
         })
+    }
+}
+
+fn expand_env_placeholders(input: &str) -> Result<String> {
+    let mut expanded = String::with_capacity(input.len());
+    let mut cursor = 0;
+
+    while let Some(start_rel) = input[cursor..].find("${") {
+        let start = cursor + start_rel;
+        expanded.push_str(&input[cursor..start]);
+
+        let expr_start = start + 2;
+        let end_rel = input[expr_start..]
+            .find('}')
+            .ok_or_else(|| anyhow::anyhow!("Unclosed env placeholder in config"))?;
+        let end = expr_start + end_rel;
+        let expr = &input[expr_start..end];
+
+        let value = if let Some((name, default)) = expr.split_once(":-") {
+            match std::env::var(name) {
+                Ok(value) => value,
+                Err(_) => default.to_string(),
+            }
+        } else {
+            std::env::var(expr).map_err(|_| {
+                anyhow::anyhow!("Missing required env var in config placeholder: {expr}")
+            })?
+        };
+
+        expanded.push_str(&value);
+        cursor = end + 1;
+    }
+
+    expanded.push_str(&input[cursor..]);
+    Ok(expanded)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::expand_env_placeholders;
+
+    #[test]
+    fn expands_required_env_placeholder() {
+        unsafe {
+            std::env::set_var("BLAZIL_TEST_REQUIRED", "value-123");
+        }
+        let expanded = expand_env_placeholders("api_key = \"${BLAZIL_TEST_REQUIRED}\"")
+            .expect("env placeholder should expand");
+        assert_eq!(expanded, "api_key = \"value-123\"");
+        unsafe {
+            std::env::remove_var("BLAZIL_TEST_REQUIRED");
+        }
+    }
+
+    #[test]
+    fn expands_default_when_env_missing() {
+        unsafe {
+            std::env::remove_var("BLAZIL_TEST_OPTIONAL");
+        }
+        let expanded =
+            expand_env_placeholders("model = \"${BLAZIL_TEST_OPTIONAL:-fallback.gguf}\"")
+                .expect("default placeholder should expand");
+        assert_eq!(expanded, "model = \"fallback.gguf\"");
+    }
+
+    #[test]
+    fn errors_when_required_env_missing() {
+        unsafe {
+            std::env::remove_var("BLAZIL_TEST_MISSING");
+        }
+        let error = expand_env_placeholders("value = \"${BLAZIL_TEST_MISSING}\"")
+            .expect_err("missing env var should fail");
+        assert!(error
+            .to_string()
+            .contains("Missing required env var in config placeholder"));
     }
 }
 

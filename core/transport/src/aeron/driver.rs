@@ -27,6 +27,41 @@ const DEFAULT_AERON_DIR: &str = "/dev/shm/aeron-blazil";
 #[cfg(not(target_os = "linux"))]
 const DEFAULT_AERON_DIR: &str = "/tmp/aeron-blazil";
 
+/// Conservative default client liveness timeout for long CPU-bound inference.
+const DEFAULT_AERON_CLIENT_LIVENESS_TIMEOUT: &str = "120s";
+
+/// Conservative default media-driver timeout in milliseconds.
+const DEFAULT_AERON_DRIVER_TIMEOUT_MS: &str = "120000";
+
+/// Must exceed client liveness timeout or Aeron rejects driver startup.
+const DEFAULT_AERON_PUBLICATION_UNBLOCK_TIMEOUT: &str = "180s";
+
+fn set_aeron_timeout_env_defaults() {
+    if std::env::var_os("AERON_CLIENT_LIVENESS_TIMEOUT").is_none() {
+        unsafe {
+            std::env::set_var(
+                "AERON_CLIENT_LIVENESS_TIMEOUT",
+                DEFAULT_AERON_CLIENT_LIVENESS_TIMEOUT,
+            );
+        }
+    }
+
+    if std::env::var_os("AERON_DRIVER_TIMEOUT").is_none() {
+        unsafe {
+            std::env::set_var("AERON_DRIVER_TIMEOUT", DEFAULT_AERON_DRIVER_TIMEOUT_MS);
+        }
+    }
+
+    if std::env::var_os("AERON_PUBLICATION_UNBLOCK_TIMEOUT").is_none() {
+        unsafe {
+            std::env::set_var(
+                "AERON_PUBLICATION_UNBLOCK_TIMEOUT",
+                DEFAULT_AERON_PUBLICATION_UNBLOCK_TIMEOUT,
+            );
+        }
+    }
+}
+
 // ── EmbeddedAeronDriver ───────────────────────────────────────────────────────
 
 /// In-process Aeron C Media Driver backed by a dedicated busy-spin thread.
@@ -71,6 +106,10 @@ impl EmbeddedAeronDriver {
     pub fn start(&self) -> BlazerResult<()> {
         let aeron_dir = self.aeron_dir.clone();
         let stop = Arc::clone(&self.stop);
+
+        // Long CPU-bound inference can starve the media driver enough to trip
+        // Aeron's default 10s liveness window. Keep user overrides intact.
+        set_aeron_timeout_env_defaults();
 
         // Ensure the IPC directory exists before the C driver tries to lock it.
         std::fs::create_dir_all(&aeron_dir).map_err(|e| {

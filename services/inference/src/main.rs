@@ -173,13 +173,22 @@ async fn main() -> Result<()> {
                     let path_clone = path.clone();
                     let n_threads = config.gguf.n_threads;
                     let n_ctx = config.gguf.n_ctx;
+                    let identity = config.identity.clone();
+                    let enable_prefix_kv_warmup = config.gguf.enable_prefix_kv_warmup;
                     let hybrid_matrix = if config.hybrid_matrix.enabled {
                         Some(config.hybrid_matrix.clone())
                     } else {
                         None
                     };
                     let mut model = tokio::task::spawn_blocking(move || {
-                        GgufModel::load(&path_clone, n_threads, n_ctx, hybrid_matrix)
+                        GgufModel::load(
+                            &path_clone,
+                            n_threads,
+                            n_ctx,
+                            identity,
+                            enable_prefix_kv_warmup,
+                            hybrid_matrix,
+                        )
                     })
                     .await
                     .context("spawn_blocking join error")?
@@ -211,6 +220,10 @@ async fn main() -> Result<()> {
         registry: Arc::clone(&registry),
         metrics: Arc::clone(&metrics),
         default_model: default_model.clone(),
+        default_gguf_model: aeron_backend.as_ref().and_then(|backend| match backend {
+            AeronBackend::Gguf(model) => Some(Arc::clone(model)),
+            AeronBackend::Onnx(_) => None,
+        }),
         api_key: Arc::new(api_key),
     };
 

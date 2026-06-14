@@ -68,5 +68,6 @@ pub use pipeline::{InferenceBatch, InferencePipeline};
 
 // Re-export kernel functions for convenience
 pub use kernels::{
-    bitnet_linear_1bit, dequantize_int8, pack_weights_1bit, quantize_int8, KernelError,
+    bitnet_linear_1bit, bitnet_linear_1bit_batched_parallel, bitnet_linear_1bit_parallel,
+    dequantize_int8, pack_weights_1bit, quantize_int8, KernelError,
 };

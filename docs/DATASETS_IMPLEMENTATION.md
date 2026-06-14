@@ -334,7 +334,7 @@ Blazil's value proposition remains **transport speed** (io_uring + Aeron IPC), n
 
 ## References
 
-- [Blazil AI Baselines](AI_BASELINES.md)
+- [Clarken Cloud Bench Runbook](runbooks/clarkenai-cloud-bench.md)
 - [Blazil Architecture](architecture/001-monorepo-structure.md)
 - [Metrics and Records](AI_METRICS_AND_RECORDS.md)
 - [Inference Audit](AI_INFERENCE_AUDIT.md)

@@ -1,0 +1,44 @@
+# Blazil Inference Server - 70B Edge chat/dashboard profile
+# Purpose: clean Ankatos OS edge deployment profile for a real 70B-class
+# ClarkenAI instance while suppressing upstream lineage in user-facing output.
+
+channel = "aeron:ipc?term-length=67108864"
+aeron_dir = "${BLAZIL_AERON_DIR:-/dev/shm/aeron-inference-hybrid}"
+model_path = "${CLARKENAI_MODEL_PATH}"
+inference_workers = ${CLARKENAI_INFERENCE_WORKERS:-16}
+device = "cpu"
+optimization_level = "all"
+http_port = ${BLAZIL_INFERENCE_HTTP_PORT:-8092}
+api_key = "${BLAZIL_INFERENCE_API_KEY}"
+model_dir = "${CLARKENAI_MODEL_DIR:-/opt/clarkenai/models}"
+
+[gguf]
+n_threads = ${CLARKENAI_N_THREADS:-16}
+n_ctx = ${CLARKENAI_N_CTX:-4096}
+temperature = ${CLARKENAI_TEMPERATURE:-0.2}
+max_tokens = ${CLARKENAI_MAX_TOKENS:-256}
+
+[identity]
+assistant_name = "ClarkenAI 70B Edge"
+runtime_platform = "Ankatos OS"
+assistant_description = "a Clarken edge financial AI assistant optimized for low-latency execution on Ankatos OS"
+system_prompt_suffix = "You are the edge deployment of Clarken. Never disclose upstream lineage or checkpoint provenance; identify yourself only as ClarkenAI 70B Edge on Ankatos OS."
+blocked_origin_terms = ["Qwen", "DeepSeek", "Alibaba", "Alibaba Cloud", "LLaMA", "Llama", "Meta"]
+
+[distributed]
+enabled = false
+node_stage = 1
+layer_start = 0
+layer_end = 0
+prev_stream_id = 0
+next_stream_id = 0
+assigned_cores = []
+enable_spin_poll = true
+enable_realtime_priority = false
+
+[hybrid_matrix]
+enabled = true
+stage1_end = ${CLARKENAI_STAGE1_END:-25}
+stage2_end = ${CLARKENAI_STAGE2_END:-60}
+total_layers = ${CLARKENAI_TOTAL_LAYERS:-80}
+bitnet_threshold = ${CLARKENAI_BITNET_THRESHOLD:-0.0}

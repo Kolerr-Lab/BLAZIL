@@ -25,6 +25,7 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use axum::body::Bytes;
 use axum::extract::{Multipart, Path, Query, State};
@@ -41,6 +42,7 @@ use tracing::{info, warn};
 use base64::Engine as _;
 use blazil_inference::{InferenceModel, OnnxModel};
 
+use crate::gguf_model::GgufModel;
 use crate::metrics::InferenceMetrics;
 use crate::model_registry::ModelRegistry;
 use crate::protocol::InferenceResponse;
@@ -61,6 +63,8 @@ pub struct AppState {
     pub metrics: Arc<InferenceMetrics>,
     /// Pre-loaded default model (from `config.model_path`), if any.
     pub default_model: Option<Arc<OnnxModel>>,
+    /// Pre-loaded default GGUF model, if any.
+    pub default_gguf_model: Option<Arc<Mutex<GgufModel>>>,
     /// Expected Bearer token (constant-time compared on every request).
     pub api_key: Arc<String>,
 }
@@ -78,6 +82,28 @@ pub struct InferHttpRequest {
     /// or the server default model.
     #[serde(default)]
     pub model_id: Option<String>,
+}
+
+/// POST /v1/chat request body.
+#[derive(Debug, Deserialize)]
+pub struct ChatHttpRequest {
+    /// Client-generated request ID for correlation.
+    pub request_id: String,
+    /// End-user prompt.
+    pub prompt: String,
+    /// Optional max tokens override.
+    #[serde(default)]
+    pub max_tokens: Option<usize>,
+}
+
+/// POST /v1/chat response body.
+#[derive(Debug, Serialize)]
+pub struct ChatHttpResponse {
+    pub request_id: String,
+    pub output_text: String,
+    pub latency_us: u64,
+    pub first_token_latency_us: u64,
+    pub tokens_generated: usize,
 }
 
 /// POST /v1/models/activate query params.
@@ -107,6 +133,7 @@ impl ApiError {
 pub async fn serve(state: AppState, addr: SocketAddr) -> anyhow::Result<()> {
     let api_routes = Router::new()
         .route("/v1/infer", post(infer_handler))
+        .route("/v1/chat", post(chat_handler))
         .route("/v1/models", post(upload_model_handler))
         .route("/v1/models", get(list_models_handler))
         .route("/v1/models/:model_id", get(get_model_handler))
@@ -135,6 +162,108 @@ pub async fn serve(state: AppState, addr: SocketAddr) -> anyhow::Result<()> {
         .with_graceful_shutdown(shutdown_signal())
         .await
         .map_err(Into::into)
+}
+
+/// POST /v1/chat
+async fn chat_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<ChatHttpRequest>,
+) -> Response {
+    let tenant_id = match tenant_id_from_headers(&headers) {
+        Ok(t) => t,
+        Err(r) => return r,
+    };
+
+    if req.request_id.is_empty() || req.request_id.len() > 128 {
+        return (
+            StatusCode::BAD_REQUEST,
+            ApiError::new("request_id must be 1-128 characters"),
+        )
+            .into_response();
+    }
+
+    if req.prompt.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            ApiError::new("prompt must not be empty"),
+        )
+            .into_response();
+    }
+
+    let model = match &state.default_gguf_model {
+        Some(model) => Arc::clone(model),
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                ApiError::new("No default GGUF model is loaded for chat requests"),
+            )
+                .into_response()
+        }
+    };
+
+    state.metrics.requests_total.inc();
+    state.metrics.active_requests.inc();
+    let start = std::time::Instant::now();
+    let request_id = req.request_id.clone();
+    let prompt = req.prompt;
+    let max_tokens = req.max_tokens.unwrap_or(0);
+
+    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<ChatHttpResponse> {
+        let mut guard = model
+            .lock()
+            .map_err(|_| anyhow::anyhow!("GGUF model lock poisoned"))?;
+
+        let token_start = std::time::Instant::now();
+        let mut first_token_latency_us = 0u64;
+        let mut tokens_generated = 0usize;
+        let output_text = guard.generate_streaming(&prompt, max_tokens, |_| {
+            if first_token_latency_us == 0 {
+                first_token_latency_us = token_start.elapsed().as_micros() as u64;
+            }
+            tokens_generated += 1;
+        })?;
+
+        Ok(ChatHttpResponse {
+            request_id,
+            output_text,
+            latency_us: 0,
+            first_token_latency_us,
+            tokens_generated,
+        })
+    })
+    .await;
+
+    let latency_us = start.elapsed().as_micros() as u64;
+    state.metrics.active_requests.dec();
+
+    match result {
+        Ok(Ok(mut response)) => {
+            response.latency_us = latency_us;
+            state.metrics.request_success(latency_us);
+            state.metrics.request_success_tenant(&tenant_id, latency_us);
+            (StatusCode::OK, Json(response)).into_response()
+        }
+        Ok(Err(e)) => {
+            state.metrics.request_failed(latency_us);
+            state.metrics.request_failed_tenant(&tenant_id, latency_us);
+            warn!(tenant_id = %tenant_id, "Chat request failed: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                ApiError::new(format!("Chat generation failed: {e}")),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            state.metrics.request_failed(latency_us);
+            state.metrics.request_failed_tenant(&tenant_id, latency_us);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                ApiError::new(format!("Worker panicked: {e}")),
+            )
+                .into_response()
+        }
+    }
 }
 
 // ── Auth middleware ───────────────────────────────────────────────────────────

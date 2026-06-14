@@ -20,6 +20,7 @@
 //! - BitNet paper: https://arxiv.org/abs/2310.11453
 //! - BitNet b1.58: https://arxiv.org/abs/2402.17764
 
+use rayon::prelude::*;
 use thiserror::Error;
 
 /// Kernel computation errors.
@@ -174,6 +175,157 @@ pub fn bitnet_linear_1bit(
     }
 }
 
+/// Row-parallel 1-bit linear layer for decode-heavy batch=1 workloads.
+///
+/// Uses the same math as [`bitnet_linear_1bit`] but parallelizes over output
+/// rows to better utilize multi-core CPUs when a single token is being decoded.
+pub fn bitnet_linear_1bit_parallel(
+    input: &[f32],
+    weights_packed: &[u64],
+    rows: usize,
+    cols: usize,
+    output: &mut [f32],
+) -> Result<(), KernelError> {
+    validate_bitnet_dimensions(input, weights_packed, rows, cols, output)?;
+
+    let blocks_per_row = cols.div_ceil(64);
+    let total_input_sum: f32 = input.iter().copied().sum();
+
+    output.par_iter_mut().enumerate().for_each(|(row, out)| {
+        *out = bitnet_row_sum_scalar(
+            input,
+            weights_packed,
+            row,
+            cols,
+            blocks_per_row,
+            total_input_sum,
+        );
+    });
+
+    Ok(())
+}
+
+/// Batched row-parallel 1-bit linear layer for prefill-heavy workloads.
+///
+/// The input is a flattened rank-2 matrix with shape `[batch, cols]` in row-major
+/// order, and the output is written as `[batch, rows]` in row-major order.
+pub fn bitnet_linear_1bit_batched_parallel(
+    input: &[f32],
+    batch: usize,
+    weights_packed: &[u64],
+    rows: usize,
+    cols: usize,
+    output: &mut [f32],
+) -> Result<(), KernelError> {
+    if input.len() != batch * cols {
+        return Err(KernelError::DimensionMismatch {
+            expected: batch * cols,
+            actual: input.len(),
+        });
+    }
+
+    if output.len() != batch * rows {
+        return Err(KernelError::DimensionMismatch {
+            expected: batch * rows,
+            actual: output.len(),
+        });
+    }
+
+    let expected_packed_len = rows * cols.div_ceil(64);
+    if weights_packed.len() != expected_packed_len {
+        return Err(KernelError::WeightPackingError(format!(
+            "expected {} u64 blocks, got {}",
+            expected_packed_len,
+            weights_packed.len()
+        )));
+    }
+
+    let blocks_per_row = cols.div_ceil(64);
+    let total_input_sums: Vec<f32> = input
+        .chunks_exact(cols)
+        .map(|input_row| input_row.iter().copied().sum())
+        .collect();
+
+    output.par_iter_mut().enumerate().for_each(|(idx, out)| {
+        let batch_idx = idx / rows;
+        let row = idx % rows;
+        let input_offset = batch_idx * cols;
+        let input_row = &input[input_offset..input_offset + cols];
+
+        *out = bitnet_row_sum_scalar(
+            input_row,
+            weights_packed,
+            row,
+            cols,
+            blocks_per_row,
+            total_input_sums[batch_idx],
+        );
+    });
+
+    Ok(())
+}
+
+fn validate_bitnet_dimensions(
+    input: &[f32],
+    weights_packed: &[u64],
+    rows: usize,
+    cols: usize,
+    output: &mut [f32],
+) -> Result<(), KernelError> {
+    if input.len() != cols {
+        return Err(KernelError::DimensionMismatch {
+            expected: cols,
+            actual: input.len(),
+        });
+    }
+
+    if output.len() != rows {
+        return Err(KernelError::DimensionMismatch {
+            expected: rows,
+            actual: output.len(),
+        });
+    }
+
+    let expected_packed_len = rows * cols.div_ceil(64);
+    if weights_packed.len() != expected_packed_len {
+        return Err(KernelError::WeightPackingError(format!(
+            "expected {} u64 blocks, got {}",
+            expected_packed_len,
+            weights_packed.len()
+        )));
+    }
+
+    Ok(())
+}
+
+fn bitnet_row_sum_scalar(
+    input: &[f32],
+    weights_packed: &[u64],
+    row: usize,
+    cols: usize,
+    blocks_per_row: usize,
+    total_input_sum: f32,
+) -> f32 {
+    let row_offset = row * blocks_per_row;
+    let mut positive_sum = 0.0f32;
+
+    for block_idx in 0..blocks_per_row {
+        let mut packed_block = weights_packed[row_offset + block_idx];
+        let base_col = block_idx * 64;
+
+        while packed_block != 0 {
+            let bit_pos = packed_block.trailing_zeros() as usize;
+            let col = base_col + bit_pos;
+            if col < cols {
+                positive_sum += input[col];
+            }
+            packed_block &= packed_block - 1;
+        }
+    }
+
+    positive_sum.mul_add(2.0, -total_input_sum)
+}
+
 /// Scalar fallback implementation (portable, works everywhere).
 fn bitnet_linear_1bit_scalar(
     input: &[f32],
@@ -182,25 +334,20 @@ fn bitnet_linear_1bit_scalar(
     cols: usize,
     output: &mut [f32],
 ) -> Result<(), KernelError> {
+    validate_bitnet_dimensions(input, weights_packed, rows, cols, output)?;
+
     let blocks_per_row = cols.div_ceil(64);
+    let total_input_sum: f32 = input.iter().copied().sum();
 
     for (row, out) in output.iter_mut().enumerate().take(rows) {
-        let mut sum = 0.0f32;
-        let row_offset = row * blocks_per_row;
-
-        for (col, &inp_val) in input.iter().enumerate().take(cols) {
-            let block_idx = col / 64;
-            let bit_pos = col % 64;
-            let packed_block = weights_packed[row_offset + block_idx];
-
-            // Extract bit: 1 → +1.0, 0 → -1.0
-            let bit = (packed_block >> bit_pos) & 1;
-            let weight = if bit == 1 { 1.0 } else { -1.0 };
-
-            sum += inp_val * weight;
-        }
-
-        *out = sum;
+        *out = bitnet_row_sum_scalar(
+            input,
+            weights_packed,
+            row,
+            cols,
+            blocks_per_row,
+            total_input_sum,
+        );
     }
 
     Ok(())

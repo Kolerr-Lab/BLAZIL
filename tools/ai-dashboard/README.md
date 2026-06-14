@@ -1,106 +1,63 @@
-# Blazil AI Benchmark Dashboard
+# Clarken Console And Benchmark Board
 
 **Version**: 0.1.0  
-**Purpose**: Real-time visualization for Blazil AI benchmarks — dataloader throughput, inference RPS, ONNX model metrics.
+**Purpose**: Live Clarken chat workspace plus the legacy benchmark board for metrics streaming and ops review.
 
----
+## Overview
 
-## 🎯 Overview
+This Next.js app now serves two adjacent experiences:
 
-Production-grade Next.js dashboard for monitoring **ml-bench** (AI backend):
-- **Dataloader metrics**: Samples/sec throughput, total samples processed, error rate
-- **Inference metrics**: Requests per second (RPS), total predictions, model-specific stats
-- **Live charts**: Per-second throughput visualization
-- **Success rate**: (Processed - Errors) / Total * 100%
-- **Event log**: Real-time backend events
+- **Clarken console**: Product-facing chat UI over `/api/chat` and the inference service `/v1/chat` path.
+- **Benchmark board**: Legacy WebSocket metrics surface for throughput, latency, event flow, and run summaries.
 
----
-
-## 🚀 Quick Start
+## Quick Start
 
 ### Development
 ```bash
 cd tools/ai-dashboard
 npm install
-npm run dev  # http://localhost:3331
+npm run dev
 ```
 
 ### Production
 ```bash
 npm run build
-npm run start  # http://localhost:3331
+npm run start
 ```
 
 ### Configuration
-- **Dashboard port**: 3331
-- **Backend WebSocket**: `ws://localhost:9092/ws` (ml-bench metrics server)
-- **Update for deployment**: Edit `src/app/page.tsx` line 13-17 to set AWS public IP
+- **Dashboard port**: `3331`
+- **Chat backend**: `http://localhost:8092` via `src/app/api/chat/route.ts`
+- **Metrics stream**: `ws://localhost:9092/ws` for the lower benchmark board
 
----
+## Surfaces
 
-## 📊 Metrics
+### Clarken Console
+- Live prompt submission
+- Service health check
+- Operator settings hidden behind console controls
 
-### Dataloader Mode
-- **Samples/sec**: Dataset loading throughput (PyTorch DataLoader)
-- **Total Samples**: Cumulative samples processed
-- **Success Rate**: (Total Samples - Errors) / Total Samples * 100%
+### Benchmark Board
+- Throughput/RPS timeline
+- Rolling latency panel
+- Event log and run summary
+- Cluster/environment panel
 
-### Inference Mode
-- **RPS**: Requests per second (model inference throughput)
-- **Total Predictions**: Cumulative predictions made
-- **Model**: SqueezeNet, ResNet-50, etc.
-- **Success Rate**: (Total Predictions - Errors) / Total Predictions * 100%
-
----
-
-## 🏗️ Architecture
+## Architecture
 
 ### Backend Connection
-- **Protocol**: WebSocket (`/ws` endpoint)
-- **Message types**:
-  - `config`: Benchmark parameters (mode, dataset, model, batch size, workers)
-  - `tick`: Per-second metrics (samples_per_sec for dataloader, rps for inference)
-  - `event`: Log messages
-  - `summary`: Final benchmark report
-
-### Mode Detection
-Dashboard **auto-detects** benchmark type from config message:
-- `mode: "dataloader"` → Shows "Samples/sec" labels
-- `mode: "inference"` → Shows "RPS" labels
-- Default: Falls back to fintech-style TPS display (for backward compatibility)
+- **Chat protocol**: HTTP proxy route in Next.js
+- **Metrics protocol**: WebSocket subscription
 
 ### Frontend Stack
-- **Framework**: Next.js 16.2.3 (Turbopack)
-- **UI**: React 19 with hooks
-- **Charts**: Recharts (AreaChart for throughput)
-- **Styling**: Tailwind-like utility classes, CSS custom properties
+- **Framework**: Next.js 16.x
+- **UI**: React 19
+- **Charts**: Recharts
+- **Styling**: CSS custom properties plus utility classes
 
----
+## Related
 
-## 🔗 Related
-
-- **Backend**: `tools/ml-bench/` (Rust binary with dataloader + ONNX inference)
-- **Launch script**: `scripts/ai-benchmark.sh` (3-phase: dataloader → SqueezeNet → ResNet-50)
-- **Fintech Dashboard**: `tools/fintech-dashboard/` (separate dashboard for blazil-bench)
-
----
-
-## 📝 Notes
-
-### Benchmark Duration
-- **Development**: 10-60s (quick validation)
-- **Production**: 35 min total (600s dataloader + 600s SqueezeNet + 900s ResNet-50)
-  - Aligns with MLPerf standards
-  - Thermal stability validation
-  - Statistical significance (P95 confidence)
-
-### AWS Deployment Target
-- **Instance**: i4i.4xlarge (16 vCPU, 32 GiB RAM, NVMe local SSD)
-- **Expected throughput**:
-  - Dataloader: >120K samples/sec (2x PyTorch baseline)
-  - Inference: <10ms P99 latency
-
-### Compatibility
-- **ml-bench**: v0.3.0+ with WebSocket metrics feature flag
-- **ONNX Runtime**: 1.20.1
-- **PyTorch**: 2.6.0 (for dataloader comparison)
+- **Cloud bench runbook**: `docs/runbooks/clarkenai-cloud-bench.md`
+- **Cloud bench launcher**: `scripts/clarkenai-70b-bench.sh`
+- **Metrics source**: `tools/ml-bench/` for the legacy benchmark board
+- **Fintech dashboard**: `tools/fintech-dashboard/`

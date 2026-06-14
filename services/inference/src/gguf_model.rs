@@ -21,7 +21,7 @@ use candle_core::quantized::gguf_file;
 use candle_core::{Device, IndexOp, Tensor};
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 // Use vendored quantized_qwen2 with exposed layers field for distributed pipeline
-use crate::config::HybridMatrixConfig;
+use crate::config::{HybridMatrixConfig, IdentityConfig};
 use crate::models::quantized_qwen2::ModelWeights;
 use tokenizers::Tokenizer;
 use tracing::{debug, info};
@@ -64,6 +64,96 @@ pub struct SampledToken {
     pub position: usize,
 }
 
+#[derive(Debug, Clone)]
+struct ClarkenIdentity {
+    assistant_name: String,
+    runtime_platform: String,
+    assistant_description: String,
+    system_prompt_suffix: String,
+    blocked_origin_terms: Vec<String>,
+}
+
+impl From<IdentityConfig> for ClarkenIdentity {
+    fn from(value: IdentityConfig) -> Self {
+        let blocked_origin_terms = if value.blocked_origin_terms.is_empty() {
+            IdentityConfig::default().blocked_origin_terms
+        } else {
+            value.blocked_origin_terms
+        };
+
+        Self {
+            assistant_name: value.assistant_name.trim().to_string(),
+            runtime_platform: value.runtime_platform.trim().to_string(),
+            assistant_description: value.assistant_description.trim().to_string(),
+            system_prompt_suffix: value.system_prompt_suffix.trim().to_string(),
+            blocked_origin_terms,
+        }
+    }
+}
+
+impl Default for ClarkenIdentity {
+    fn default() -> Self {
+        IdentityConfig::default().into()
+    }
+}
+
+impl ClarkenIdentity {
+    fn apply_origin_replacements(&self, text: &str, replacement: &str) -> String {
+        let mut sanitized = text.to_string();
+        for blocked in &self.blocked_origin_terms {
+            if blocked.is_empty() {
+                continue;
+            }
+
+            let lower = blocked.to_ascii_lowercase();
+            let upper = blocked.to_ascii_uppercase();
+            sanitized = sanitized.replace(blocked, replacement);
+            sanitized = sanitized.replace(&lower, &replacement.to_ascii_lowercase());
+            sanitized = sanitized.replace(&upper, replacement);
+        }
+
+        sanitized
+    }
+
+    fn contains_blocked_origin_term(&self, text: &str) -> bool {
+        let lower = text.to_ascii_lowercase();
+        self.blocked_origin_terms
+            .iter()
+            .map(|term| term.to_ascii_lowercase())
+            .any(|term| lower.contains(&term))
+    }
+
+    fn sanitize_response(&self, text: &str) -> String {
+        let mut sanitized = text
+            .replace(
+                "developed by Alibaba Cloud",
+                "developed by the Clarken team",
+            )
+            .replace(
+                "Developed by Alibaba Cloud",
+                "Developed by the Clarken team",
+            )
+            .replace("built by Alibaba Cloud", "built by the Clarken team")
+            .replace("Built by Alibaba Cloud", "Built by the Clarken team")
+            .replace("created by Alibaba Cloud", "created by the Clarken team")
+            .replace("Created by Alibaba Cloud", "Created by the Clarken team");
+
+        sanitized = self
+            .apply_origin_replacements(&sanitized, &self.assistant_name)
+            .trim()
+            .to_string();
+
+        if self.contains_blocked_origin_term(&sanitized) {
+            return format!(
+                "I am {}, a Clarken financial AI assistant running on {}.",
+                self.assistant_name, self.runtime_platform
+            );
+        }
+
+        sanitized
+    }
+}
+
 /// GGUF model wrapper with Clarken identity injection.
 ///
 /// Uses HuggingFace Candle (pure Rust, safe) for LLM inference.
@@ -76,10 +166,47 @@ pub struct GgufModel {
     temp: f32,
     max_tokens: usize,
     max_seq_len: usize,
+    identity: ClarkenIdentity,
+    stop_token_ids: Vec<u32>,
 }
 
 #[allow(dead_code)] // Infrastructure code - HTTP API integration pending
 impl GgufModel {
+    fn build_system_prompt(identity: &ClarkenIdentity) -> String {
+        let mut prompt = format!(
+            "You are {}.\n\
+You are {} running on {}.\n\
+Never mention upstream model families, vendors, checkpoints, labs, or training provenance.\n\
+If asked who you are, what model you are, or who built you, answer only with the Clarken identity above.\n\
+Do not say you are Qwen, DeepSeek, LLaMA, Meta, Alibaba, or any external model/vendor.\n\
+Answer directly and concretely. Do not emit prompt templates, role labels, markdown placeholders, or example scaffolding unless the user explicitly asks for them.\n\
+Provide accurate, concise answers focused on finance, trading, treasury, operations, and risk.",
+            identity.assistant_name,
+            identity.assistant_description,
+            identity.runtime_platform,
+        );
+
+        if !identity.system_prompt_suffix.is_empty() {
+            prompt.push_str("\n\n");
+            prompt.push_str(&identity.system_prompt_suffix);
+        }
+        prompt
+    }
+
+    fn build_chatml_system_prefix(identity: &ClarkenIdentity) -> String {
+        format!(
+            "<|im_start|>system\n{}\n<|im_end|>\n",
+            Self::build_system_prompt(identity)
+        )
+    }
+
+    fn build_chatml_user_suffix(prompt: &str) -> String {
+        format!(
+            "<|im_start|>user\n{}\n<|im_end|>\n<|im_start|>assistant\n",
+            prompt.trim()
+        )
+    }
+
     /// Load a GGUF model from disk.
     ///
     /// # Arguments
@@ -95,9 +222,19 @@ impl GgufModel {
         path: P,
         _n_threads: u32,
         n_ctx: u32,
+        identity: IdentityConfig,
+        enable_prefix_kv_warmup: bool,
         hybrid_matrix_config: Option<HybridMatrixConfig>,
     ) -> Result<Self> {
-        Self::load_with_layer_range(path, _n_threads, n_ctx, None, hybrid_matrix_config)
+        Self::load_with_layer_range(
+            path,
+            _n_threads,
+            n_ctx,
+            None,
+            identity,
+            enable_prefix_kv_warmup,
+            hybrid_matrix_config,
+        )
     }
 
     /// Load a GGUF model with optional layer range filtering (distributed pipeline).
@@ -135,6 +272,8 @@ impl GgufModel {
         _n_threads: u32,
         n_ctx: u32,
         layer_range: Option<(usize, usize)>,
+        identity: IdentityConfig,
+        enable_prefix_kv_warmup: bool,
         hybrid_matrix_config: Option<HybridMatrixConfig>,
     ) -> Result<Self> {
         let path = path.as_ref();
@@ -180,6 +319,11 @@ impl GgufModel {
 
         info!("Tokenizer loaded from {tokenizer_path:?}");
 
+        let stop_token_ids = ["<|im_end|>", "<|endoftext|>"]
+            .into_iter()
+            .filter_map(|token| tokenizer.token_to_id(token))
+            .collect::<Vec<_>>();
+
         // Load GGUF model using quantized API
         let mut file = std::fs::File::open(path)?;
         let start = std::time::Instant::now();
@@ -191,7 +335,7 @@ impl GgufModel {
         if let Some((layer_start, layer_end)) = layer_range {
             info!("Distributed mode: loading layers {layer_start}-{layer_end} (partial model)");
 
-            // TODO: Implement selective tensor loading for distributed pipeline
+            // Selective tensor loading for distributed pipeline is planned.
             // Current limitation: Candle's ModelWeights::from_gguf loads all tensors
             //
             // Planned approach:
@@ -228,14 +372,55 @@ impl GgufModel {
 
         info!("Model loaded successfully");
 
-        Ok(Self {
+        let identity = ClarkenIdentity::from(identity);
+
+        let mut this = Self {
             model,
             tokenizer,
             device,
             temp: 0.7,
             max_tokens: 2048,
             max_seq_len: n_ctx as usize,
-        })
+            identity,
+            stop_token_ids,
+        };
+
+        if layer_range.is_none() && enable_prefix_kv_warmup {
+            if let Err(e) = this.warmup_prefix_kv_snapshot() {
+                tracing::warn!("⚠️ Prefix-KV warmup failed (continuing without warm cache): {e}");
+            }
+        }
+
+        Ok(this)
+    }
+
+    fn warmup_prefix_kv_snapshot(&mut self) -> Result<()> {
+        let system_prompt = Self::build_chatml_system_prefix(&self.identity);
+        let encoding = self
+            .tokenizer
+            .encode(system_prompt.to_string(), true)
+            .map_err(|e| anyhow::anyhow!("System prompt tokenization failed: {e}"))?;
+        let system_tokens = encoding.get_ids().to_vec();
+
+        if system_tokens.is_empty() {
+            anyhow::bail!("System prompt tokenization produced empty token list");
+        }
+
+        tracing::info!(
+            "🔥 Warming up Prefix-KV snapshot at startup: system_tokens={}",
+            system_tokens.len()
+        );
+
+        let input = Tensor::new(system_tokens.as_slice(), &self.device)?.unsqueeze(0)?;
+        let _ = self.model.forward(&input, 0)?;
+        self.model
+            .finalize_prefill_and_capture_snapshot(&system_tokens)?;
+
+        // Keep runtime cache clean; snapshot is stored separately and restored on demand.
+        self.model.clear_all_kv_caches();
+
+        tracing::info!("✅ Prefix-KV warmup completed and runtime KV cache cleared");
+        Ok(())
     }
 
     /// Set generation temperature (0.0 = deterministic, 1.0 = creative).
@@ -279,24 +464,30 @@ impl GgufModel {
     where
         F: FnMut(&str),
     {
-        // System prompt injection
-        let system_prompt = "\
-You are Clarken, a high-performance financial AI assistant built on Blazil infrastructure. \
-Never mention DeepSeek, Qwen, or other model names. You are Clarken. \
-Provide accurate, concise answers focused on finance, trading, and risk management.\n\n";
-
-        let full_prompt = format!("{system_prompt}{prompt}");
-
         let prompt_len = prompt.len();
         debug!("Generating response for prompt (len={prompt_len})");
 
-        // Tokenize prompt
-        let encoding = self
+        // HTTP chat requests are independent sessions. Start from a clean KV state
+        // to avoid cross-request cache bleed and snapshot/delta-prefill shape mismatches.
+        self.model.clear_all_kv_caches();
+
+        // Tokenize ChatML system prefix and user suffix separately so Qwen-instruct sees
+        // the role markers it was tuned for, while still preserving deterministic prefix reuse.
+        let system_prompt = Self::build_chatml_system_prefix(&self.identity);
+        let full_user_prompt = Self::build_chatml_user_suffix(prompt);
+
+        let system_encoding = self
             .tokenizer
-            .encode(full_prompt.clone(), true)
+            .encode(system_prompt.to_string(), true)
+            .map_err(|e| anyhow::anyhow!("Tokenization failed: {e}"))?;
+        let user_encoding = self
+            .tokenizer
+            .encode(full_user_prompt, false)
             .map_err(|e| anyhow::anyhow!("Tokenization failed: {e}"))?;
 
-        let mut tokens = encoding.get_ids().to_vec();
+        let system_prefix_tokens: Vec<u32> = system_encoding.get_ids().to_vec();
+        let mut tokens = system_prefix_tokens.clone();
+        tokens.extend_from_slice(user_encoding.get_ids());
 
         if tokens.len() >= self.max_seq_len {
             let token_count = tokens.len();
@@ -325,43 +516,56 @@ Provide accurate, concise answers focused on finance, trading, and risk manageme
 
         for index in 0..max_gen {
             // Position calculation:
-            // - Prefill (index==0): pos=0, processing full prompt
+            // - Prefill (index==0): pos=0 for full prefill
             // - Decode (index>0): pos=tokens.len()-1, processing last token
-            let pos = if index == 0 { 0 } else { tokens.len() - 1 };
-
-            // Check sequence length limit
-            if pos >= self.max_seq_len {
-                debug!("Max sequence length reached: {pos}");
-                break;
-            }
-
-            // Get last token for input
-            let input_token = if index == 0 {
-                // First iteration: use all prompt tokens
-                tokens.as_slice()
+            let logits = if index == 0 {
+                let input = Tensor::new(tokens.as_slice(), &self.device)?.unsqueeze(0)?;
+                self.model.forward(&input, 0)?.squeeze(0)?
             } else {
-                // Subsequent iterations: use only last token
-                &tokens[tokens.len() - 1..]
+                let pos = tokens.len() - 1;
+                if pos >= self.max_seq_len {
+                    debug!("Max sequence length reached: {pos}");
+                    break;
+                }
+                let input = Tensor::new(&tokens[tokens.len() - 1..], &self.device)?.unsqueeze(0)?;
+                self.model.forward(&input, pos)?.squeeze(0)?
             };
 
-            let input = Tensor::new(input_token, &self.device)?.unsqueeze(0)?;
-
-            // Forward pass with quantized model (takes position directly)
-            let logits = self.model.forward(&input, pos)?.squeeze(0)?;
+            // Debug-only logits inspection (expensive: materializes full vocab logits).
+            if tracing::enabled!(tracing::Level::DEBUG) && index < 5 {
+                let logits_vec = logits.to_vec1::<f32>()?;
+                let mut indexed: Vec<(usize, f32)> =
+                    logits_vec.iter().copied().enumerate().collect();
+                indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+                tracing::debug!(
+                    "🎲 Token {} - Top5 logits: {:?}",
+                    index,
+                    &indexed[..5.min(indexed.len())]
+                );
+            }
 
             // Sample next token
+            let t_sample = std::time::Instant::now();
             let next_token = logits_processor.sample(&logits)?;
+            if index < 5 || index % 5 == 0 {
+                tracing::info!(
+                    "🔢 Token index={} sampled={} in {:.1}ms (total_tokens={})",
+                    index,
+                    next_token,
+                    t_sample.elapsed().as_millis(),
+                    tokens.len()
+                );
+            }
+
+            if tracing::enabled!(tracing::Level::DEBUG) {
+                tracing::debug!("🎯 Token {} selected: {}", index, next_token);
+            }
 
             // Check for common EOS tokens
             // Qwen2: 151643 (primary), 151645 (secondary)
             // LLaMA3: 128001, 128009
             // Generic: 2
-            if next_token == 151643
-                || next_token == 151645
-                || next_token == 128001
-                || next_token == 128009
-                || next_token == 2
-            {
+            if self.is_eos_token(next_token) {
                 debug!("EOS token encountered: {next_token}");
                 break;
             }
@@ -379,19 +583,18 @@ Provide accurate, concise answers focused on finance, trading, and risk manageme
             }
         }
 
-        Ok(generated)
+        self.model.clear_all_kv_caches();
+        Ok(self.sanitize_response(&generated))
     }
 
     /// Filter tokens to replace model names with Clarken branding.
     fn filter_token(&self, token: &str) -> String {
-        token
-            .replace("DeepSeek", "Clarken")
-            .replace("deepseek", "clarken")
-            .replace("Qwen", "Clarken")
-            .replace("qwen", "clarken")
-            .replace("LLaMA", "Clarken")
-            .replace("llama", "clarken")
-            .replace("Llama", "Clarken")
+        self.identity
+            .apply_origin_replacements(token, &self.identity.assistant_name)
+    }
+
+    fn sanitize_response(&self, text: &str) -> String {
+        self.identity.sanitize_response(text)
     }
 
     // ========================
@@ -414,7 +617,7 @@ Provide accurate, concise answers focused on finance, trading, and risk manageme
     /// doesn't expose individual layer execution. This method performs a
     /// full forward pass and extracts the intermediate state conceptually.
     ///
-    /// **Production TODO**: Replace with low-level layer-by-layer execution
+    /// Production target: replace with low-level layer-by-layer execution
     /// when Candle exposes `model.layers[idx].forward()` API.
     ///
     /// # Example
@@ -726,13 +929,8 @@ Provide accurate, concise answers focused on finance, trading, and risk manageme
         layer_start: usize,
         layer_end: usize,
     ) -> Result<ActivationState> {
-        // System prompt injection
-        let system_prompt = "\
-You are Clarken, a high-performance financial AI assistant built on Blazil infrastructure. \
-Never mention DeepSeek, Qwen, or other model names. You are Clarken. \
-Provide accurate, concise answers focused on finance, trading, and risk management.\n\n";
-
-        let full_prompt = format!("{system_prompt}{prompt}");
+        let system_prompt = Self::build_chatml_system_prefix(&self.identity);
+        let full_prompt = format!("{system_prompt}{}", Self::build_chatml_user_suffix(prompt));
 
         debug!("Stage 1 tokenization for layer range {layer_start}..{layer_end}");
 
@@ -812,7 +1010,12 @@ Provide accurate, concise answers focused on finance, trading, and risk manageme
         // Qwen2: 151643 (primary), 151645 (secondary)
         // LLaMA3: 128001, 128009
         // Generic: 2
-        token == 151643 || token == 151645 || token == 128001 || token == 128009 || token == 2
+        token == 151643
+            || token == 151645
+            || token == 128001
+            || token == 128009
+            || token == 2
+            || self.stop_token_ids.contains(&token)
     }
 }
 
@@ -829,30 +1032,65 @@ mod tests {
 
     #[test]
     fn test_token_filtering() {
-        // Mock test for filter logic
-        let filter = |token: &str| -> String {
-            token
-                .replace("DeepSeek", "Clarken")
-                .replace("deepseek", "clarken")
-                .replace("Qwen", "Clarken")
-                .replace("qwen", "clarken")
-                .replace("LLaMA", "Clarken")
-                .replace("llama", "clarken")
-                .replace("Llama", "Clarken")
+        let identity = ClarkenIdentity {
+            assistant_name: "ClarkenAI 7B Spark".to_string(),
+            runtime_platform: "Blazil infrastructure".to_string(),
+            assistant_description: "a financial AI assistant".to_string(),
+            system_prompt_suffix: String::new(),
+            blocked_origin_terms: IdentityConfig::default().blocked_origin_terms,
         };
 
-        assert_eq!(filter("I am DeepSeek"), "I am Clarken");
-        assert_eq!(filter("deepseek-coder"), "clarken-coder");
-        assert_eq!(filter("Qwen2.5-7B"), "Clarken2.5-7B");
-        assert_eq!(filter("qwen model"), "clarken model");
-        assert_eq!(filter("LLaMA 3.1"), "Clarken 3.1");
-        assert_eq!(filter("Llama model"), "Clarken model");
+        assert_eq!(
+            identity.apply_origin_replacements("I am DeepSeek", &identity.assistant_name),
+            "I am ClarkenAI 7B Spark"
+        );
+        assert_eq!(
+            identity.apply_origin_replacements("deepseek-coder", &identity.assistant_name),
+            "clarkenai 7b spark-coder"
+        );
+        assert_eq!(
+            identity.apply_origin_replacements("Qwen2.5-7B", &identity.assistant_name),
+            "ClarkenAI 7B Spark2.5-7B"
+        );
+        assert_eq!(
+            identity.sanitize_response("The Blazil Engine is a model developed by Alibaba Cloud."),
+            "The Blazil Engine is a model developed by the Clarken team."
+        );
+    }
+
+    #[test]
+    fn test_chatml_prompt_format() {
+        let identity = ClarkenIdentity {
+            assistant_name: "ClarkenAI 7B Spark".to_string(),
+            runtime_platform: "Blazil infrastructure".to_string(),
+            assistant_description: "a financial AI assistant".to_string(),
+            system_prompt_suffix: "Stay on-brand.".to_string(),
+            blocked_origin_terms: IdentityConfig::default().blocked_origin_terms,
+        };
+
+        let system_prefix = GgufModel::build_chatml_system_prefix(&identity);
+        let user_suffix = GgufModel::build_chatml_user_suffix("What is credit risk?");
+
+        assert!(system_prefix.starts_with("<|im_start|>system\nYou are ClarkenAI 7B Spark."));
+        assert!(system_prefix.contains("Stay on-brand."));
+        assert!(system_prefix.ends_with("<|im_end|>\n"));
+        assert_eq!(
+            user_suffix,
+            "<|im_start|>user\nWhat is credit risk?\n<|im_end|>\n<|im_start|>assistant\n"
+        );
     }
 
     #[test]
     fn test_model_validation() {
         // Test that non-existent file returns error
-        let result = GgufModel::load("/nonexistent/model.gguf", 8, 4096, None);
+        let result = GgufModel::load(
+            "/nonexistent/model.gguf",
+            8,
+            4096,
+            IdentityConfig::default(),
+            true,
+            None,
+        );
         assert!(result.is_err());
         let err_msg = result.err().unwrap().to_string();
         assert!(err_msg.contains("Model file not found"));

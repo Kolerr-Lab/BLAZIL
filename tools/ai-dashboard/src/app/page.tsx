@@ -7,13 +7,16 @@ import { HeroMetrics } from "@/components/HeroMetrics";
 import { TPSChart } from "@/components/TPSChart";
 import { LatencyPanel } from "@/components/LatencyPanel";
 import { ClusterInfo } from "@/components/ClusterInfo";
+import { ChatPane } from "@/components/ChatPane";
 import type { EventMessage } from "@/types/metrics";
 
-// ⚠️  UPDATE THIS WITH YOUR AWS i4i.4xlarge PUBLIC IP BEFORE DEPLOYMENT ⚠️
-// AI Benchmark Backend: ml-bench WebSocket server
-// Default: ws://localhost:9092/ws (port 9092 = AI metrics)
-// Supports: dataloader (samples/sec) + inference (RPS)
 const DEFAULT_WS_URL = "ws://localhost:9092/ws";
+
+function formatElapsed(secs: number): string {
+  const minutes = Math.floor(secs / 60);
+  const seconds = secs % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
 
 export default function DashboardPage() {
   const [wsUrl, setWsUrl] = useState(DEFAULT_WS_URL);
@@ -34,11 +37,23 @@ export default function DashboardPage() {
           ? `${(state.current_tps / 1_000_000).toFixed(2)}M`
           : `${(state.current_tps / 1_000).toFixed(0)}K`;
       const label = state.mode === 'inference' ? 'RPS' : 'Samples/s';
-      document.title = `${throughput} ${label} — Blazil AI`;
+      document.title = `${throughput} ${label} | Clarken Console`;
     } else {
-      document.title = "Blazil AI Dashboard";
+      document.title = "Clarken Console | Blazil";
     }
   }, [state.current_tps, state.status, state.mode]);
+
+  const boardMode = state.mode === "inference" ? "Inference board" : "Benchmark board";
+  const connectionLabel =
+    state.status === "running"
+      ? "Streaming live"
+      : state.status === "connecting"
+      ? "Connecting"
+      : state.status === "completed"
+      ? "Run complete"
+      : state.status === "error"
+      ? "Attention required"
+      : "Standby";
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: "var(--bg)" }}>
@@ -53,29 +68,95 @@ export default function DashboardPage() {
       />
 
       <main className="flex-1 px-4 md:px-6 pb-8 pt-5 max-w-[1600px] mx-auto w-full">
-        {/* Hero metrics row */}
-        <HeroMetrics state={state} />
+        <section className="grid grid-cols-1 xl:grid-cols-5 gap-4 items-start">
+          <div
+            className="card xl:col-span-3 p-6 flex flex-col gap-4"
+            style={{
+              background:
+                "radial-gradient(circle at top left, rgba(0,255,178,0.12), transparent 36%), radial-gradient(circle at bottom right, rgba(96,165,250,0.12), transparent 34%), var(--bg-card)",
+            }}
+          >
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-[0.24em]" style={{ color: "var(--text-muted)" }}>
+                  Clarken Console
+                </div>
+                <h1 className="mt-2 text-3xl md:text-4xl font-black tracking-tight text-white">
+                  Live chat workspace
+                </h1>
+              </div>
+              <div
+                className="px-3 py-1.5 rounded-full text-xs font-semibold"
+                style={{
+                  background: "rgba(255,255,255,0.04)",
+                  border: "1px solid var(--border)",
+                  color: "var(--text-muted)",
+                }}
+              >
+                {connectionLabel}
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+              <div className="card p-4">
+                <div className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: "var(--text-muted)" }}>
+                  Surface
+                </div>
+                <div className="mt-1 font-bold text-lg" style={{ color: "var(--accent-green)" }}>
+                  Clarken Live Console
+                </div>
+              </div>
+              <div className="card p-4">
+                <div className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: "var(--text-muted)" }}>
+                  Status
+                </div>
+                <div className="mt-1 font-bold text-lg" style={{ color: state.status === "error" ? "var(--accent-red)" : "var(--accent-blue)" }}>
+                  {connectionLabel}
+                </div>
+                <div className="mt-1 text-xs leading-5" style={{ color: "var(--text-muted)" }}>
+                  {state.elapsed_secs > 0 ? formatElapsed(state.elapsed_secs) : "00:00"}
+                </div>
+              </div>
+              <div className="card p-4">
+                <div className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: "var(--text-muted)" }}>
+                  Board
+                </div>
+                <div className="mt-1 font-bold text-lg" style={{ color: "var(--accent-purple)" }}>
+                  {boardMode}
+                </div>
+              </div>
+            </div>
+          </div>
 
-        {/* Infra spec strip */}
-        <div className="mt-3">
-          <ClusterInfo />
-        </div>
-
-        {/* Throughput Chart + Latency side-by-side */}
-        <div className="mt-5 grid grid-cols-1 xl:grid-cols-3 gap-4">
           <div className="xl:col-span-2">
+            <ChatPane />
+          </div>
+        </section>
+
+        <section className="mt-8 flex flex-col gap-4">
+          <div>
+            <div className="text-[10px] font-semibold uppercase tracking-[0.24em]" style={{ color: "var(--text-muted)" }}>
+              Legacy Benchmark Board
+            </div>
+            <h2 className="mt-1 text-2xl font-black tracking-tight text-white">
+              Performance workspace
+            </h2>
+          </div>
+
+          <HeroMetrics state={state} />
+
+          <ClusterInfo />
+
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 items-start">
             <TPSChart
               history={state.history}
               duration_secs={state.config?.duration_secs ?? null}
             />
-          </div>
-          <div className="xl:col-span-1">
+
             <LatencyPanel state={state} />
           </div>
-        </div>
 
-        {/* Event log */}
-        <div className="mt-5">
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 items-start">
+            <div>
           <div className="text-xs font-semibold uppercase tracking-widest mb-3" style={{ color: "var(--text-muted)" }}>
             Event Log
           </div>
@@ -116,11 +197,10 @@ export default function DashboardPage() {
               </>
             )}
           </div>
-        </div>
+            </div>
 
-        {/* Summary panel (post-run) */}
-        {state.summary && (
-          <div className="mt-5">
+            {state.summary && (
+              <div>
             <div className="text-xs font-semibold uppercase tracking-widest mb-3" style={{ color: "var(--text-muted)" }}>
               Run Summary
             </div>
@@ -177,8 +257,10 @@ export default function DashboardPage() {
                 </div>
               ))}
             </div>
+              </div>
+            )}
           </div>
-        )}
+        </section>
       </main>
     </div>
   );

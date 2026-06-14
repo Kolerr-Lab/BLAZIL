@@ -25,6 +25,9 @@ This directory contains operational runbooks for managing Blazil in production.
 - `dashboard-guide.md` - Guide to Grafana dashboards
 - `alert-runbook.md` - Response procedures for each alert
 
+### AI Inference
+- `clarkenai-cloud-bench.md` - Canonical Clarken 70B CPU cloud benchmark workflow
+
 ## TODO
 
 - [x] Write deployment runbook
