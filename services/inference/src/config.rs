@@ -444,47 +444,6 @@ fn expand_env_placeholders(input: &str) -> Result<String> {
     Ok(expanded)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::expand_env_placeholders;
-
-    #[test]
-    fn expands_required_env_placeholder() {
-        unsafe {
-            std::env::set_var("BLAZIL_TEST_REQUIRED", "value-123");
-        }
-        let expanded = expand_env_placeholders("api_key = \"${BLAZIL_TEST_REQUIRED}\"")
-            .expect("env placeholder should expand");
-        assert_eq!(expanded, "api_key = \"value-123\"");
-        unsafe {
-            std::env::remove_var("BLAZIL_TEST_REQUIRED");
-        }
-    }
-
-    #[test]
-    fn expands_default_when_env_missing() {
-        unsafe {
-            std::env::remove_var("BLAZIL_TEST_OPTIONAL");
-        }
-        let expanded =
-            expand_env_placeholders("model = \"${BLAZIL_TEST_OPTIONAL:-fallback.gguf}\"")
-                .expect("default placeholder should expand");
-        assert_eq!(expanded, "model = \"fallback.gguf\"");
-    }
-
-    #[test]
-    fn errors_when_required_env_missing() {
-        unsafe {
-            std::env::remove_var("BLAZIL_TEST_MISSING");
-        }
-        let error = expand_env_placeholders("value = \"${BLAZIL_TEST_MISSING}\"")
-            .expect_err("missing env var should fail");
-        assert!(error
-            .to_string()
-            .contains("Missing required env var in config placeholder"));
-    }
-}
-
 // ── Default value functions ───────────────────────────────────────────────────
 
 fn default_channel() -> String {
@@ -544,4 +503,45 @@ fn default_gguf_max_tokens() -> usize {
 
 fn default_node_stage() -> usize {
     1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::expand_env_placeholders;
+
+    #[test]
+    fn expands_required_env_placeholder() {
+        unsafe {
+            std::env::set_var("BLAZIL_TEST_REQUIRED", "value-123");
+        }
+        let expanded = expand_env_placeholders("api_key = \"${BLAZIL_TEST_REQUIRED}\"")
+            .expect("env placeholder should expand");
+        assert_eq!(expanded, "api_key = \"value-123\"");
+        unsafe {
+            std::env::remove_var("BLAZIL_TEST_REQUIRED");
+        }
+    }
+
+    #[test]
+    fn expands_default_when_env_missing() {
+        unsafe {
+            std::env::remove_var("BLAZIL_TEST_OPTIONAL");
+        }
+        let expanded =
+            expand_env_placeholders("model = \"${BLAZIL_TEST_OPTIONAL:-fallback.gguf}\"")
+                .expect("default placeholder should expand");
+        assert_eq!(expanded, "model = \"fallback.gguf\"");
+    }
+
+    #[test]
+    fn errors_when_required_env_missing() {
+        unsafe {
+            std::env::remove_var("BLAZIL_TEST_MISSING");
+        }
+        let error = expand_env_placeholders("value = \"${BLAZIL_TEST_MISSING}\"")
+            .expect_err("missing env var should fail");
+        assert!(error
+            .to_string()
+            .contains("Missing required env var in config placeholder"));
+    }
 }

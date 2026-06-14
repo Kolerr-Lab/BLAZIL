@@ -140,10 +140,10 @@ impl HybridWeights {
         // Log first few values to verify dequantization
         tracing::debug!(
             "   First row samples (before quantization): [{:.6}, {:.6}, {:.6}, {:.6}]",
-            weights_f32.get(0).and_then(|r| r.get(0)).unwrap_or(&0.0),
-            weights_f32.get(0).and_then(|r| r.get(1)).unwrap_or(&0.0),
-            weights_f32.get(0).and_then(|r| r.get(2)).unwrap_or(&0.0),
-            weights_f32.get(0).and_then(|r| r.get(3)).unwrap_or(&0.0)
+            weights_f32.first().and_then(|r| r.first()).unwrap_or(&0.0),
+            weights_f32.first().and_then(|r| r.get(1)).unwrap_or(&0.0),
+            weights_f32.first().and_then(|r| r.get(2)).unwrap_or(&0.0),
+            weights_f32.first().and_then(|r| r.get(3)).unwrap_or(&0.0)
         );
 
         let flattened: Vec<f32> = weights_f32.into_iter().flatten().collect();
@@ -1043,7 +1043,7 @@ impl ModelWeights {
         let mask: Vec<_> = (0..t)
             .flat_map(|i| (0..total_k_len).map(move |j| u8::from(j > past_len + i)))
             .collect();
-        Ok(Tensor::from_slice(&mask, (t, total_k_len), device)?)
+        Tensor::from_slice(&mask, (t, total_k_len), device)
     }
 
     pub fn forward(&mut self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
