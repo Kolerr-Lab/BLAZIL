@@ -130,6 +130,7 @@ fn build_aeron_static(aeron_src: &std::path::Path) {
             println!("cargo:rustc-link-lib=dylib=pthread");
             println!("cargo:rustc-link-lib=dylib=rt");
             println!("cargo:rustc-link-lib=dylib=stdc++");
+            println!("cargo:rustc-link-lib=dylib=uuid");
         }
         "macos" => {
             println!("cargo:rustc-link-lib=dylib=c++");

@@ -1,0 +1,20 @@
+[providers]
+rust = {}
+
+[phases.setup]
+nixPkgs = ["cmake", "curl", "gcc", "gnumake", "git", "util-linux"]
+
+[phases.download_aeron]
+dependsOn = ["setup"]
+cmds = [
+    "rm -rf core/aeron-sys/aeron",
+    "curl -L https://github.com/real-logic/aeron/archive/ad55a8de054ef5cf34cd7044f568e9762a9330ca.tar.gz | tar -xz",
+    "mv aeron-ad55a8de054ef5cf34cd7044f568e9762a9330ca core/aeron-sys/aeron"
+]
+
+[phases.build]
+dependsOn = ["download_aeron"]
+cmds = ["cargo build --release -p blazil-inference-service"]
+
+[start]
+cmd = "BLAZIL_INFERENCE_HTTP_PORT=${PORT:-8092} ./target/release/inference-server --config services/inference/inference-orchesity-ready.toml"
