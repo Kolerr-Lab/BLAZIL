@@ -7,7 +7,18 @@
 # those MUST be fixed in the dependency tree or via an upstream patch.
 
 [advisories]
-# No advisories currently suppressed.
-# RUSTSEC-2024-0436 (paste unmaintained) was suppressed while on tract 0.21.
-# Resolved: tract upgraded to 0.22.1 which replaced paste with pastey.
-ignore = []
+# Temporary allowlist for warning-only transitive dependencies with no clean
+# replacement in the current tokenizers/candle compatibility graph.
+#
+# Re-evaluate on every dependency bump and remove as soon as upstreams migrate.
+ignore = [
+	# tokenizers -> indicatif -> number_prefix. Warning-only, unmaintained crate
+	# with no upstream fix path available from this workspace today.
+	# Re-evaluate by 2026-08-01.
+	"RUSTSEC-2025-0119",
+
+	# tokenizers/candle/gemm graph still pulls paste 1.0.x transitively.
+	# This is warning-only and currently upstream-controlled.
+	# Re-evaluate by 2026-08-01.
+	"RUSTSEC-2024-0436",
+]
