@@ -33,13 +33,18 @@ jobs:
           toolchain: 1.88.0
           components: clippy, rustfmt
 
+      - name: Set up CMake
+        uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: '3.30.x'
+
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             pkg-config libssl-dev \
             clang lld \
-            cmake g++
+            g++ uuid-dev
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -248,9 +253,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            cmake g++ \
+            g++ uuid-dev \
             pkg-config libssl-dev \
             clang lld
+
+      - name: Set up CMake
+        uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: '3.30.x'
 
       # Zig is required by blazil-ledger's tigerbeetle-client dev-dependency.
       - name: Install Zig
