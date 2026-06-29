@@ -1,1 +1,1 @@
-web: sh -c 'BLAZIL_INFERENCE_HTTP_PORT="${PORT:-8092}" exec ./target/release/inference-server --config services/inference/inference-orchesity-ready.toml'
+web: sh -c 'BLAZIL_INFERENCE_HTTP_PORT="${PORT:-8092}" exec ./inference-server --config services/inference/inference-orchesity-ready.toml'

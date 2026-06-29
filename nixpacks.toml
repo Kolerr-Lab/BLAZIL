@@ -14,7 +14,12 @@ cmds = [
 
 [phases.build]
 dependsOn = ["download_aeron"]
-cmds = ["cargo build --release -p blazil-inference-service"]
+cmds = [
+    "cargo build --release -p blazil-inference-service",
+    "cp target/release/inference-server ./inference-server",
+    "chmod +x ./inference-server",
+    "test -x ./inference-server"
+]
 
 [start]
-cmd = "BLAZIL_INFERENCE_HTTP_PORT=${PORT:-8092} ./target/release/inference-server --config services/inference/inference-orchesity-ready.toml"
+cmd = "BLAZIL_INFERENCE_HTTP_PORT=${PORT:-8092} ./inference-server --config services/inference/inference-orchesity-ready.toml"
