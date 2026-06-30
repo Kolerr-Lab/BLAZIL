@@ -26,6 +26,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY . .
+RUN cat .dockerignore || echo "No .dockerignore"
+RUN ls -la core/aeron-sys/aeron/ || echo "Aeron submodule is missing!"
 RUN --mount=type=cache,target=/root/.cargo/registry \
     --mount=type=cache,target=/root/.cargo/git \
     --mount=type=cache,target=/app/target \
