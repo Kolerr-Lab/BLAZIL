@@ -562,10 +562,9 @@ jobs:
       # --- Inference ---
       - name: Prepare inference build context
         run: |
-          # Some BuildKit versions resolve the per-Dockerfile .dockerignore relative
-          # to the context root (basename only) rather than alongside the Dockerfile.
-          # Copy it to the context root so Aeron C submodule is included in both cases.
-          cp infra/docker/Dockerfile.inference.dockerignore Dockerfile.inference.dockerignore
+          # Overwrite the root .dockerignore with the inference-specific dockerignore
+          # to ensure the Aeron C submodule is included in the build context.
+          cp infra/docker/Dockerfile.inference.dockerignore .dockerignore
 
       - name: Build and push inference
         id: build-inference
