@@ -46,6 +46,7 @@
 
 pub mod cross_shard;
 pub mod event;
+pub mod generic_ring_buffer;
 pub mod handler;
 pub mod handlers;
 pub mod metrics;
@@ -60,6 +61,7 @@ pub mod simd;
 
 pub use cross_shard::{route_cross_shard, CrossShardRoute, CrossShardTransfer};
 pub use event::{EventFlags, TransactionEvent, TransactionResult};
+pub use generic_ring_buffer::GenericRingBuffer;
 pub use handler::EventHandler;
 pub use handlers::risk::{FraudScorer, NoopFraudScorer, RiskHandler};
 pub use metrics::{EngineMetrics, ShardMetrics};
