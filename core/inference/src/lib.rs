@@ -59,12 +59,14 @@ pub mod kernels;
 pub mod model;
 pub mod onnx;
 pub mod pipeline;
+pub mod text;
 
 pub use config::{Device, InferenceConfig, OptimizationLevel};
 pub use error::{Error, Result};
 pub use model::{InferenceModel, Prediction};
 pub use onnx::OnnxModel;
 pub use pipeline::{InferenceBatch, InferencePipeline};
+pub use text::{TextClassifier, TextConfig};
 
 // Re-export kernel functions for convenience
 pub use kernels::{

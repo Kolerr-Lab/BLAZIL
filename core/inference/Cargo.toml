@@ -20,6 +20,11 @@ tract-core = "0.22"
 # Tensor operations
 ndarray = "0.16"
 
+# Tokenization for transformer text classifiers (sequence classification path).
+# Pinned to the SAME version already used by `services/inference` so the workspace
+# resolves a single tokenizers build (that crate proves it compiles here).
+tokenizers = "=0.21.4"
+
 # Thread-pool control — Tract 0.22 uses Rayon for intra-op parallelism.
 # Explicit dep lets us call ThreadPoolBuilder::build_global() to pre-size
 # the pool before the first model load.
