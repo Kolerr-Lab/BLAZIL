@@ -53,3 +53,13 @@ DIG-0003
 #   Owner: infra team | Last reviewed: 2026-05-23
 DS-0015
 
+# ── Inactive Rust Optional Dependency ────────────────────────────────────────
+#
+# RUSTSEC-2026-0235: rust_decimal 1.42.1 declares rkyv 0.7.46 as optional.
+# Cargo records optional dependencies in Cargo.lock, but no workspace feature
+# enables rkyv (`cargo tree --target all -i rkyv -e features` is empty).
+# Remove this suppression when rust_decimal publishes a release using rkyv
+# 0.8.17 or later.
+# Owner: platform team | Last reviewed: 2026-08-16
+RUSTSEC-2026-0235
+
