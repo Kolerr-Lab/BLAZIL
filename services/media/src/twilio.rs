@@ -38,6 +38,7 @@ pub enum InboundMessage {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct MediaPayload {
     pub payload: String, // base64 encoded G.711 μ-law
     pub track: Option<String>,

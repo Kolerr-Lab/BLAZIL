@@ -6,6 +6,9 @@ mod server;
 mod twilio;
 mod codec;
 mod vad;
+mod stt;
+mod tts;
+mod turn;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

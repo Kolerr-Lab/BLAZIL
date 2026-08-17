@@ -7,6 +7,7 @@ license = "BSL-1.1"
 
 [dependencies]
 tokio = { workspace = true }
+tokio-util = { version = "0.7", features = ["rt"] }
 axum = { version = "0.7", features = ["ws"] }
 tower-http = { version = "0.5", features = ["trace"] }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }

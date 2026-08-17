@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // G.711 μ-law codec
 // 20 ms @ 8000 Hz = 160 samples per frame.
 
