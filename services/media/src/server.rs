@@ -1,7 +1,7 @@
 use anyhow::Result;
 use axum::{
     extract::{
-        ws::{Message, WebSocket, WebSocketUpgrade},
+        ws::WebSocketUpgrade,
         State,
     },
     http::StatusCode,
@@ -51,25 +51,9 @@ async fn twilio_ws_handler(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(|socket| handle_twilio_socket(socket, state))
-}
-
-async fn handle_twilio_socket(mut socket: WebSocket, _state: AppState) {
-    tracing::info!("New Twilio WebSocket connection established");
-    while let Some(msg) = socket.recv().await {
-        match msg {
-            Ok(Message::Text(text)) => {
-                tracing::debug!("Received text: {}", text);
-            }
-            Ok(Message::Close(_)) => {
-                tracing::info!("Twilio WebSocket closed");
-                break;
-            }
-            Ok(_) => {}
-            Err(e) => {
-                tracing::error!("WebSocket error: {}", e);
-                break;
-            }
-        }
-    }
+    ws.on_upgrade(|socket| async move {
+        tracing::info!("New Twilio WebSocket connection established");
+        let session = crate::session::Session::new(state.config.clone());
+        session.run(socket).await;
+    })
 }

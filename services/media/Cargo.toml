@@ -23,7 +23,6 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 uuid = { workspace = true }
-webrtc-vad = "0.4"
 async-trait = "0.1"
 
 # In-process reuse

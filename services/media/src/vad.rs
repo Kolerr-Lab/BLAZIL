@@ -1,5 +1,3 @@
-use webrtc_vad::{Vad, SampleRate};
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VadState {
     Speech,
@@ -8,33 +6,49 @@ pub enum VadState {
 
 #[allow(dead_code)]
 pub struct VadEngine {
-    vad: Vad,
     consecutive_speech_ms: u64,
     consecutive_silence_ms: u64,
+    energy_threshold: i32,
 }
 
 #[allow(dead_code)]
 impl VadEngine {
     pub fn new(aggressiveness: u8) -> Self {
-        let mode = match aggressiveness {
-            0 => webrtc_vad::VadMode::Quality,
-            1 => webrtc_vad::VadMode::LowBitrate,
-            2 => webrtc_vad::VadMode::Aggressive,
-            _ => webrtc_vad::VadMode::VeryAggressive,
+        // aggressiveness: 0 (least) to 3 (most aggressive)
+        // Energy threshold: lower is more sensitive to speech
+        let energy_threshold = match aggressiveness {
+            0 => 500,
+            1 => 1000,
+            2 => 2000,
+            _ => 4000,
         };
         
         Self {
-            vad: Vad::new_with_rate_and_mode(SampleRate::Rate8kHz, mode),
             consecutive_speech_ms: 0,
             consecutive_silence_ms: 0,
+            energy_threshold,
         }
     }
 
     /// Process a 20ms PCM16 frame.
-    /// Frame must be exactly 160 samples (20ms at 8kHz).
     pub fn process_frame(&mut self, pcm_frame: &[i16]) -> VadState {
-        // webrtc-vad expects 10, 20, or 30 ms frames. We use 20ms.
-        let is_speech = self.vad.is_voice_segment(pcm_frame).unwrap_or(false);
+        let mut energy: i64 = 0;
+
+        for &sample in pcm_frame {
+            let s = sample as i64;
+            energy += s * s;
+        }
+        
+        // Root mean square
+        let rms = if pcm_frame.is_empty() {
+            0
+        } else {
+            (energy as f64 / pcm_frame.len() as f64).sqrt() as i32
+        };
+
+        // Heuristic: Speech generally has higher energy. 
+        // Zero crossings can distinguish voiced vs unvoiced, but for simple VAD we just use energy.
+        let is_speech = rms > self.energy_threshold;
 
         if is_speech {
             self.consecutive_speech_ms += 20;

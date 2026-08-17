@@ -9,6 +9,7 @@ mod vad;
 mod stt;
 mod tts;
 mod turn;
+mod session;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
