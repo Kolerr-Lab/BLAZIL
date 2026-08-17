@@ -67,7 +67,7 @@ impl Tts for ElevenLabsTts {
         let (ws_stream, _) = connect_async(&ws_url)
             .await
             .map_err(|e| MediaError::TtsError(e.to_string()))?;
-        
+
         let (mut write, mut read) = ws_stream.split();
 
         // Initial connection message with API key
@@ -76,7 +76,7 @@ impl Tts for ElevenLabsTts {
             xi_api_key: self.api_key.clone(),
             voice_settings: None,
         };
-        
+
         write
             .send(Message::Text(serde_json::to_string(&init_msg)?))
             .await
@@ -137,7 +137,7 @@ impl Tts for ElevenLabsTts {
                 _ => {}
             }
         }
-        
+
         text_sender_handle.abort();
         Ok(())
     }

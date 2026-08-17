@@ -22,7 +22,7 @@ impl VadEngine {
             2 => 2000,
             _ => 4000,
         };
-        
+
         Self {
             consecutive_speech_ms: 0,
             consecutive_silence_ms: 0,
@@ -38,7 +38,7 @@ impl VadEngine {
             let s = sample as i64;
             energy += s * s;
         }
-        
+
         // Root mean square
         let rms = if pcm_frame.is_empty() {
             0
@@ -46,7 +46,7 @@ impl VadEngine {
             (energy as f64 / pcm_frame.len() as f64).sqrt() as i32
         };
 
-        // Heuristic: Speech generally has higher energy. 
+        // Heuristic: Speech generally has higher energy.
         // Zero crossings can distinguish voiced vs unvoiced, but for simple VAD we just use energy.
         let is_speech = rms > self.energy_threshold;
 
@@ -90,26 +90,26 @@ mod tests {
     #[test]
     fn test_vad_engine_counters() {
         let mut engine = VadEngine::new(2);
-        
+
         // Feed silence (all zeros)
         let silence_frame = vec![0i16; 160];
         let state = engine.process_frame(&silence_frame);
-        
+
         assert_eq!(state, VadState::Silence);
         assert_eq!(engine.consecutive_silence_ms(), 20);
         assert_eq!(engine.consecutive_speech_ms(), 0);
 
         // Feed some "speech" (high amplitude noise to trigger VAD)
         let mut speech_frame = vec![0i16; 160];
-        for i in 0..160 {
-            speech_frame[i] = if i % 2 == 0 { 8000 } else { -8000 };
+        for (i, sample) in speech_frame.iter_mut().enumerate() {
+            *sample = if i % 2 == 0 { 8000 } else { -8000 };
         }
-        
+
         let state = engine.process_frame(&speech_frame);
         assert_eq!(state, VadState::Speech);
         assert_eq!(engine.consecutive_speech_ms(), 20);
         assert_eq!(engine.consecutive_silence_ms(), 0);
-        
+
         assert!(engine.is_barge_in(20, true));
         assert!(!engine.is_barge_in(20, false));
     }

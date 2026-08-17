@@ -1,9 +1,6 @@
 use anyhow::Result;
 use axum::{
-    extract::{
-        ws::WebSocketUpgrade,
-        State,
-    },
+    extract::{ws::WebSocketUpgrade, State},
     http::StatusCode,
     response::IntoResponse,
     routing::get,

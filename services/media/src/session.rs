@@ -111,10 +111,10 @@ impl Session {
                 );
 
                 self.start_stt();
-                
+
                 // Trigger initial greeting logic if needed, or wait for user.
-                // Assuming the backend handles initial greeting via HTTP hooks, 
-                // but we can trigger a turn here with an empty string or "greeting" event 
+                // Assuming the backend handles initial greeting via HTTP hooks,
+                // but we can trigger a turn here with an empty string or "greeting" event
                 // if we want the media plane to initiate it. For now, we wait for VAD.
             }
             InboundMessage::Media { media, .. } => {
@@ -191,20 +191,18 @@ impl Session {
         }
 
         // Check utterance end
-        if self
-            .vad
-            .is_utterance_end(self.config.silence_end_ms)
+        if self.vad.is_utterance_end(self.config.silence_end_ms)
+            && (self.vad.consecutive_speech_ms() > 0
+                || self.vad.consecutive_silence_ms() == self.config.silence_end_ms)
         {
-            if self.vad.consecutive_speech_ms() > 0 || self.vad.consecutive_silence_ms() == self.config.silence_end_ms {
-                // We reached the silence threshold after some speech, or just triggered it
-                // We should pull the transcript and send to the backend.
-                if let Some(rx) = &mut self.transcript_rx {
-                    if let Ok(transcript) = rx.try_recv() {
-                        if !transcript.trim().is_empty() {
-                            tracing::info!("Utterance ended. Transcript: {}", transcript);
-                            self.handle_turn(transcript, Arc::clone(&ws_tx)).await?;
-                            self.vad.reset_counters();
-                        }
+            // We reached the silence threshold after some speech, or just triggered it
+            // We should pull the transcript and send to the backend.
+            if let Some(rx) = &mut self.transcript_rx {
+                if let Ok(transcript) = rx.try_recv() {
+                    if !transcript.trim().is_empty() {
+                        tracing::info!("Utterance ended. Transcript: {}", transcript);
+                        self.handle_turn(transcript, Arc::clone(&ws_tx)).await?;
+                        self.vad.reset_counters();
                     }
                 }
             }
@@ -294,7 +292,7 @@ impl Session {
             // Play audio back to Twilio
             let ws_tx_clone = Arc::clone(&ws_tx);
             let stream_sid_clone = stream_sid.clone();
-            
+
             let play_task = tokio::spawn(async move {
                 let mut tx = ws_tx_clone.lock().await;
                 while let Some(audio) = audio_rx.recv().await {
@@ -306,7 +304,7 @@ impl Session {
                         }
                     }
                 }
-                
+
                 // Send mark to indicate TTS is done
                 let mark_msg = OutboundMessage::mark(&stream_sid_clone, "tts_end");
                 if let Ok(json) = serde_json::to_string(&mark_msg) {
@@ -315,7 +313,7 @@ impl Session {
             });
 
             // Voice ID could be pulled from Agent config. Hardcoding a default for now.
-            let default_voice = "21m00Tcm4TlvDq8ikWAM".to_string(); 
+            let default_voice = "21m00Tcm4TlvDq8ikWAM".to_string();
             if let Err(e) = tts.speak(&default_voice, text_rx, audio_tx).await {
                 tracing::error!("TTS Error: {:?}", e);
                 let mut speaking = speaking_flag.write().await;

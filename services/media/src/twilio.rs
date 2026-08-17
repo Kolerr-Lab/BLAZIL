@@ -5,10 +5,7 @@ use serde::{Deserialize, Serialize};
 #[allow(dead_code)]
 pub enum InboundMessage {
     #[serde(rename = "connected")]
-    Connected {
-        protocol: String,
-        version: String,
-    },
+    Connected { protocol: String, version: String },
     #[serde(rename = "start")]
     Start {
         #[serde(rename = "streamSid")]
@@ -117,10 +114,14 @@ mod tests {
                 "agent_id": "a-1"
             }
         }"#;
-        
+
         let msg: InboundMessage = serde_json::from_str(json).unwrap();
         match msg {
-            InboundMessage::Start { stream_sid, custom_parameters, .. } => {
+            InboundMessage::Start {
+                stream_sid,
+                custom_parameters,
+                ..
+            } => {
                 assert_eq!(stream_sid, "MZ123");
                 let params = custom_parameters.unwrap();
                 assert_eq!(params.get("tenant_id").unwrap(), "t-1");

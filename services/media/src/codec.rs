@@ -63,7 +63,11 @@ pub fn decode_frame(mulaw_bytes: &[u8]) -> Vec<i16> {
 }
 
 pub fn encode_frame(pcm_samples: &[i16]) -> Vec<u8> {
-    pcm_samples.iter().copied().map(encode_mulaw_sample).collect()
+    pcm_samples
+        .iter()
+        .copied()
+        .map(encode_mulaw_sample)
+        .collect()
 }
 
 #[cfg(test)]
@@ -75,16 +79,20 @@ mod tests {
         for original in -8000..=8000 {
             let mulaw = encode_mulaw_sample(original);
             let decoded = decode_mulaw_byte(mulaw);
-            
+
             // μ-law is lossy, so we check if it's within tolerance.
             // Max error in μ-law is roughly 3% of the value.
             let diff = (original - decoded).abs();
             let tolerance = 8.max((original.abs() as f32 * 0.05) as i16);
-            
+
             assert!(
                 diff <= tolerance,
                 "orig: {}, mulaw: {}, dec: {}, diff: {} > tol: {}",
-                original, mulaw, decoded, diff, tolerance
+                original,
+                mulaw,
+                decoded,
+                diff,
+                tolerance
             );
         }
     }
@@ -94,7 +102,7 @@ mod tests {
         let pcm = vec![0i16; SAMPLES_PER_FRAME];
         let encoded = encode_frame(&pcm);
         assert_eq!(encoded.len(), SAMPLES_PER_FRAME);
-        
+
         let decoded = decode_frame(&encoded);
         assert_eq!(decoded.len(), SAMPLES_PER_FRAME);
     }

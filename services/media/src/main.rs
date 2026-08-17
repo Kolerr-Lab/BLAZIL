@@ -1,15 +1,15 @@
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+mod codec;
 mod config;
 mod error;
 mod server;
-mod twilio;
-mod codec;
-mod vad;
+mod session;
 mod stt;
 mod tts;
 mod turn;
-mod session;
+mod twilio;
+mod vad;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
