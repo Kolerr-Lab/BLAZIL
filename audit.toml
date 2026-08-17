@@ -1,0 +1,30 @@
+# cargo audit configuration — workspace security policy
+# Run: cargo audit
+# CI gate is in scripts/check.sh (step 5).
+#
+# Any entry in [[advisories.ignore]] MUST have a documented rationale and
+# a re-evaluation date. Active CRITICAL/HIGH advisories must be fixed in the
+# dependency tree or via an upstream patch.
+
+[advisories]
+# Temporary allowlist for warning-only transitive dependencies with no clean
+# replacement in the current tokenizers/candle compatibility graph.
+#
+# Re-evaluate on every dependency bump and remove as soon as upstreams migrate.
+ignore = [
+	# rust_decimal 1.42.1 records optional rkyv 0.7.46 in Cargo.lock, but no
+	# workspace feature enables it (`cargo tree --target all -i rkyv -e
+	# features` is empty). Remove when rust_decimal adopts rkyv >=0.8.17.
+	# Re-evaluate by 2026-09-16.
+	"RUSTSEC-2026-0235",
+
+	# tokenizers -> indicatif -> number_prefix. Warning-only, unmaintained crate
+	# with no upstream fix path available from this workspace today.
+	# Re-evaluate by 2026-08-01.
+	"RUSTSEC-2025-0119",
+
+	# tokenizers/candle/gemm graph still pulls paste 1.0.x transitively.
+	# This is warning-only and currently upstream-controlled.
+	# Re-evaluate by 2026-08-01.
+	"RUSTSEC-2024-0436",
+]
