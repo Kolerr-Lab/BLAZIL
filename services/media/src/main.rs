@@ -1,7 +1,11 @@
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod config;
+mod error;
 mod server;
+mod twilio;
+mod codec;
+mod vad;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
