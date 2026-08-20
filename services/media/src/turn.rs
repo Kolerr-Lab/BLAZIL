@@ -15,6 +15,9 @@ pub struct TurnRequest {
 #[derive(Debug, Deserialize)]
 pub struct TurnResponse {
     pub answer: String,
+    /// Agent's persona voice (ElevenLabs). None → media plane falls back to its default voice.
+    #[serde(default)]
+    pub voice_id: Option<String>,
     pub tier: Option<String>,
     pub model: Option<String>,
     pub tokens_in: Option<u32>,
