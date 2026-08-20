@@ -87,12 +87,7 @@ mod tests {
 
             assert!(
                 diff <= tolerance,
-                "orig: {}, mulaw: {}, dec: {}, diff: {} > tol: {}",
-                original,
-                mulaw,
-                decoded,
-                diff,
-                tolerance
+                "orig: {original}, mulaw: {mulaw}, dec: {decoded}, diff: {diff} > tol: {tolerance}"
             );
         }
     }
