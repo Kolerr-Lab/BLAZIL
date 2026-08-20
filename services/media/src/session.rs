@@ -272,9 +272,11 @@ async fn run_response(shared: Shared, text: String) {
 
     let (answer, voice_id) = match turn_client.run_turn(&req).await {
         Ok(resp) => {
+            // Ignore empty/placeholder voices (e.g. the "eleven_labs_default" sentinel the
+            // dashboard stores before a real ElevenLabs voice is chosen) → use the default.
             let voice = resp
                 .voice_id
-                .filter(|v| !v.is_empty())
+                .filter(|v| !v.is_empty() && v != "eleven_labs_default")
                 .unwrap_or_else(|| shared.config.default_voice_id.clone());
             (resp.answer, voice)
         }
