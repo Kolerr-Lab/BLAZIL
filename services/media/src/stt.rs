@@ -70,7 +70,7 @@ impl ElevenLabsStt {
         );
         if let Some(lang) = &self.params.language_code {
             if !lang.is_empty() {
-                url.push_str(&format!("&language_code={}", lang));
+                url.push_str(&format!("&language_code={lang}"));
             }
         }
         url
@@ -88,16 +88,16 @@ impl Stt for ElevenLabsStt {
         let mut request = url
             .as_str()
             .into_client_request()
-            .map_err(|e| MediaError::SttError(format!("Bad STT URL: {}", e)))?;
+            .map_err(|e| MediaError::SttError(format!("Bad STT URL: {e}")))?;
         request.headers_mut().insert(
             "xi-api-key",
             HeaderValue::from_str(&self.params.api_key)
-                .map_err(|e| MediaError::SttError(format!("Bad API key header: {}", e)))?,
+                .map_err(|e| MediaError::SttError(format!("Bad API key header: {e}")))?,
         );
 
         let (ws_stream, _) = connect_async(request)
             .await
-            .map_err(|e| MediaError::SttError(format!("STT connect failed: {}", e)))?;
+            .map_err(|e| MediaError::SttError(format!("STT connect failed: {e}")))?;
         let (mut write, mut read) = ws_stream.split();
 
         // Writer task: forward μ-law audio chunks as base64 input_audio_chunk messages.

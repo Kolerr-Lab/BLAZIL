@@ -30,7 +30,7 @@ impl Config {
             // Railway injects $PORT; honor it, then MEDIA_BIND_ADDR, then a local default.
             bind_addr: env::var("MEDIA_BIND_ADDR").ok().unwrap_or_else(|| {
                 env::var("PORT")
-                    .map(|p| format!("0.0.0.0:{}", p))
+                    .map(|p| format!("0.0.0.0:{p}"))
                     .unwrap_or_else(|_| "0.0.0.0:8080".into())
             }),
             public_wss: env::var("MEDIA_PUBLIC_WSS")

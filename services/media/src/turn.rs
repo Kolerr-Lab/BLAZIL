@@ -55,7 +55,7 @@ impl TurnClient {
             .json(request)
             .send()
             .await
-            .map_err(|e| MediaError::TurnError(format!("Network error: {}", e)))?;
+            .map_err(|e| MediaError::TurnError(format!("Network error: {e}")))?;
 
         if resp.status() != StatusCode::OK {
             return Err(MediaError::TurnError(format!(
@@ -67,7 +67,7 @@ impl TurnClient {
         let data = resp
             .json::<TurnResponse>()
             .await
-            .map_err(|e| MediaError::TurnError(format!("Failed to parse response: {}", e)))?;
+            .map_err(|e| MediaError::TurnError(format!("Failed to parse response: {e}")))?;
 
         Ok(data)
     }

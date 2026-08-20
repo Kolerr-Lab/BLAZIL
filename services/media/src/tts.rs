@@ -57,24 +57,24 @@ impl Tts for ElevenLabsTts {
         audio_tx: mpsc::Sender<Vec<u8>>,
     ) -> Result<(), MediaError> {
         let ws_url = format!(
-            "wss://api.elevenlabs.io/v1/text-to-speech/{}/stream-input\
+            "wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream-input\
              ?model_id={}&output_format=ulaw_8000",
-            voice_id, self.model_id
+            self.model_id
         );
 
         let mut request = ws_url
             .as_str()
             .into_client_request()
-            .map_err(|e| MediaError::TtsError(format!("Bad TTS URL: {}", e)))?;
+            .map_err(|e| MediaError::TtsError(format!("Bad TTS URL: {e}")))?;
         request.headers_mut().insert(
             "xi-api-key",
             HeaderValue::from_str(&self.api_key)
-                .map_err(|e| MediaError::TtsError(format!("Bad API key header: {}", e)))?,
+                .map_err(|e| MediaError::TtsError(format!("Bad API key header: {e}")))?,
         );
 
         let (ws_stream, _) = connect_async(request)
             .await
-            .map_err(|e| MediaError::TtsError(format!("TTS connect failed: {}", e)))?;
+            .map_err(|e| MediaError::TtsError(format!("TTS connect failed: {e}")))?;
         let (mut write, mut read) = ws_stream.split();
 
         // BOS: initialize the stream with voice settings.
