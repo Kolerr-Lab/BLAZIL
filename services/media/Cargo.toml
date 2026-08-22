@@ -33,6 +33,8 @@ blazil-transport = { path = "../../core/transport" }
 
 [build-dependencies]
 tonic-build = "0.12"
+# Vendored protoc so the build needs no system protobuf-compiler (CI, Docker, local all work).
+protoc-bin-vendored = "3"
 
 [dev-dependencies]
 tokio = { workspace = true }
