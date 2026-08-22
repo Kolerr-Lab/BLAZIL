@@ -245,7 +245,10 @@ async fn do_turn(shared: Shared, text: String) {
     // A new user utterance (or greeting) supersedes whatever we were saying.
     stop_playback(&shared, true).await;
     shared.play_cancel.store(false, Ordering::Relaxed);
-    shared.speaking.store(true, Ordering::Relaxed);
+    // NOTE: `speaking` is intentionally NOT set here. It is armed inside run_response only
+    // once real audio is flowing (see below). Setting it now would arm barge-in during the
+    // multi-second think phase (backend turn), so the caller's trailing words — or line noise
+    // — would abort a reply before it ever starts, leaving the agent mute after the greeting.
 
     let worker = shared.clone();
     let handle = tokio::spawn(async move { run_response(worker, text).await });
@@ -302,9 +305,16 @@ async fn run_response(shared: Shared, text: String) {
     });
 
     // Relay audio chunk-by-chunk; lock the sink per send so barge-in can slip in a `clear`.
+    let mut playing = false;
     while let Some(audio) = audio_rx.recv().await {
         if shared.play_cancel.load(Ordering::Relaxed) {
             break;
+        }
+        // Arm barge-in only once the first real audio chunk goes out — never during the
+        // think phase — so the agent's reply can't be cancelled before it has spoken a word.
+        if !playing {
+            shared.speaking.store(true, Ordering::Relaxed);
+            playing = true;
         }
         let msg = OutboundMessage::media(&shared.stream_sid, BASE64.encode(audio));
         if let Ok(json) = serde_json::to_string(&msg) {
