@@ -274,6 +274,11 @@ async fn run_response(shared: Shared, text: String) {
         text,
         trace_id: uuid::Uuid::new_v4().to_string(),
     };
+    tracing::info!(
+        "Turn → backend (agent={}, {} chars)",
+        req.agent_id,
+        req.text.len()
+    );
 
     let (answer, voice_id) = match turn_client.run_turn(&req).await {
         Ok(resp) => {
@@ -293,6 +298,7 @@ async fn run_response(shared: Shared, text: String) {
             )
         }
     };
+    tracing::info!("Turn answer: {} chars, voice={}", answer.len(), voice_id);
 
     let tts = ElevenLabsTts::new(
         shared.config.elevenlabs_api_key.clone(),
@@ -312,6 +318,7 @@ async fn run_response(shared: Shared, text: String) {
 
     // Relay audio chunk-by-chunk; lock the sink per send so barge-in can slip in a `clear`.
     let mut playing = false;
+    let mut chunks: u32 = 0;
     while let Some(audio) = audio_rx.recv().await {
         if shared.play_cancel.load(Ordering::Relaxed) {
             break;
@@ -322,6 +329,7 @@ async fn run_response(shared: Shared, text: String) {
             shared.speaking.store(true, Ordering::Relaxed);
             playing = true;
         }
+        chunks += 1;
         let msg = OutboundMessage::media(&shared.stream_sid, BASE64.encode(audio));
         if let Ok(json) = serde_json::to_string(&msg) {
             let mut tx = shared.ws_tx.lock().await;
@@ -330,6 +338,11 @@ async fn run_response(shared: Shared, text: String) {
             }
         }
     }
+    tracing::info!(
+        "Playback done: {} audio chunks sent, cancelled={}",
+        chunks,
+        shared.play_cancel.load(Ordering::Relaxed)
+    );
 
     // If we finished naturally (not barged-in), tell Twilio playback is complete.
     if !shared.play_cancel.load(Ordering::Relaxed) {
