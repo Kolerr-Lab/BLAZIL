@@ -10,10 +10,9 @@ pub enum InboundMessage {
     Start {
         #[serde(rename = "streamSid")]
         stream_sid: String,
-        #[serde(rename = "callSid")]
-        call_sid: String,
-        #[serde(rename = "customParameters")]
-        custom_parameters: Option<std::collections::HashMap<String, String>>,
+        // Real Twilio nests callSid/customParameters inside a `start` object (NOT top-level).
+        // Getting this wrong silently drops the start event → no greeting/STT → dead air.
+        start: StartMetadata,
     },
     #[serde(rename = "media")]
     Media {
@@ -39,6 +38,17 @@ pub enum InboundMessage {
 pub struct MediaPayload {
     pub payload: String, // base64 encoded G.711 μ-law
     pub track: Option<String>,
+}
+
+/// Nested `start` object from Twilio's Media Streams `start` event. callSid and the
+/// `<Parameter>` values (tenant_id/agent_id) live here, not at the message's top level.
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct StartMetadata {
+    #[serde(rename = "callSid")]
+    pub call_sid: String,
+    #[serde(rename = "customParameters", default)]
+    pub custom_parameters: Option<std::collections::HashMap<String, String>>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -105,26 +115,31 @@ mod tests {
 
     #[test]
     fn parse_start_event() {
+        // Mirrors the REAL Twilio start frame: callSid + customParameters nested under `start`.
         let json = r#"{
             "event": "start",
+            "sequenceNumber": "1",
             "streamSid": "MZ123",
-            "callSid": "CA123",
-            "customParameters": {
-                "tenant_id": "t-1",
-                "agent_id": "a-1"
+            "start": {
+                "streamSid": "MZ123",
+                "accountSid": "AC123",
+                "callSid": "CA123",
+                "tracks": ["inbound"],
+                "customParameters": {
+                    "tenant_id": "t-1",
+                    "agent_id": "a-1"
+                }
             }
         }"#;
 
         let msg: InboundMessage = serde_json::from_str(json).unwrap();
         match msg {
-            InboundMessage::Start {
-                stream_sid,
-                custom_parameters,
-                ..
-            } => {
+            InboundMessage::Start { stream_sid, start } => {
                 assert_eq!(stream_sid, "MZ123");
-                let params = custom_parameters.unwrap();
+                assert_eq!(start.call_sid, "CA123");
+                let params = start.custom_parameters.unwrap();
                 assert_eq!(params.get("tenant_id").unwrap(), "t-1");
+                assert_eq!(params.get("agent_id").unwrap(), "a-1");
             }
             _ => panic!("Expected Start event"),
         }

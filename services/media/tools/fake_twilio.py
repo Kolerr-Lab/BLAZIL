@@ -131,13 +131,20 @@ async def main() -> None:
         rt = asyncio.create_task(reader(ws, stats))
 
         await ws.send(json.dumps({"event": "connected", "protocol": "Call", "version": "1.0.0"}))
+        # Match REAL Twilio: callSid + customParameters are nested under `start`, not top-level.
         await ws.send(
             json.dumps(
                 {
                     "event": "start",
+                    "sequenceNumber": "1",
                     "streamSid": sid,
-                    "callSid": "CAfake",
-                    "customParameters": {"tenant_id": args.tenant, "agent_id": args.agent},
+                    "start": {
+                        "streamSid": sid,
+                        "accountSid": "ACfake",
+                        "callSid": "CAfake",
+                        "tracks": ["inbound"],
+                        "customParameters": {"tenant_id": args.tenant, "agent_id": args.agent},
+                    },
                 }
             )
         )

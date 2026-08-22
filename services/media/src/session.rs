@@ -107,18 +107,14 @@ impl Session {
             InboundMessage::Connected { protocol, version } => {
                 tracing::info!("Connected: protocol={}, version={}", protocol, version);
             }
-            InboundMessage::Start {
-                stream_sid,
-                call_sid,
-                custom_parameters,
-            } => {
-                let params = custom_parameters.unwrap_or_default();
+            InboundMessage::Start { stream_sid, start } => {
+                let params = start.custom_parameters.unwrap_or_default();
                 let tenant_id = params.get("tenant_id").cloned().unwrap_or_default();
                 let agent_id = params.get("agent_id").cloned().unwrap_or_default();
                 tracing::info!(
                     "Started stream {} for call {} (tenant={}, agent={})",
                     stream_sid,
-                    call_sid,
+                    start.call_sid,
                     tenant_id,
                     agent_id
                 );
