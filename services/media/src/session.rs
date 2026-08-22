@@ -111,12 +111,16 @@ impl Session {
                 let params = start.custom_parameters.unwrap_or_default();
                 let tenant_id = params.get("tenant_id").cloned().unwrap_or_default();
                 let agent_id = params.get("agent_id").cloned().unwrap_or_default();
+                // Per-agent language from the TwiML <Parameter>; empty → auto-detect (falls
+                // back to the media plane's global STT_LANGUAGE_CODE / language detection).
+                let language = params.get("language").filter(|s| !s.is_empty()).cloned();
                 tracing::info!(
-                    "Started stream {} for call {} (tenant={}, agent={})",
+                    "Started stream {} for call {} (tenant={}, agent={}, language={})",
                     stream_sid,
                     start.call_sid,
                     tenant_id,
-                    agent_id
+                    agent_id,
+                    language.as_deref().unwrap_or("auto")
                 );
 
                 let shared = Shared {
@@ -131,7 +135,7 @@ impl Session {
                 };
                 self.shared = Some(shared.clone());
 
-                self.start_stt(shared.clone());
+                self.start_stt(shared.clone(), language);
 
                 // Agent greets first (in its own persona) unless disabled.
                 if !self.config.greeting_prompt.trim().is_empty() {
@@ -195,15 +199,17 @@ impl Session {
         }
     }
 
-    fn start_stt(&mut self, shared: Shared) {
+    fn start_stt(&mut self, shared: Shared, language: Option<String>) {
         let (ulaw_tx, ulaw_rx) = mpsc::channel::<Vec<u8>>(256);
         let (transcript_tx, mut transcript_rx) = mpsc::channel::<String>(16);
         self.stt_tx = Some(ulaw_tx);
 
+        // Per-call language (from the agent) wins; otherwise the global default / auto-detect.
+        let language_code = language.or_else(|| self.config.stt_language_code.clone());
         let params = SttParams {
             api_key: self.config.elevenlabs_api_key.clone(),
             model_id: self.config.elevenlabs_stt_model.clone(),
-            language_code: self.config.stt_language_code.clone(),
+            language_code,
             vad_silence_secs: self.config.silence_end_ms as f32 / 1000.0,
         };
         self.tasks.push(tokio::spawn(async move {
