@@ -14,6 +14,8 @@ pub struct Config {
     /// Fallback TTS voice used only when the backend returns no per-agent voice.
     pub default_voice_id: String,
     pub orch_base_url: String,
+    /// gRPC endpoint of the backend Orchestrator (streaming turn). Private network, h2c.
+    pub orch_grpc_url: String,
     pub orch_service_token: String,
     pub twilio_stream_auth: Option<String>,
     pub vad_aggressiveness: u8,
@@ -46,6 +48,8 @@ impl Config {
                 .unwrap_or_else(|_| "21m00Tcm4TlvDq8ikWAM".into()),
             orch_base_url: env::var("ORCH_BASE_URL")
                 .unwrap_or_else(|_| "http://localhost:8000".into()),
+            orch_grpc_url: env::var("ORCH_GRPC_URL")
+                .unwrap_or_else(|_| "http://localhost:50051".into()),
             orch_service_token: env::var("ORCH_SERVICE_TOKEN")
                 .context("ORCH_SERVICE_TOKEN is required")?,
             twilio_stream_auth: env::var("TWILIO_STREAM_AUTH").ok(),

@@ -1,10 +1,21 @@
 #![allow(dead_code)]
-use crate::error::MediaError;
-use reqwest::{Client, StatusCode};
-use serde::{Deserialize, Serialize};
-use std::time::Duration;
+//! gRPC client for the backend Orchestrator streaming turn (Phase 1).
+//!
+//! Opens `RunTurnStream` and pumps the server stream into an mpsc channel of `TurnEvent`,
+//! so the session can feed tokens into TTS sentence-by-sentence (low time-to-first-word).
 
-#[derive(Debug, Serialize)]
+use crate::error::MediaError;
+use tokio::sync::mpsc;
+use tonic::metadata::MetadataValue;
+use tonic::Request;
+
+pub mod pb {
+    tonic::include_proto!("auralius.voice.v1");
+}
+use pb::orchestrator_client::OrchestratorClient;
+use pb::turn_chunk::Payload;
+
+#[derive(Debug, Clone)]
 pub struct TurnRequest {
     pub tenant_id: String,
     pub agent_id: String,
@@ -12,63 +23,82 @@ pub struct TurnRequest {
     pub trace_id: String,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct TurnResponse {
-    pub answer: String,
-    /// Agent's persona voice (ElevenLabs). None → media plane falls back to its default voice.
-    #[serde(default)]
-    pub voice_id: Option<String>,
-    pub tier: Option<String>,
-    pub model: Option<String>,
-    pub tokens_in: Option<u32>,
-    pub tokens_out: Option<u32>,
+#[derive(Debug, Clone)]
+pub enum TurnEvent {
+    VoiceId(String),
+    Delta(String),
+    Done { full_answer: String },
+    Error(String),
 }
 
 pub struct TurnClient {
-    client: Client,
-    base_url: String,
+    grpc_url: String,
     service_token: String,
 }
 
 impl TurnClient {
-    pub fn new(base_url: String, service_token: String) -> Self {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(10))
-            .pool_idle_timeout(Duration::from_secs(90))
-            .build()
-            .unwrap_or_default();
-
+    pub fn new(grpc_url: String, service_token: String) -> Self {
         Self {
-            client,
-            base_url,
+            grpc_url,
             service_token,
         }
     }
 
-    pub async fn run_turn(&self, request: &TurnRequest) -> Result<TurnResponse, MediaError> {
-        let url = format!("{}/voice/turn", self.base_url.trim_end_matches('/'));
-
-        let resp = self
-            .client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.service_token))
-            .json(request)
-            .send()
+    /// Open the streaming turn. Returns a receiver of `TurnEvent`; a background task pumps the
+    /// gRPC stream into it. When the receiver is dropped (barge-in / hang up), the pump stops.
+    pub async fn run_turn_stream(
+        &self,
+        req: TurnRequest,
+    ) -> Result<mpsc::Receiver<TurnEvent>, MediaError> {
+        let mut client = OrchestratorClient::connect(self.grpc_url.clone())
             .await
-            .map_err(|e| MediaError::TurnError(format!("Network error: {e}")))?;
+            .map_err(|e| MediaError::TurnError(format!("gRPC connect failed: {e}")))?;
 
-        if resp.status() != StatusCode::OK {
-            return Err(MediaError::TurnError(format!(
-                "API returned status {}",
-                resp.status()
-            )));
-        }
+        let mut request = Request::new(pb::TurnRequest {
+            tenant_id: req.tenant_id,
+            agent_id: req.agent_id,
+            text: req.text,
+            trace_id: req.trace_id,
+            call_id: String::new(),
+        });
+        let meta: MetadataValue<_> = format!("Bearer {}", self.service_token)
+            .parse()
+            .map_err(|_| MediaError::TurnError("bad auth metadata".into()))?;
+        request.metadata_mut().insert("authorization", meta);
 
-        let data = resp
-            .json::<TurnResponse>()
+        let mut streaming = client
+            .run_turn_stream(request)
             .await
-            .map_err(|e| MediaError::TurnError(format!("Failed to parse response: {e}")))?;
+            .map_err(|e| MediaError::TurnError(format!("gRPC call failed: {e}")))?
+            .into_inner();
 
-        Ok(data)
+        let (tx, rx) = mpsc::channel::<TurnEvent>(64);
+        tokio::spawn(async move {
+            loop {
+                match streaming.message().await {
+                    Ok(Some(chunk)) => {
+                        let ev = match chunk.payload {
+                            Some(Payload::VoiceId(v)) => TurnEvent::VoiceId(v),
+                            Some(Payload::Delta(d)) => TurnEvent::Delta(d),
+                            Some(Payload::Done(d)) => TurnEvent::Done {
+                                full_answer: d.full_answer,
+                            },
+                            Some(Payload::Error(e)) => TurnEvent::Error(e),
+                            None => continue,
+                        };
+                        if tx.send(ev).await.is_err() {
+                            break;
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(e) => {
+                        let _ = tx.send(TurnEvent::Error(e.to_string())).await;
+                        break;
+                    }
+                }
+            }
+        });
+
+        Ok(rx)
     }
 }

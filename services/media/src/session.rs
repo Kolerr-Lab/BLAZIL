@@ -17,7 +17,7 @@ use crate::{
     config::Config,
     stt::{ElevenLabsStt, Stt, SttParams},
     tts::{ElevenLabsTts, Tts},
-    turn::{TurnClient, TurnRequest},
+    turn::{TurnClient, TurnEvent, TurnRequest},
     twilio::{InboundMessage, OutboundMessage},
     vad::VadEngine,
 };
@@ -261,11 +261,73 @@ async fn do_turn(shared: Shared, text: String) {
     *shared.tts_task.lock().await = Some(handle);
 }
 
-/// Call the backend for an answer, synthesize it, and relay μ-law audio to Twilio. Honors
-/// `play_cancel` between chunks so barge-in interrupts promptly.
+/// Drain complete sentences (or an over-long buffer) from `buf` into the TTS text sink so the
+/// agent starts speaking sentence-1 while the LLM is still generating sentence-2. Returns false
+/// if the sink is closed (barge-in / TTS gone).
+async fn flush_sentences(buf: &mut String, tx: &mpsc::Sender<String>) -> bool {
+    loop {
+        let mut cut: Option<usize> = None;
+        for (i, c) in buf.char_indices() {
+            if matches!(c, '.' | '!' | '?' | '\n' | '…' | ';') {
+                cut = Some(i + c.len_utf8());
+                break;
+            }
+        }
+        let piece = if let Some(end) = cut {
+            buf.drain(..end).collect::<String>()
+        } else if buf.len() > 160 {
+            // No terminator yet but long — flush to keep latency low.
+            std::mem::take(buf)
+        } else {
+            return true;
+        };
+        let trimmed = piece.trim().to_string();
+        if !trimmed.is_empty() && tx.send(trimmed).await.is_err() {
+            return false;
+        }
+    }
+}
+
+/// Synthesize a single fixed line (used for connect/error fallbacks) and relay it to Twilio.
+async fn speak_once(shared: &Shared, voice_id: &str, line: &str) {
+    let tts = ElevenLabsTts::new(
+        shared.config.elevenlabs_api_key.clone(),
+        shared.config.elevenlabs_tts_model.clone(),
+    );
+    let (text_tx, text_rx) = mpsc::channel::<String>(1);
+    let (audio_tx, mut audio_rx) = mpsc::channel::<Vec<u8>>(256);
+    let _ = text_tx.send(line.to_string()).await;
+    drop(text_tx);
+    let voice = voice_id.to_string();
+    let tts_handle = tokio::spawn(async move {
+        let _ = tts.speak(&voice, text_rx, audio_tx).await;
+    });
+    let mut playing = false;
+    while let Some(audio) = audio_rx.recv().await {
+        if shared.play_cancel.load(Ordering::Relaxed) {
+            break;
+        }
+        if !playing {
+            shared.speaking.store(true, Ordering::Relaxed);
+            playing = true;
+        }
+        let msg = OutboundMessage::media(&shared.stream_sid, BASE64.encode(audio));
+        if let Ok(json) = serde_json::to_string(&msg) {
+            let mut tx = shared.ws_tx.lock().await;
+            if tx.send(Message::Text(json)).await.is_err() {
+                break;
+            }
+        }
+    }
+    tts_handle.abort();
+    shared.speaking.store(false, Ordering::Relaxed);
+}
+
+/// Streaming turn: open the backend gRPC stream, feed answer tokens into TTS sentence-by-
+/// sentence, and relay audio to Twilio. Honors `play_cancel` for prompt barge-in.
 async fn run_response(shared: Shared, text: String) {
     let turn_client = TurnClient::new(
-        shared.config.orch_base_url.clone(),
+        shared.config.orch_grpc_url.clone(),
         shared.config.orch_service_token.clone(),
     );
     let req = TurnRequest {
@@ -275,56 +337,95 @@ async fn run_response(shared: Shared, text: String) {
         trace_id: uuid::Uuid::new_v4().to_string(),
     };
     tracing::info!(
-        "Turn → backend (agent={}, {} chars)",
+        "Turn → backend gRPC (agent={}, {} chars)",
         req.agent_id,
         req.text.len()
     );
 
-    let (answer, voice_id) = match turn_client.run_turn(&req).await {
-        Ok(resp) => {
-            // Ignore empty/placeholder voices (e.g. the "eleven_labs_default" sentinel the
-            // dashboard stores before a real ElevenLabs voice is chosen) → use the default.
-            let voice = resp
-                .voice_id
-                .filter(|v| !v.is_empty() && v != "eleven_labs_default")
-                .unwrap_or_else(|| shared.config.default_voice_id.clone());
-            (resp.answer, voice)
-        }
+    let default_voice = shared.config.default_voice_id.clone();
+    let fallback = "I'm sorry, I'm having trouble right now. Could you say that again?";
+
+    let mut rx = match turn_client.run_turn_stream(req).await {
+        Ok(rx) => rx,
         Err(e) => {
-            tracing::error!("Turn error: {:?}", e);
-            (
-                "I'm sorry, I'm having trouble right now. Could you say that again?".to_string(),
-                shared.config.default_voice_id.clone(),
-            )
+            tracing::error!("Turn stream error: {:?}", e);
+            speak_once(&shared, &default_voice, fallback).await;
+            return;
         }
     };
-    tracing::info!("Turn answer: {} chars, voice={}", answer.len(), voice_id);
+
+    // Resolve the voice from the first event; stash a non-voice first event to feed later.
+    let mut voice_id = default_voice.clone();
+    let mut pending: Option<TurnEvent> = None;
+    if let Some(ev) = rx.recv().await {
+        match ev {
+            TurnEvent::VoiceId(v) => {
+                if !v.is_empty() && v != "eleven_labs_default" {
+                    voice_id = v;
+                }
+            }
+            TurnEvent::Error(e) => {
+                tracing::error!("Turn error: {}", e);
+                speak_once(&shared, &default_voice, fallback).await;
+                return;
+            }
+            other => {
+                pending = Some(other);
+            }
+        }
+    }
+    tracing::info!("Turn streaming (voice={})", voice_id);
 
     let tts = ElevenLabsTts::new(
         shared.config.elevenlabs_api_key.clone(),
         shared.config.elevenlabs_tts_model.clone(),
     );
-    let (text_tx, text_rx) = mpsc::channel::<String>(1);
+    let (text_tx, text_rx) = mpsc::channel::<String>(16);
     let (audio_tx, mut audio_rx) = mpsc::channel::<Vec<u8>>(256);
 
-    let _ = text_tx.send(answer).await;
-    drop(text_tx);
-
+    let voice_for_tts = voice_id.clone();
     let tts_handle = tokio::spawn(async move {
-        if let Err(e) = tts.speak(&voice_id, text_rx, audio_tx).await {
+        if let Err(e) = tts.speak(&voice_for_tts, text_rx, audio_tx).await {
             tracing::error!("TTS error: {:?}", e);
         }
     });
 
-    // Relay audio chunk-by-chunk; lock the sink per send so barge-in can slip in a `clear`.
+    // Feeder: gRPC token deltas → sentence buffer → text_tx. Dropping text_tx at the end signals
+    // end-of-speech to TTS. If run_response is aborted (barge-in), audio_rx drops → TTS ends →
+    // text_rx drops → this feeder's send fails → it stops; rx drops → the gRPC pump stops.
+    let feeder = tokio::spawn(async move {
+        let mut buf = String::new();
+        if let Some(TurnEvent::Delta(d)) = pending {
+            buf.push_str(&d);
+        }
+        if !flush_sentences(&mut buf, &text_tx).await {
+            return;
+        }
+        while let Some(ev) = rx.recv().await {
+            match ev {
+                TurnEvent::Delta(d) => {
+                    buf.push_str(&d);
+                    if !flush_sentences(&mut buf, &text_tx).await {
+                        return;
+                    }
+                }
+                TurnEvent::Done { .. } | TurnEvent::Error(_) => break,
+                TurnEvent::VoiceId(_) => {}
+            }
+        }
+        let rest = buf.trim().to_string();
+        if !rest.is_empty() {
+            let _ = text_tx.send(rest).await;
+        }
+    });
+
+    // Relay audio; arm barge-in only once real audio flows.
     let mut playing = false;
     let mut chunks: u32 = 0;
     while let Some(audio) = audio_rx.recv().await {
         if shared.play_cancel.load(Ordering::Relaxed) {
             break;
         }
-        // Arm barge-in only once the first real audio chunk goes out — never during the
-        // think phase — so the agent's reply can't be cancelled before it has spoken a word.
         if !playing {
             shared.speaking.store(true, Ordering::Relaxed);
             playing = true;
@@ -344,7 +445,6 @@ async fn run_response(shared: Shared, text: String) {
         shared.play_cancel.load(Ordering::Relaxed)
     );
 
-    // If we finished naturally (not barged-in), tell Twilio playback is complete.
     if !shared.play_cancel.load(Ordering::Relaxed) {
         let mark = OutboundMessage::mark(&shared.stream_sid, "tts_end");
         if let Ok(json) = serde_json::to_string(&mark) {
@@ -353,6 +453,7 @@ async fn run_response(shared: Shared, text: String) {
         }
     }
 
+    feeder.abort();
     tts_handle.abort();
     shared.speaking.store(false, Ordering::Relaxed);
 }

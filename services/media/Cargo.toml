@@ -24,9 +24,15 @@ thiserror = { workspace = true }
 anyhow = { workspace = true }
 uuid = { workspace = true }
 async-trait = "0.1"
+# gRPC streaming turn client (Phase 1: stream LLM tokens → TTS sentence-by-sentence).
+tonic = "0.12"
+prost = "0.13"
 
 # In-process reuse
 blazil-transport = { path = "../../core/transport" }
+
+[build-dependencies]
+tonic-build = "0.12"
 
 [dev-dependencies]
 tokio = { workspace = true }

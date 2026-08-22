@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+package auralius.voice.v1;
+
+// Streaming turn orchestration. The Blazil media plane (Rust) is the client; the Python
+// backend is the server. One caller utterance in, a stream of answer chunks out — the media
+// plane feeds tokens into TTS sentence-by-sentence for low time-to-first-word.
+// Keep in sync with backend/proto/voice.proto.
+service Orchestrator {
+  rpc RunTurnStream(TurnRequest) returns (stream TurnChunk);
+}
+
+message TurnRequest {
+  string tenant_id = 1;
+  string agent_id = 2;
+  string text = 3;
+  string trace_id = 4;
+  string call_id = 5;
+}
+
+message TurnChunk {
+  oneof payload {
+    string voice_id = 1;
+    string delta = 2;
+    Done done = 3;
+    string error = 4;
+  }
+}
+
+message Done {
+  string full_answer = 1;
+  string tier = 2;
+  string model = 3;
+}

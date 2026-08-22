@@ -11,7 +11,7 @@ FROM rust:1.88-slim-bookworm AS builder
 
 # TLS stack (rustls/aws-lc + ring) and native build deps.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential cmake perl pkg-config \
+        build-essential cmake perl pkg-config protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
