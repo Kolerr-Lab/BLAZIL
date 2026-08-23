@@ -1,6 +1,15 @@
 use anyhow::{Context, Result};
 use std::env;
 
+/// Parse a numeric env var, falling back to `default` on missing/empty/invalid input.
+/// Deliberately non-fatal: a bad tuning value must never crash boot (which fails healthcheck).
+fn env_parse<T: std::str::FromStr>(key: &str, default: T) -> T {
+    env::var(key)
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(default)
+}
+
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub struct Config {
@@ -57,22 +66,10 @@ impl Config {
             orch_service_token: env::var("ORCH_SERVICE_TOKEN")
                 .context("ORCH_SERVICE_TOKEN is required")?,
             twilio_stream_auth: env::var("TWILIO_STREAM_AUTH").ok(),
-            vad_aggressiveness: env::var("VAD_AGGRESSIVENESS")
-                .unwrap_or_else(|_| "2".into())
-                .parse()
-                .context("Invalid VAD_AGGRESSIVENESS")?,
-            barge_in_ms: env::var("BARGE_IN_MS")
-                .unwrap_or_else(|_| "200".into())
-                .parse()
-                .context("Invalid BARGE_IN_MS")?,
-            silence_end_ms: env::var("SILENCE_END_MS")
-                .unwrap_or_else(|_| "600".into())
-                .parse()
-                .context("Invalid SILENCE_END_MS")?,
-            tts_early_feed_words: env::var("TTS_EARLY_FEED_WORDS")
-                .unwrap_or_else(|_| "0".into())
-                .parse()
-                .context("Invalid TTS_EARLY_FEED_WORDS")?,
+            vad_aggressiveness: env_parse("VAD_AGGRESSIVENESS", 2u8),
+            barge_in_ms: env_parse("BARGE_IN_MS", 200u64),
+            silence_end_ms: env_parse("SILENCE_END_MS", 600u64),
+            tts_early_feed_words: env_parse("TTS_EARLY_FEED_WORDS", 0usize),
             greeting_prompt: env::var("MEDIA_GREETING_PROMPT").unwrap_or_else(|_| {
                 "The call has just connected. Greet the caller warmly in one short sentence \
                  and ask how you can help."
