@@ -21,6 +21,10 @@ pub struct Config {
     pub vad_aggressiveness: u8,
     pub barge_in_ms: u64,
     pub silence_end_ms: u64,
+    /// TTS early-feed: flush the FIRST spoken chunk after this many words even without a sentence
+    /// terminator, to cut time-to-first-audio. Later chunks stay sentence-based (prosody). 0 = off
+    /// (feed whole sentences only) — the safe default; raise (e.g. 4) to A/B snappier starts.
+    pub tts_early_feed_words: usize,
     /// User-turn text that opens the call so the agent greets first, in its own persona.
     /// Empty disables the auto-greeting (agent waits for the caller to speak).
     pub greeting_prompt: String,
@@ -62,9 +66,13 @@ impl Config {
                 .parse()
                 .context("Invalid BARGE_IN_MS")?,
             silence_end_ms: env::var("SILENCE_END_MS")
-                .unwrap_or_else(|_| "700".into())
+                .unwrap_or_else(|_| "600".into())
                 .parse()
                 .context("Invalid SILENCE_END_MS")?,
+            tts_early_feed_words: env::var("TTS_EARLY_FEED_WORDS")
+                .unwrap_or_else(|_| "0".into())
+                .parse()
+                .context("Invalid TTS_EARLY_FEED_WORDS")?,
             greeting_prompt: env::var("MEDIA_GREETING_PROMPT").unwrap_or_else(|_| {
                 "The call has just connected. Greet the caller warmly in one short sentence \
                  and ask how you can help."

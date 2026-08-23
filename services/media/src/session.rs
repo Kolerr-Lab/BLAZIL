@@ -264,13 +264,39 @@ async fn do_turn(shared: Shared, text: String) {
 /// Drain complete sentences (or an over-long buffer) from `buf` into the TTS text sink so the
 /// agent starts speaking sentence-1 while the LLM is still generating sentence-2. Returns false
 /// if the sink is closed (barge-in / TTS gone).
-async fn flush_sentences(buf: &mut String, tx: &mpsc::Sender<String>) -> bool {
+async fn flush_sentences(
+    buf: &mut String,
+    tx: &mpsc::Sender<String>,
+    early_words: usize,
+    first_done: &mut bool,
+) -> bool {
     loop {
         let mut cut: Option<usize> = None;
         for (i, c) in buf.char_indices() {
             if matches!(c, '.' | '!' | '?' | '\n' | '…' | ';') {
                 cut = Some(i + c.len_utf8());
                 break;
+            }
+        }
+        // Early-feed (A/B via TTS_EARLY_FEED_WORDS): for the FIRST spoken chunk only, cut after
+        // `early_words` words even without a terminator, so audio starts sooner. Later chunks stay
+        // sentence-based to preserve prosody.
+        if cut.is_none() && !*first_done && early_words > 0 {
+            let mut words = 0usize;
+            let mut in_word = false;
+            for (i, c) in buf.char_indices() {
+                if c.is_whitespace() {
+                    if in_word {
+                        words += 1;
+                        in_word = false;
+                        if words >= early_words {
+                            cut = Some(i);
+                            break;
+                        }
+                    }
+                } else {
+                    in_word = true;
+                }
             }
         }
         let piece = if let Some(end) = cut {
@@ -282,8 +308,11 @@ async fn flush_sentences(buf: &mut String, tx: &mpsc::Sender<String>) -> bool {
             return true;
         };
         let trimmed = piece.trim().to_string();
-        if !trimmed.is_empty() && tx.send(trimmed).await.is_err() {
-            return false;
+        if !trimmed.is_empty() {
+            *first_done = true;
+            if tx.send(trimmed).await.is_err() {
+                return false;
+            }
         }
     }
 }
@@ -393,19 +422,21 @@ async fn run_response(shared: Shared, text: String) {
     // Feeder: gRPC token deltas → sentence buffer → text_tx. Dropping text_tx at the end signals
     // end-of-speech to TTS. If run_response is aborted (barge-in), audio_rx drops → TTS ends →
     // text_rx drops → this feeder's send fails → it stops; rx drops → the gRPC pump stops.
+    let early_words = shared.config.tts_early_feed_words;
     let feeder = tokio::spawn(async move {
         let mut buf = String::new();
+        let mut first_done = false;
         if let Some(TurnEvent::Delta(d)) = pending {
             buf.push_str(&d);
         }
-        if !flush_sentences(&mut buf, &text_tx).await {
+        if !flush_sentences(&mut buf, &text_tx, early_words, &mut first_done).await {
             return;
         }
         while let Some(ev) = rx.recv().await {
             match ev {
                 TurnEvent::Delta(d) => {
                     buf.push_str(&d);
-                    if !flush_sentences(&mut buf, &text_tx).await {
+                    if !flush_sentences(&mut buf, &text_tx, early_words, &mut first_done).await {
                         return;
                     }
                 }

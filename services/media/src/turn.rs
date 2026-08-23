@@ -5,8 +5,10 @@
 //! so the session can feed tokens into TTS sentence-by-sentence (low time-to-first-word).
 
 use crate::error::MediaError;
-use tokio::sync::mpsc;
+use std::time::Duration;
+use tokio::sync::{mpsc, OnceCell};
 use tonic::metadata::MetadataValue;
+use tonic::transport::{Channel, Endpoint};
 use tonic::Request;
 
 pub mod pb {
@@ -14,6 +16,28 @@ pub mod pb {
 }
 use pb::orchestrator_client::OrchestratorClient;
 use pb::turn_chunk::Payload;
+
+/// One warm HTTP/2 channel reused across every turn — multiplexed and auto-reconnecting —
+/// instead of a fresh TCP+H2 handshake per turn. Keepalive pings hold the pool warm between
+/// calls so the first token of each turn skips connection setup. The gRPC URL is a process
+/// constant (config), so caching on first use is safe.
+static CHANNEL: OnceCell<Channel> = OnceCell::const_new();
+
+async fn shared_channel(url: &str) -> Result<Channel, MediaError> {
+    let channel = CHANNEL
+        .get_or_try_init(|| async {
+            let endpoint = Endpoint::from_shared(url.to_string())
+                .map_err(|e| MediaError::TurnError(format!("bad gRPC url: {e}")))?
+                .http2_keep_alive_interval(Duration::from_secs(30))
+                .keep_alive_timeout(Duration::from_secs(10))
+                .keep_alive_while_idle(true)
+                .tcp_keepalive(Some(Duration::from_secs(30)));
+            // connect_lazy: build the channel now, connect on first RPC, reconnect on drop.
+            Ok::<Channel, MediaError>(endpoint.connect_lazy())
+        })
+        .await?;
+    Ok(channel.clone())
+}
 
 #[derive(Debug, Clone)]
 pub struct TurnRequest {
@@ -50,9 +74,8 @@ impl TurnClient {
         &self,
         req: TurnRequest,
     ) -> Result<mpsc::Receiver<TurnEvent>, MediaError> {
-        let mut client = OrchestratorClient::connect(self.grpc_url.clone())
-            .await
-            .map_err(|e| MediaError::TurnError(format!("gRPC connect failed: {e}")))?;
+        let channel = shared_channel(&self.grpc_url).await?;
+        let mut client = OrchestratorClient::new(channel);
 
         let mut request = Request::new(pb::TurnRequest {
             tenant_id: req.tenant_id,
