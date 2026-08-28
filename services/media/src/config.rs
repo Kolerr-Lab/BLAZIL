@@ -67,8 +67,11 @@ impl Config {
                 .context("ORCH_SERVICE_TOKEN is required")?,
             twilio_stream_auth: env::var("TWILIO_STREAM_AUTH").ok(),
             vad_aggressiveness: env_parse("VAD_AGGRESSIVENESS", 2u8),
-            barge_in_ms: env_parse("BARGE_IN_MS", 200u64),
-            silence_end_ms: env_parse("SILENCE_END_MS", 600u64),
+            // 120ms: with the adaptive-noise-floor barge gate, only clearly-voiced speech counts,
+            // so a shorter window is safe and cuts perceived interrupt latency vs. the old 200ms.
+            barge_in_ms: env_parse("BARGE_IN_MS", 120u64),
+            // 480ms end-of-utterance: snappier turn-taking; raise via env if it clips slow talkers.
+            silence_end_ms: env_parse("SILENCE_END_MS", 480u64),
             tts_early_feed_words: env_parse("TTS_EARLY_FEED_WORDS", 0usize),
             greeting_prompt: env::var("MEDIA_GREETING_PROMPT").unwrap_or_else(|_| {
                 "The call has just connected. Greet the caller warmly in one short sentence \
