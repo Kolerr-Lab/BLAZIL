@@ -40,6 +40,9 @@ struct Shared {
     stream_sid: String,
     tenant_id: String,
     agent_id: String,
+    /// Backend Call id (from the TwiML <Parameter>). Forwarded to every turn so the orchestrator
+    /// persists transcripts and keeps per-call memory. Empty when absent.
+    call_id: String,
     /// True while the assistant is producing/playing audio (gates barge-in).
     speaking: Arc<AtomicBool>,
     /// Set true to stop the current playback loop mid-stream (barge-in / supersede).
@@ -111,6 +114,7 @@ impl Session {
                 let params = start.custom_parameters.unwrap_or_default();
                 let tenant_id = params.get("tenant_id").cloned().unwrap_or_default();
                 let agent_id = params.get("agent_id").cloned().unwrap_or_default();
+                let call_id = params.get("call_id").cloned().unwrap_or_default();
                 // Per-agent language from the TwiML <Parameter>; empty → auto-detect (falls
                 // back to the media plane's global STT_LANGUAGE_CODE / language detection).
                 let language = params.get("language").filter(|s| !s.is_empty()).cloned();
@@ -129,6 +133,7 @@ impl Session {
                     stream_sid,
                     tenant_id,
                     agent_id,
+                    call_id,
                     speaking: Arc::new(AtomicBool::new(false)),
                     play_cancel: Arc::new(AtomicBool::new(false)),
                     tts_task: Arc::new(Mutex::new(None)),
@@ -362,6 +367,7 @@ async fn run_response(shared: Shared, text: String) {
     let req = TurnRequest {
         tenant_id: shared.tenant_id.clone(),
         agent_id: shared.agent_id.clone(),
+        call_id: shared.call_id.clone(),
         text,
         trace_id: uuid::Uuid::new_v4().to_string(),
     };

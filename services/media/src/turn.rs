@@ -43,6 +43,9 @@ async fn shared_channel(url: &str) -> Result<Channel, MediaError> {
 pub struct TurnRequest {
     pub tenant_id: String,
     pub agent_id: String,
+    /// Backend Call id — forwarded so the orchestrator persists per-turn transcripts and keeps
+    /// per-call memory. Empty when absent (orchestrator then skips transcript writes).
+    pub call_id: String,
     pub text: String,
     pub trace_id: String,
 }
@@ -82,7 +85,7 @@ impl TurnClient {
             agent_id: req.agent_id,
             text: req.text,
             trace_id: req.trace_id,
-            call_id: String::new(),
+            call_id: req.call_id,
         });
         let meta: MetadataValue<_> = format!("Bearer {}", self.service_token)
             .parse()
