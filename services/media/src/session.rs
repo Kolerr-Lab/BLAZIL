@@ -28,7 +28,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use tokio::{sync::mpsc, sync::Mutex, task::JoinHandle};
+use tokio::{sync::mpsc, sync::oneshot, sync::Mutex, task::JoinHandle};
 
 type WsSink = SplitSink<WebSocket, Message>;
 
@@ -423,31 +423,46 @@ async fn run_response(shared: Shared, text: String) {
     // end-of-speech to TTS. If run_response is aborted (barge-in), audio_rx drops → TTS ends →
     // text_rx drops → this feeder's send fails → it stops; rx drops → the gRPC pump stops.
     let early_words = shared.config.tts_early_feed_words;
+    // The feeder also accumulates the COMPLETE answer and hands it back on `answer_tx`, so if the
+    // per-agent voice produces no audio (e.g. a stale/deleted voice_id → voice_id_does_not_exist),
+    // run_response can re-speak the full answer with the fallback voice instead of going silent.
+    let (answer_tx, answer_rx) = oneshot::channel::<String>();
     let feeder = tokio::spawn(async move {
         let mut buf = String::new();
+        let mut full = String::new();
         let mut first_done = false;
+        // Keep draining the gRPC stream to complete `full` even after the TTS sink closes.
+        let mut tts_open = true;
         if let Some(TurnEvent::Delta(d)) = pending {
+            full.push_str(&d);
             buf.push_str(&d);
         }
-        if !flush_sentences(&mut buf, &text_tx, early_words, &mut first_done).await {
-            return;
+        if tts_open && !flush_sentences(&mut buf, &text_tx, early_words, &mut first_done).await {
+            tts_open = false;
         }
         while let Some(ev) = rx.recv().await {
             match ev {
                 TurnEvent::Delta(d) => {
-                    buf.push_str(&d);
-                    if !flush_sentences(&mut buf, &text_tx, early_words, &mut first_done).await {
-                        return;
+                    full.push_str(&d);
+                    if tts_open {
+                        buf.push_str(&d);
+                        if !flush_sentences(&mut buf, &text_tx, early_words, &mut first_done).await
+                        {
+                            tts_open = false;
+                        }
                     }
                 }
                 TurnEvent::Done { .. } | TurnEvent::Error(_) => break,
                 TurnEvent::VoiceId(_) => {}
             }
         }
-        let rest = buf.trim().to_string();
-        if !rest.is_empty() {
-            let _ = text_tx.send(rest).await;
+        if tts_open {
+            let rest = buf.trim().to_string();
+            if !rest.is_empty() {
+                let _ = text_tx.send(rest).await;
+            }
         }
+        let _ = answer_tx.send(full.trim().to_string());
     });
 
     // Relay audio; arm barge-in only once real audio flows.
@@ -475,6 +490,23 @@ async fn run_response(shared: Shared, text: String) {
         chunks,
         shared.play_cancel.load(Ordering::Relaxed)
     );
+
+    // Silence guard: the per-agent voice produced NO audio and the caller didn't barge in — the
+    // most common cause is a stale/deleted persona voice_id (ElevenLabs: voice_id_does_not_exist).
+    // Re-speak the full answer with the known-good default voice so a bad voice never leaves the
+    // call in dead air. Skipped when the primary voice WAS already the default (retry is pointless).
+    if chunks == 0 && !shared.play_cancel.load(Ordering::Relaxed) && voice_id != default_voice {
+        if let Ok(answer) = answer_rx.await {
+            let answer = answer.trim().to_string();
+            if !answer.is_empty() {
+                tracing::warn!(
+                    "Primary TTS voice '{}' produced no audio; retrying with default voice",
+                    voice_id
+                );
+                speak_once(&shared, &default_voice, &answer).await;
+            }
+        }
+    }
 
     if !shared.play_cancel.load(Ordering::Relaxed) {
         let mark = OutboundMessage::mark(&shared.stream_sid, "tts_end");
