@@ -37,6 +37,10 @@ pub struct Config {
     /// User-turn text that opens the call so the agent greets first, in its own persona.
     /// Empty disables the auto-greeting (agent waits for the caller to speak).
     pub greeting_prompt: String,
+    /// Short phrase spoken IMMEDIATELY at the start of a caller turn (in the agent's own voice) to
+    /// mask backend think-time — e.g. "One moment.". Empty = disabled (no filler). Keep it short
+    /// (~0.5-0.8s of speech) so a fast turn isn't delayed waiting for it to finish.
+    pub thinking_filler: String,
 }
 
 impl Config {
@@ -70,14 +74,17 @@ impl Config {
             // 120ms: with the adaptive-noise-floor barge gate, only clearly-voiced speech counts,
             // so a shorter window is safe and cuts perceived interrupt latency vs. the old 200ms.
             barge_in_ms: env_parse("BARGE_IN_MS", 120u64),
-            // 480ms end-of-utterance: snappier turn-taking; raise via env if it clips slow talkers.
-            silence_end_ms: env_parse("SILENCE_END_MS", 480u64),
+            // 300ms end-of-utterance: cuts ~180ms of dead wait per turn vs the old 480ms. English
+            // (primary) pauses less mid-sentence, so this is safe; RAISE via SILENCE_END_MS if it
+            // clips slow talkers.
+            silence_end_ms: env_parse("SILENCE_END_MS", 300u64),
             tts_early_feed_words: env_parse("TTS_EARLY_FEED_WORDS", 0usize),
             greeting_prompt: env::var("MEDIA_GREETING_PROMPT").unwrap_or_else(|_| {
                 "The call has just connected. Greet the caller warmly in one short sentence \
                  and ask how you can help."
                     .into()
             }),
+            thinking_filler: env::var("MEDIA_THINKING_FILLER").unwrap_or_default(),
         })
     }
 }

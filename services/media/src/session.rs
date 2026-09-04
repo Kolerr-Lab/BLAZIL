@@ -146,8 +146,9 @@ impl Session {
                 if !self.config.greeting_prompt.trim().is_empty() {
                     let greet = shared.clone();
                     let prompt = self.config.greeting_prompt.clone();
-                    self.tasks
-                        .push(tokio::spawn(async move { do_turn(greet, prompt).await }));
+                    self.tasks.push(tokio::spawn(
+                        async move { do_turn(greet, prompt, true).await },
+                    ));
                 }
             }
             InboundMessage::Media { media, .. } => {
@@ -228,7 +229,7 @@ impl Session {
         self.tasks.push(tokio::spawn(async move {
             while let Some(transcript) = transcript_rx.recv().await {
                 tracing::info!("Committed transcript: {}", transcript);
-                do_turn(shared.clone(), transcript).await;
+                do_turn(shared.clone(), transcript, false).await;
             }
         }));
     }
@@ -252,7 +253,8 @@ async fn stop_playback(shared: &Shared, send_clear: bool) {
 }
 
 /// Run one turn: supersede any in-flight response, call the backend, then speak the answer.
-async fn do_turn(shared: Shared, text: String) {
+/// `is_greeting` suppresses the thinking-filler for the opening greeting turn.
+async fn do_turn(shared: Shared, text: String, is_greeting: bool) {
     // A new user utterance (or greeting) supersedes whatever we were saying.
     stop_playback(&shared, true).await;
     shared.play_cancel.store(false, Ordering::Relaxed);
@@ -262,7 +264,7 @@ async fn do_turn(shared: Shared, text: String) {
     // — would abort a reply before it ever starts, leaving the agent mute after the greeting.
 
     let worker = shared.clone();
-    let handle = tokio::spawn(async move { run_response(worker, text).await });
+    let handle = tokio::spawn(async move { run_response(worker, text, is_greeting).await });
     *shared.tts_task.lock().await = Some(handle);
 }
 
@@ -359,7 +361,7 @@ async fn speak_once(shared: &Shared, voice_id: &str, line: &str) {
 
 /// Streaming turn: open the backend gRPC stream, feed answer tokens into TTS sentence-by-
 /// sentence, and relay audio to Twilio. Honors `play_cancel` for prompt barge-in.
-async fn run_response(shared: Shared, text: String) {
+async fn run_response(shared: Shared, text: String, is_greeting: bool) {
     let turn_client = TurnClient::new(
         shared.config.orch_grpc_url.clone(),
         shared.config.orch_service_token.clone(),
@@ -424,6 +426,17 @@ async fn run_response(shared: Shared, text: String) {
             tracing::error!("TTS error: {:?}", e);
         }
     });
+
+    // Instant-ack (#5): on a real caller turn, speak a short filler in the agent's own voice
+    // IMMEDIATELY so the caller hears something while the backend is still thinking. Skipped on the
+    // greeting. Sent straight into the TTS sink (not through the feeder), so it never lands in the
+    // accumulated answer/transcript. Empty MEDIA_THINKING_FILLER = disabled.
+    if !is_greeting {
+        let filler = shared.config.thinking_filler.trim().to_string();
+        if !filler.is_empty() {
+            let _ = text_tx.send(filler).await;
+        }
+    }
 
     // Feeder: gRPC token deltas → sentence buffer → text_tx. Dropping text_tx at the end signals
     // end-of-speech to TTS. If run_response is aborted (barge-in), audio_rx drops → TTS ends →
