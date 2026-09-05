@@ -268,6 +268,28 @@ async fn do_turn(shared: Shared, text: String, is_greeting: bool) {
     *shared.tts_task.lock().await = Some(handle);
 }
 
+/// Calm LLM text for TTS: ElevenLabs reads `!` and repeated punctuation louder, which came across
+/// as the agent suddenly yelling. Convert `!`→`.`, drop stray markdown, and collapse runs of
+/// sentence punctuation. (ALL-CAPS is handled by the reply prompt to avoid mangling acronyms.)
+fn sanitize_for_tts(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut prev_punct = false;
+    for ch in s.chars() {
+        let c = match ch {
+            '!' => '.',
+            '*' | '#' | '_' | '`' => ' ',
+            other => other,
+        };
+        let is_punct = matches!(c, '.' | '?' | ',' | ';' | ':' | '…');
+        if is_punct && prev_punct {
+            continue; // collapse "?!", "...", ".." → a single mark
+        }
+        prev_punct = is_punct;
+        out.push(c);
+    }
+    out.trim().to_string()
+}
+
 /// Drain complete sentences (or an over-long buffer) from `buf` into the TTS text sink so the
 /// agent starts speaking sentence-1 while the LLM is still generating sentence-2. Returns false
 /// if the sink is closed (barge-in / TTS gone).
@@ -314,7 +336,7 @@ async fn flush_sentences(
         } else {
             return true;
         };
-        let trimmed = piece.trim().to_string();
+        let trimmed = sanitize_for_tts(piece.trim());
         if !trimmed.is_empty() {
             *first_done = true;
             if tx.send(trimmed).await.is_err() {

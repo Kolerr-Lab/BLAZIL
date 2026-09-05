@@ -78,9 +78,11 @@ impl Tts for ElevenLabsTts {
         let (mut write, mut read) = ws_stream.split();
 
         // BOS: initialize the stream with voice settings.
+        // stability 0.7 (was 0.5): higher = steadier prosody, fewer loud/soft swings. Lower values
+        // let the voice get emphatic on `!`/CAPS, which callers heard as sudden yelling.
         let bos = serde_json::json!({
             "text": " ",
-            "voice_settings": { "stability": 0.5, "similarity_boost": 0.8 }
+            "voice_settings": { "stability": 0.7, "similarity_boost": 0.8 }
         });
         write
             .send(Message::Text(bos.to_string()))
