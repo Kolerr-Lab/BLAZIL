@@ -27,17 +27,23 @@ pub struct SttParams {
     pub model_id: String,
     /// ISO-639 code to bias recognition; `None` = auto-detect.
     pub language_code: Option<String>,
-    /// Silence (seconds) that VAD treats as end-of-utterance before committing.
+    /// Silence (seconds) that VAD treats as end-of-utterance before committing (VAD strategy only).
     pub vad_silence_secs: f32,
+    /// "vad" = server segments on silence (default). "manual" = the caller decides when to commit
+    /// (predictive endpointing sends an explicit commit signal). See Stt::stream `commit_rx`.
+    pub commit_strategy: String,
 }
 
 #[async_trait]
 pub trait Stt: Send + Sync {
     /// Consume μ-law 8 kHz frames from `ulaw_rx`, push committed transcripts to `transcript_tx`.
+    /// A `()` on `commit_rx` sends an explicit commit to the server (manual-commit / predictive
+    /// endpointing). In VAD mode nothing is sent on `commit_rx` and the server segments on silence.
     async fn stream(
         &self,
         ulaw_rx: mpsc::Receiver<Vec<u8>>,
         transcript_tx: mpsc::Sender<String>,
+        commit_rx: mpsc::Receiver<()>,
     ) -> Result<(), MediaError>;
 }
 
@@ -64,10 +70,16 @@ impl ElevenLabsStt {
     fn ws_url(&self) -> String {
         let mut url = format!(
             "wss://api.elevenlabs.io/v1/speech-to-text/realtime\
-             ?model_id={}&audio_format=ulaw_8000&commit_strategy=vad\
-             &vad_silence_threshold_secs={}",
-            self.params.model_id, self.params.vad_silence_secs
+             ?model_id={}&audio_format=ulaw_8000&commit_strategy={}",
+            self.params.model_id, self.params.commit_strategy
         );
+        // The silence threshold only applies to server-side VAD segmentation.
+        if self.params.commit_strategy == "vad" {
+            url.push_str(&format!(
+                "&vad_silence_threshold_secs={}",
+                self.params.vad_silence_secs
+            ));
+        }
         if let Some(lang) = &self.params.language_code {
             if !lang.is_empty() {
                 url.push_str(&format!("&language_code={lang}"));
@@ -83,6 +95,7 @@ impl Stt for ElevenLabsStt {
         &self,
         mut ulaw_rx: mpsc::Receiver<Vec<u8>>,
         transcript_tx: mpsc::Sender<String>,
+        mut commit_rx: mpsc::Receiver<()>,
     ) -> Result<(), MediaError> {
         let url = self.ws_url();
         let mut request = url
@@ -100,19 +113,39 @@ impl Stt for ElevenLabsStt {
             .map_err(|e| MediaError::SttError(format!("STT connect failed: {e}")))?;
         let (mut write, mut read) = ws_stream.split();
 
-        // Writer task: forward μ-law audio chunks as base64 input_audio_chunk messages.
+        // Writer task: forward μ-law audio chunks, and on a commit signal send an explicit commit
+        // (manual-commit / predictive endpointing). Audio-channel close ends the task; the commit
+        // branch self-disables if its channel closes (no busy-loop).
         let audio_sender = tokio::spawn(async move {
-            while let Some(ulaw) = ulaw_rx.recv().await {
-                let payload = serde_json::json!({
-                    "message_type": "input_audio_chunk",
-                    "audio_base_64": BASE64.encode(&ulaw),
-                });
-                if write
-                    .send(Message::Text(payload.to_string()))
-                    .await
-                    .is_err()
-                {
-                    break;
+            let mut commit_open = true;
+            loop {
+                tokio::select! {
+                    maybe_audio = ulaw_rx.recv() => {
+                        let Some(ulaw) = maybe_audio else { break };
+                        let payload = serde_json::json!({
+                            "message_type": "input_audio_chunk",
+                            "audio_base_64": BASE64.encode(&ulaw),
+                        });
+                        if write.send(Message::Text(payload.to_string())).await.is_err() {
+                            break;
+                        }
+                    }
+                    maybe_commit = commit_rx.recv(), if commit_open => {
+                        match maybe_commit {
+                            Some(()) => {
+                                // Scribe Realtime STT manual commit format: an empty audio chunk with commit: true
+                                let payload = serde_json::json!({
+                                    "message_type": "input_audio_chunk",
+                                    "audio_base_64": "",
+                                    "commit": true
+                                });
+                                if write.send(Message::Text(payload.to_string())).await.is_err() {
+                                    break;
+                                }
+                            }
+                            None => commit_open = false,
+                        }
+                    }
                 }
             }
         });

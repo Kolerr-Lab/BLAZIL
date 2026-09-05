@@ -41,6 +41,19 @@ pub struct Config {
     /// mask backend think-time — e.g. "One moment.". Empty = disabled (no filler). Keep it short
     /// (~0.5-0.8s of speech) so a fast turn isn't delayed waiting for it to finish.
     pub thinking_filler: String,
+    /// Predictive endpointing (Bước 3). When true, STT runs in MANUAL-commit mode and a local
+    /// Smart Turn v2 model decides end-of-turn — committing early instead of waiting out silence.
+    /// Default false → STT stays on server-side VAD (current behavior; zero risk).
+    pub predictive_endpoint: bool,
+    /// Path to the Smart Turn v2 ONNX model (wav2vec2, 16 kHz mono input, single-prob output).
+    pub smart_turn_model_path: String,
+    /// Utterance is treated as complete when the model probability ≥ this (0..1).
+    pub smart_turn_threshold: f32,
+    /// Silence (ms) after speech that triggers ONE Smart Turn check.
+    pub endpoint_short_silence_ms: u64,
+    /// Hard fallback: commit anyway after this much silence even if the model never says "done"
+    /// (so a hesitant caller never hangs the turn).
+    pub endpoint_max_silence_ms: u64,
 }
 
 impl Config {
@@ -85,6 +98,14 @@ impl Config {
                     .into()
             }),
             thinking_filler: env::var("MEDIA_THINKING_FILLER").unwrap_or_default(),
+            predictive_endpoint: env::var("PREDICTIVE_ENDPOINT")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false),
+            smart_turn_model_path: env::var("SMART_TURN_MODEL_PATH")
+                .unwrap_or_else(|_| "/opt/models/smart-turn-v2/model.onnx".into()),
+            smart_turn_threshold: env_parse("SMART_TURN_THRESHOLD", 0.5f32),
+            endpoint_short_silence_ms: env_parse("ENDPOINT_SHORT_SILENCE_MS", 250u64),
+            endpoint_max_silence_ms: env_parse("ENDPOINT_MAX_SILENCE_MS", 1500u64),
         })
     }
 }

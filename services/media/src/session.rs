@@ -18,8 +18,9 @@ use crate::{
     stt::{ElevenLabsStt, Stt, SttParams},
     tts::{ElevenLabsTts, Tts},
     turn::{TurnClient, TurnEvent, TurnRequest},
+    turn_detector::SmartTurn,
     twilio::{InboundMessage, OutboundMessage},
-    vad::VadEngine,
+    vad::{VadEngine, VadState},
 };
 use axum::extract::ws::{Message, WebSocket};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
@@ -56,6 +57,9 @@ pub struct Session {
     vad: VadEngine,
     audio_buffer: Vec<u8>,
     stt_tx: Option<mpsc::Sender<Vec<u8>>>,
+    /// Predictive endpointing (Bước 3): per-frame (pcm, is_speech, silence_ms) to the endpoint
+    /// loop, which runs Smart Turn and commits early. `None` when predictive endpointing is off.
+    endpoint_tx: Option<mpsc::Sender<(Vec<i16>, bool, u64)>>,
     shared: Option<Shared>,
     tasks: Vec<JoinHandle<()>>,
 }
@@ -68,6 +72,7 @@ impl Session {
             vad,
             audio_buffer: Vec::with_capacity(codec::SAMPLES_PER_FRAME * 4),
             stt_tx: None,
+            endpoint_tx: None,
             shared: None,
             tasks: Vec::new(),
         }
@@ -140,7 +145,38 @@ impl Session {
                 };
                 self.shared = Some(shared.clone());
 
-                self.start_stt(shared.clone(), language);
+                // Predictive endpointing (Bước 3). Default off → server-side VAD (current behavior).
+                // On: load Smart Turn, switch STT to manual commit, spawn the endpoint loop that
+                // commits early when the model says the caller is done. If the model can't load,
+                // fall back to VAD (never break the call).
+                let (commit_tx, commit_rx) = mpsc::channel::<()>(8);
+                let mut commit_strategy = "vad".to_string();
+                if self.config.predictive_endpoint {
+                    match SmartTurn::load(
+                        &self.config.smart_turn_model_path,
+                        self.config.smart_turn_threshold,
+                    ) {
+                        Ok(st) => {
+                            commit_strategy = "manual".to_string();
+                            let (ep_tx, ep_rx) = mpsc::channel::<(Vec<i16>, bool, u64)>(256);
+                            self.endpoint_tx = Some(ep_tx);
+                            self.tasks.push(tokio::spawn(endpoint_loop(
+                                Arc::new(st),
+                                ep_rx,
+                                commit_tx.clone(),
+                                self.config.endpoint_short_silence_ms,
+                                self.config.endpoint_max_silence_ms,
+                            )));
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                "Smart Turn load failed, staying on VAD endpointing: {e}"
+                            );
+                        }
+                    }
+                }
+
+                self.start_stt(shared.clone(), language, commit_rx, commit_strategy);
 
                 // Agent greets first (in its own persona) unless disabled.
                 if !self.config.greeting_prompt.trim().is_empty() {
@@ -193,9 +229,9 @@ impl Session {
             return;
         };
 
-        // Local VAD is used ONLY to detect barge-in while the assistant is speaking.
+        // Local VAD: barge-in while the assistant is speaking, plus (Bước 3) end-of-turn feed.
         let pcm = codec::decode_frame(&frame);
-        let _ = self.vad.process_frame(&pcm);
+        let state = self.vad.process_frame(&pcm);
         if shared.speaking.load(Ordering::Relaxed)
             && self.vad.is_barge_in(self.config.barge_in_ms, true)
         {
@@ -203,9 +239,23 @@ impl Session {
             stop_playback(&shared, true).await;
             self.vad.reset_counters();
         }
+
+        // Predictive endpointing: hand the frame to the endpoint loop (it runs Smart Turn and
+        // commits early). Only present when predictive endpointing is on. `try_send` drops the
+        // frame if the loop is briefly busy running inference — harmless.
+        if let Some(ep) = &self.endpoint_tx {
+            let is_speech = state == VadState::Speech;
+            let _ = ep.try_send((pcm, is_speech, self.vad.consecutive_silence_ms()));
+        }
     }
 
-    fn start_stt(&mut self, shared: Shared, language: Option<String>) {
+    fn start_stt(
+        &mut self,
+        shared: Shared,
+        language: Option<String>,
+        commit_rx: mpsc::Receiver<()>,
+        commit_strategy: String,
+    ) {
         let (ulaw_tx, ulaw_rx) = mpsc::channel::<Vec<u8>>(256);
         let (transcript_tx, mut transcript_rx) = mpsc::channel::<String>(16);
         self.stt_tx = Some(ulaw_tx);
@@ -217,10 +267,11 @@ impl Session {
             model_id: self.config.elevenlabs_stt_model.clone(),
             language_code,
             vad_silence_secs: self.config.silence_end_ms as f32 / 1000.0,
+            commit_strategy,
         };
         self.tasks.push(tokio::spawn(async move {
             let stt = ElevenLabsStt::new(params);
-            if let Err(e) = stt.stream(ulaw_rx, transcript_tx).await {
+            if let Err(e) = stt.stream(ulaw_rx, transcript_tx, commit_rx).await {
                 tracing::error!("STT stream error: {:?}", e);
             }
         }));
@@ -248,6 +299,57 @@ async fn stop_playback(shared: &Shared, send_clear: bool) {
         if let Ok(json) = serde_json::to_string(&clear) {
             let mut tx = shared.ws_tx.lock().await;
             let _ = tx.send(Message::Text(json)).await;
+        }
+    }
+}
+
+/// Predictive endpointing loop (Bước 3): owns the current utterance's PCM, runs Smart Turn when the
+/// caller pauses, and signals STT to commit early. Being the sole owner of the buffer avoids any
+/// cross-task shared state. Inference runs on `spawn_blocking` so it never stalls audio.
+async fn endpoint_loop(
+    smart_turn: Arc<SmartTurn>,
+    mut rx: mpsc::Receiver<(Vec<i16>, bool, u64)>,
+    commit_tx: mpsc::Sender<()>,
+    short_ms: u64,
+    max_ms: u64,
+) {
+    const MAX_BUF: usize = 8_000 * 12; // ~12s of 8 kHz PCM; Smart Turn uses only the last 8s
+    let mut buf: Vec<i16> = Vec::new();
+    let mut in_utt = false;
+    let mut checked = false;
+    while let Some((pcm, is_speech, silence_ms)) = rx.recv().await {
+        if is_speech {
+            buf.extend_from_slice(&pcm);
+            if buf.len() > MAX_BUF {
+                let drop = buf.len() - MAX_BUF;
+                buf.drain(0..drop);
+            }
+            in_utt = true;
+            checked = false;
+        } else if in_utt {
+            if !checked && silence_ms >= short_ms {
+                // One Smart Turn check per pause. If "complete" → commit now; else keep listening
+                // (a mid-sentence pause) until the caller resumes or the max-silence fallback hits.
+                checked = true;
+                let st = Arc::clone(&smart_turn);
+                let snapshot = buf.clone();
+                let complete = tokio::task::spawn_blocking(move || st.is_complete(&snapshot))
+                    .await
+                    .unwrap_or(false);
+                if complete {
+                    tracing::info!("predictive endpoint: complete → commit");
+                    let _ = commit_tx.send(()).await;
+                    buf.clear();
+                    in_utt = false;
+                    checked = false;
+                }
+            } else if silence_ms >= max_ms {
+                tracing::info!("predictive endpoint: max-silence fallback → commit");
+                let _ = commit_tx.send(()).await;
+                buf.clear();
+                in_utt = false;
+                checked = false;
+            }
         }
     }
 }

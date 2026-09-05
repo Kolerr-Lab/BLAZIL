@@ -28,6 +28,10 @@ async-trait = "0.1"
 tonic = "0.12"
 prost = "0.13"
 
+# Predictive endpointing (Bước 3): Smart Turn v2 (wav2vec2) via ONNX Runtime, in-process on CPU.
+ort = "2.0.0-rc.13"
+ndarray = "0.16"
+
 # In-process reuse
 blazil-transport = { path = "../../core/transport" }
 

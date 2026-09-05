@@ -8,6 +8,7 @@ mod session;
 mod stt;
 mod tts;
 mod turn;
+mod turn_detector;
 mod twilio;
 mod vad;
 

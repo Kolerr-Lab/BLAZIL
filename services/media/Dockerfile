@@ -25,13 +25,21 @@ RUN cargo build -p blazil-media --release --locked \
 # ---- runtime ----------------------------------------------------------------
 FROM debian:bookworm-slim AS runtime
 
-# CA certs for outbound TLS to ElevenLabs + the backend.
+# CA certs for outbound TLS to ElevenLabs + the backend; curl to fetch the endpoint model.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates \
+        ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /blazil-media /usr/local/bin/blazil-media
+# Predictive endpointing (Bước 3): bake the Smart Turn v2 ONNX model so runtime never downloads.
+# NOTE (Copilot): verify the exact HuggingFace file path/name for the ONNX export before relying
+# on this — adjust the URL/filename if the repo layout differs.
+RUN mkdir -p /opt/models/smart-turn-v2 \
+    && curl -fsSL -o /opt/models/smart-turn-v2/model.onnx \
+       https://huggingface.co/pipecat-ai/smart-turn-v2/resolve/main/model.onnx
 
+COPY --from=builder /blazil-media /usr/local/bin/blazil-media
+# Ensure libonnxruntime.so downloaded by ort is available at runtime.
+COPY --from=builder /build/target/release/libonnxruntime.so* /usr/lib/
 # Railway injects $PORT; the binary reads it (falls back to 8080).
 ENV RUST_LOG=blazil_media=info,tower_http=info
 CMD ["/usr/local/bin/blazil-media"]
