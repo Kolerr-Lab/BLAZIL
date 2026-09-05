@@ -102,7 +102,7 @@ impl Config {
                 .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                 .unwrap_or(false),
             smart_turn_model_path: env::var("SMART_TURN_MODEL_PATH")
-                .unwrap_or_else(|_| "/opt/models/smart-turn-v2/model.onnx".into()),
+                .unwrap_or_else(|_| "/opt/models/smart-turn-v3/model.onnx".into()),
             smart_turn_threshold: env_parse("SMART_TURN_THRESHOLD", 0.5f32),
             endpoint_short_silence_ms: env_parse("ENDPOINT_SHORT_SILENCE_MS", 250u64),
             endpoint_max_silence_ms: env_parse("ENDPOINT_MAX_SILENCE_MS", 1500u64),

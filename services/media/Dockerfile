@@ -30,12 +30,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Predictive endpointing (Bước 3): bake the Smart Turn v2 ONNX model so runtime never downloads.
-# NOTE (Copilot): verify the exact HuggingFace file path/name for the ONNX export before relying
-# on this — adjust the URL/filename if the repo layout differs.
-RUN mkdir -p /opt/models/smart-turn-v2 \
-    && curl -fsSL -o /opt/models/smart-turn-v2/model.onnx \
-       https://huggingface.co/pipecat-ai/smart-turn-v2/resolve/main/model.onnx
+# Predictive endpointing (Bước 3): bake the Smart Turn v3 ONNX model so runtime never downloads.
+# v2 ships no ONNX (safetensors only); v3 is the official ONNX-native release (Whisper-tiny encoder,
+# ~8MB int8, CPU ~12ms). Uses the CPU-optimized build.
+RUN mkdir -p /opt/models/smart-turn-v3 \
+    && curl -fsSL -o /opt/models/smart-turn-v3/model.onnx \
+       https://huggingface.co/pipecat-ai/smart-turn-v3/resolve/main/smart-turn-v3.2-cpu.onnx
 
 COPY --from=builder /blazil-media /usr/local/bin/blazil-media
 # Ensure libonnxruntime.so downloaded by ort is available at runtime.

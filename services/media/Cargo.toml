@@ -28,9 +28,11 @@ async-trait = "0.1"
 tonic = "0.12"
 prost = "0.13"
 
-# Predictive endpointing (Bước 3): Smart Turn v2 (wav2vec2) via ONNX Runtime, in-process on CPU.
+# Predictive endpointing (Bước 3): Smart Turn v3 (Whisper-tiny) via ONNX Runtime, in-process on CPU.
+# rustfft powers the Whisper log-mel front-end the model expects.
 ort = "2.0.0-rc.13"
 ndarray = "0.16"
+rustfft = "6"
 
 # In-process reuse
 blazil-transport = { path = "../../core/transport" }

@@ -673,6 +673,7 @@ dependencies = [
  "prost 0.13.5",
  "protoc-bin-vendored",
  "reqwest",
+ "rustfft",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
