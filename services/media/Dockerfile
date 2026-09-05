@@ -7,7 +7,7 @@
 #   docker build -f services/media/Dockerfile -t blazil-media .   # run from workspace root
 
 # ---- builder ----------------------------------------------------------------
-FROM rust:1.88-slim-bookworm AS builder
+FROM rust:1.88-slim-trixie AS builder
 
 # TLS stack (rustls/aws-lc + ring) and native build deps.
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -23,7 +23,7 @@ RUN cargo build -p blazil-media --release --locked \
     && cp target/release/blazil-media /blazil-media
 
 # ---- runtime ----------------------------------------------------------------
-FROM debian:bookworm-slim AS runtime
+FROM debian:trixie-slim AS runtime
 
 # CA certs for outbound TLS to ElevenLabs + the backend; curl to fetch the endpoint model.
 RUN apt-get update && apt-get install -y --no-install-recommends \
