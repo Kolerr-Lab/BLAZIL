@@ -2,10 +2,12 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod codec;
 mod config;
+mod deepgram;
 mod error;
 mod server;
 mod session;
 mod stt;
+mod stt_failover;
 mod tts;
 mod turn;
 mod turn_detector;

@@ -54,6 +54,24 @@ pub struct Config {
     /// Hard fallback: commit anyway after this much silence even if the model never says "done"
     /// (so a hesitant caller never hangs the turn).
     pub endpoint_max_silence_ms: u64,
+    /// Path to a pre-recorded G.711 μ-law 8 kHz (raw, headerless) clip played to the caller when
+    /// ElevenLabs returns a quota error (STT or TTS) — then the call is ended gracefully instead of
+    /// leaving dead air. When the file is missing/empty the call is simply hung up (no clip).
+    /// Convert any audio with:  ffmpeg -i in.mp3 -ar 8000 -ac 1 -f mulaw quota.ulaw
+    pub quota_fallback_audio_path: String,
+
+    // ── STT provider + failover (C1) ──────────────────────────────────────────────────────────
+    /// Primary STT vendor: "elevenlabs" (default) or "deepgram".
+    pub stt_provider: String,
+    /// Fallback STT vendor used when the primary errors mid-call (default "deepgram"). Ignored when
+    /// `stt_failover` is off or it equals the primary.
+    pub stt_fallback_provider: String,
+    /// Enable transparent mid-call failover to the fallback provider. Default on.
+    pub stt_failover: bool,
+    /// Deepgram API key (empty = Deepgram unavailable, so it is skipped in the provider order).
+    pub deepgram_api_key: String,
+    /// Deepgram model id. Default "nova-3".
+    pub deepgram_stt_model: String,
 }
 
 impl Config {
@@ -106,6 +124,18 @@ impl Config {
             smart_turn_threshold: env_parse("SMART_TURN_THRESHOLD", 0.5f32),
             endpoint_short_silence_ms: env_parse("ENDPOINT_SHORT_SILENCE_MS", 250u64),
             endpoint_max_silence_ms: env_parse("ENDPOINT_MAX_SILENCE_MS", 1500u64),
+            quota_fallback_audio_path: env::var("QUOTA_FALLBACK_AUDIO_PATH")
+                .unwrap_or_else(|_| "/opt/assets/quota.ulaw".into()),
+
+            // ── STT provider + failover (C1) ──────────────────────────────────────────────────
+            stt_provider: env::var("STT_PROVIDER").unwrap_or_else(|_| "elevenlabs".into()),
+            stt_fallback_provider: env::var("STT_FALLBACK_PROVIDER")
+                .unwrap_or_else(|_| "deepgram".into()),
+            stt_failover: env::var("STT_FAILOVER")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(true),
+            deepgram_api_key: env::var("DEEPGRAM_API_KEY").unwrap_or_default(),
+            deepgram_stt_model: env::var("DEEPGRAM_STT_MODEL").unwrap_or_else(|_| "nova-3".into()),
         })
     }
 }

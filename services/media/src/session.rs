@@ -15,7 +15,8 @@
 use crate::{
     codec,
     config::Config,
-    stt::{ElevenLabsStt, Stt, SttParams},
+    error::MediaError,
+    stt::SttParams,
     tts::{ElevenLabsTts, Tts},
     turn::{TurnClient, TurnEvent, TurnRequest},
     turn_detector::SmartTurn,
@@ -50,6 +51,10 @@ struct Shared {
     play_cancel: Arc<AtomicBool>,
     /// Handle to the in-flight TTS+playback task so it can be aborted.
     tts_task: Arc<Mutex<Option<JoinHandle<()>>>>,
+    /// Set once when the call has been ended on our side (e.g. ElevenLabs quota outage). Makes the
+    /// quota fallback idempotent — STT and TTS can both trip it, but the clip plays / socket closes
+    /// exactly once.
+    ended: Arc<AtomicBool>,
 }
 
 pub struct Session {
@@ -142,6 +147,7 @@ impl Session {
                     speaking: Arc::new(AtomicBool::new(false)),
                     play_cancel: Arc::new(AtomicBool::new(false)),
                     tts_task: Arc::new(Mutex::new(None)),
+                    ended: Arc::new(AtomicBool::new(false)),
                 };
                 self.shared = Some(shared.clone());
 
@@ -269,10 +275,27 @@ impl Session {
             vad_silence_secs: self.config.silence_end_ms as f32 / 1000.0,
             commit_strategy,
         };
+        let stt_shared = shared.clone();
+        let cfg = Arc::clone(&self.config);
         self.tasks.push(tokio::spawn(async move {
-            let stt = ElevenLabsStt::new(params);
-            if let Err(e) = stt.stream(ulaw_rx, transcript_tx, commit_rx).await {
-                tracing::error!("STT stream error: {:?}", e);
+            // C1: run the primary STT provider, then transparently fail over to the fallback
+            // (e.g. ElevenLabs → Deepgram) mid-call. This returns an error ONLY when every
+            // configured provider is exhausted — the terminal behavior below is unchanged.
+            if let Err(e) = crate::stt_failover::run_stt_with_failover(
+                cfg,
+                params,
+                ulaw_rx,
+                transcript_tx,
+                commit_rx,
+            )
+            .await
+            {
+                tracing::error!("STT stream error (all providers): {:?}", e);
+                // Account-level quota outage across providers: the caller can never be
+                // transcribed, so don't leave them in silence — play the fallback clip and end.
+                if e.is_quota() {
+                    fail_quota(&stt_shared, "stt").await;
+                }
             }
         }));
 
@@ -483,6 +506,51 @@ async fn speak_once(shared: &Shared, voice_id: &str, line: &str) {
     shared.speaking.store(false, Ordering::Relaxed);
 }
 
+/// ElevenLabs quota outage handler (STT or TTS): idempotently play the fixed fallback clip (if
+/// configured) and end the call, instead of leaving the caller in dead air. The first task to trip
+/// it wins via the `ended` flag; any concurrent tripper no-ops.
+async fn fail_quota(shared: &Shared, source: &str) {
+    if shared.ended.swap(true, Ordering::Relaxed) {
+        return; // already handled by the other (STT/TTS) side
+    }
+    tracing::error!("ElevenLabs quota exceeded ({source}) — playing fallback clip, ending call");
+    shared.play_cancel.store(true, Ordering::Relaxed);
+    let path = shared.config.quota_fallback_audio_path.clone();
+    play_ulaw_file(shared, &path).await;
+    // Close our side of the Twilio Media Stream → the (bidirectional) call ends cleanly.
+    let mut tx = shared.ws_tx.lock().await;
+    let _ = tx.send(Message::Close(None)).await;
+}
+
+/// Stream a pre-recorded G.711 μ-law 8 kHz (raw, headerless) file to Twilio as 20 ms media frames,
+/// then wait out its duration so playback isn't cut off by the socket closing. No-op (with a warn)
+/// when the file is missing/empty — the caller still hangs up, which beats dead air.
+async fn play_ulaw_file(shared: &Shared, path: &str) {
+    if path.trim().is_empty() {
+        return;
+    }
+    let bytes = match tokio::fs::read(path).await {
+        Ok(b) if !b.is_empty() => b,
+        _ => {
+            tracing::warn!("quota fallback clip missing/empty at '{path}'; ending call silently");
+            return;
+        }
+    };
+    const FRAME: usize = 160; // 20 ms of μ-law @ 8 kHz
+    for chunk in bytes.chunks(FRAME) {
+        let msg = OutboundMessage::media(&shared.stream_sid, BASE64.encode(chunk));
+        if let Ok(json) = serde_json::to_string(&msg) {
+            let mut tx = shared.ws_tx.lock().await;
+            if tx.send(Message::Text(json)).await.is_err() {
+                return;
+            }
+        }
+    }
+    // Twilio buffers what we sent; give it the clip's wall-clock length (+margin) to play out.
+    let dur_ms = (bytes.len() as u64 * 1000) / 8000;
+    tokio::time::sleep(std::time::Duration::from_millis(dur_ms + 500)).await;
+}
+
 /// Streaming turn: open the backend gRPC stream, feed answer tokens into TTS sentence-by-
 /// sentence, and relay audio to Twilio. Honors `play_cancel` for prompt barge-in.
 async fn run_response(shared: Shared, text: String, is_greeting: bool) {
@@ -545,10 +613,18 @@ async fn run_response(shared: Shared, text: String, is_greeting: bool) {
     let (audio_tx, mut audio_rx) = mpsc::channel::<Vec<u8>>(256);
 
     let voice_for_tts = voice_id.clone();
+    // Report the TTS outcome back so the zero-audio path below can tell a quota outage (retry is
+    // pointless — the whole account is blocked) from a bad per-agent voice (retry with default).
+    let (tts_err_tx, tts_err_rx) = oneshot::channel::<Option<MediaError>>();
     let tts_handle = tokio::spawn(async move {
-        if let Err(e) = tts.speak(&voice_for_tts, text_rx, audio_tx).await {
-            tracing::error!("TTS error: {:?}", e);
-        }
+        let outcome = match tts.speak(&voice_for_tts, text_rx, audio_tx).await {
+            Ok(()) => None,
+            Err(e) => {
+                tracing::error!("TTS error: {:?}", e);
+                Some(e)
+            }
+        };
+        let _ = tts_err_tx.send(outcome);
     });
 
     // Instant-ack (#5): on a real caller turn, speak a short filler in the agent's own voice
@@ -634,19 +710,26 @@ async fn run_response(shared: Shared, text: String, is_greeting: bool) {
         shared.play_cancel.load(Ordering::Relaxed)
     );
 
-    // Silence guard: the per-agent voice produced NO audio and the caller didn't barge in — the
-    // most common cause is a stale/deleted persona voice_id (ElevenLabs: voice_id_does_not_exist).
-    // Re-speak the full answer with the known-good default voice so a bad voice never leaves the
-    // call in dead air. Skipped when the primary voice WAS already the default (retry is pointless).
-    if chunks == 0 && !shared.play_cancel.load(Ordering::Relaxed) && voice_id != default_voice {
-        if let Ok(answer) = answer_rx.await {
-            let answer = answer.trim().to_string();
-            if !answer.is_empty() {
-                tracing::warn!(
-                    "Primary TTS voice '{}' produced no audio; retrying with default voice",
-                    voice_id
-                );
-                speak_once(&shared, &default_voice, &answer).await;
+    // Silence guard: the per-agent voice produced NO audio and the caller didn't barge in. Two
+    // distinct causes, handled differently:
+    //   1. ElevenLabs quota outage (account-level) → re-speaking with ANY voice also fails, so play
+    //      the fixed fallback clip and end the call gracefully instead of leaving dead air.
+    //   2. A stale/deleted persona voice_id (voice_id_does_not_exist) → re-speak the full answer
+    //      with the known-good default voice.
+    if chunks == 0 && !shared.play_cancel.load(Ordering::Relaxed) {
+        let quota = matches!(tts_err_rx.await, Ok(Some(ref e)) if e.is_quota());
+        if quota {
+            fail_quota(&shared, "tts").await;
+        } else if voice_id != default_voice {
+            if let Ok(answer) = answer_rx.await {
+                let answer = answer.trim().to_string();
+                if !answer.is_empty() {
+                    tracing::warn!(
+                        "Primary TTS voice '{}' produced no audio; retrying with default voice",
+                        voice_id
+                    );
+                    speak_once(&shared, &default_voice, &answer).await;
+                }
             }
         }
     }
