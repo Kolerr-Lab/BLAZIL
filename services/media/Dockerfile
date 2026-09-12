@@ -37,6 +37,11 @@ RUN mkdir -p /opt/models/smart-turn-v3 \
     && curl -fsSL -o /opt/models/smart-turn-v3/model.onnx \
        https://huggingface.co/pipecat-ai/smart-turn-v3/resolve/main/smart-turn-v3.2-cpu.onnx
 
+# Quota-outage fallback clip (μ-law 8k raw). Optional: the dir may hold only .gitkeep, in which
+# case the runtime hangs up gracefully with no clip. Drop a quota.ulaw here to give callers a spoken
+# "we're having trouble, please call back" during an ElevenLabs quota outage.
+COPY services/media/assets/ /opt/assets/
+
 COPY --from=builder /blazil-media /usr/local/bin/blazil-media
 # Ensure libonnxruntime.so downloaded by ort is available at runtime.
 COPY --from=builder /build/target/release/libonnxruntime.so* /usr/lib/
