@@ -31,6 +31,13 @@ pub enum InboundMessage {
         stream_sid: String,
         mark: MarkPayload,
     },
+    // Caller pressed a keypad digit. Twilio only sends these when <Stream> has DTMF capture enabled.
+    #[serde(rename = "dtmf")]
+    Dtmf {
+        #[serde(rename = "streamSid")]
+        stream_sid: String,
+        dtmf: DtmfPayload,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -54,6 +61,14 @@ pub struct StartMetadata {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct MarkPayload {
     pub name: String,
+}
+
+/// A single keypad press from Twilio's `dtmf` event. `digit` is one of 0-9, `*`, `#`.
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct DtmfPayload {
+    pub digit: String,
+    pub track: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -163,6 +178,25 @@ mod tests {
                 assert_eq!(media.track.as_deref(), Some("inbound"));
             }
             _ => panic!("Expected Media event"),
+        }
+    }
+
+    #[test]
+    fn parse_dtmf_event() {
+        let json = r#"{
+            "event": "dtmf",
+            "streamSid": "MZ123",
+            "dtmf": { "track": "inbound_track", "digit": "5" }
+        }"#;
+
+        let msg: InboundMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            InboundMessage::Dtmf { stream_sid, dtmf } => {
+                assert_eq!(stream_sid, "MZ123");
+                assert_eq!(dtmf.digit, "5");
+                assert_eq!(dtmf.track.as_deref(), Some("inbound_track"));
+            }
+            _ => panic!("Expected Dtmf event"),
         }
     }
 }

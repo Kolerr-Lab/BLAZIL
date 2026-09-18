@@ -72,6 +72,11 @@ pub struct Config {
     pub deepgram_api_key: String,
     /// Deepgram model id. Default "nova-3".
     pub deepgram_stt_model: String,
+
+    /// DTMF (keypad) inter-digit timeout: after the caller's last keypress, wait this long with no
+    /// new digit, then commit the collected digits as a turn. `#` commits immediately; `*` clears
+    /// the current entry. Default 2500ms.
+    pub dtmf_interdigit_ms: u64,
 }
 
 impl Config {
@@ -136,6 +141,7 @@ impl Config {
                 .unwrap_or(true),
             deepgram_api_key: env::var("DEEPGRAM_API_KEY").unwrap_or_default(),
             deepgram_stt_model: env::var("DEEPGRAM_STT_MODEL").unwrap_or_else(|_| "nova-3".into()),
+            dtmf_interdigit_ms: env_parse("DTMF_INTERDIGIT_MS", 2500u64),
         })
     }
 }

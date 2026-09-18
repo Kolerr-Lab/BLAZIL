@@ -65,6 +65,9 @@ pub struct Session {
     /// Predictive endpointing (Bước 3): per-frame (pcm, is_speech, silence_ms) to the endpoint
     /// loop, which runs Smart Turn and commits early. `None` when predictive endpointing is off.
     endpoint_tx: Option<mpsc::Sender<(Vec<i16>, bool, u64)>>,
+    /// Keypad digits from Twilio `dtmf` events → the DTMF collector loop, which buffers them and
+    /// commits a turn on `#` or after an inter-digit timeout. `None` until the stream starts.
+    dtmf_tx: Option<mpsc::Sender<char>>,
     shared: Option<Shared>,
     tasks: Vec<JoinHandle<()>>,
 }
@@ -78,6 +81,7 @@ impl Session {
             audio_buffer: Vec::with_capacity(codec::SAMPLES_PER_FRAME * 4),
             stt_tx: None,
             endpoint_tx: None,
+            dtmf_tx: None,
             shared: None,
             tasks: Vec::new(),
         }
@@ -184,6 +188,17 @@ impl Session {
 
                 self.start_stt(shared.clone(), language, commit_rx, commit_strategy);
 
+                // DTMF collector: buffers keypad digits and commits them as a turn (so the agent
+                // handles both "press 1 for…" menus and spoken/typed codes uniformly). Harmless when
+                // the caller never presses a key — no events, loop just idles.
+                let (dtmf_tx, dtmf_rx) = mpsc::channel::<char>(16);
+                self.dtmf_tx = Some(dtmf_tx);
+                self.tasks.push(tokio::spawn(dtmf_loop(
+                    shared.clone(),
+                    dtmf_rx,
+                    self.config.dtmf_interdigit_ms,
+                )));
+
                 // Agent greets first (in its own persona) unless disabled.
                 if !self.config.greeting_prompt.trim().is_empty() {
                     let greet = shared.clone();
@@ -217,6 +232,14 @@ impl Session {
                     if let Some(shared) = &self.shared {
                         shared.speaking.store(false, Ordering::Relaxed);
                     }
+                }
+            }
+            InboundMessage::Dtmf { dtmf, .. } => {
+                // Forward the single keypad digit to the collector loop. `try_send` drops it only
+                // if the (16-deep) channel is momentarily full — implausible at human keypress rate.
+                if let (Some(tx), Some(digit)) = (&self.dtmf_tx, dtmf.digit.chars().next()) {
+                    tracing::info!("DTMF digit: {}", digit);
+                    let _ = tx.try_send(digit);
                 }
             }
         }
@@ -375,6 +398,68 @@ async fn endpoint_loop(
             }
         }
     }
+}
+
+/// DTMF collector: buffers keypad digits and commits them as a caller turn. `#` commits what's
+/// buffered immediately; `*` clears the current entry; otherwise digits accumulate until the caller
+/// pauses for `interdigit_ms` (then the buffer is committed). Runs for the life of the call; exits
+/// when the sender drops (call teardown).
+async fn dtmf_loop(shared: Shared, mut rx: mpsc::Receiver<char>, interdigit_ms: u64) {
+    use tokio::time::{timeout, Duration};
+    const MAX_DIGITS: usize = 32; // guard against a stuck key / runaway entry
+    let mut buf = String::new();
+    loop {
+        let next = if buf.is_empty() {
+            // Idle: block until the first digit (no timeout while nothing is buffered).
+            rx.recv().await
+        } else {
+            // Digits pending: a pause longer than the inter-digit window commits the entry.
+            match timeout(Duration::from_millis(interdigit_ms), rx.recv()).await {
+                Ok(v) => v,
+                Err(_) => {
+                    dtmf_flush(&shared, &mut buf).await;
+                    continue;
+                }
+            }
+        };
+        match next {
+            Some('#') => dtmf_flush(&shared, &mut buf).await,
+            Some('*') => buf.clear(),
+            Some(d) => {
+                buf.push(d);
+                if buf.len() >= MAX_DIGITS {
+                    dtmf_flush(&shared, &mut buf).await;
+                }
+            }
+            None => {
+                // Channel closed (call ending): flush any trailing digits, then stop.
+                dtmf_flush(&shared, &mut buf).await;
+                return;
+            }
+        }
+    }
+}
+
+/// Commit the buffered DTMF digits as a caller turn, phrased so the agent understands they came from
+/// the phone keypad (covers both IVR-style "press 1" and code/PIN entry). No-op on an empty buffer.
+async fn dtmf_flush(shared: &Shared, buf: &mut String) {
+    if buf.is_empty() {
+        return;
+    }
+    let digits = std::mem::take(buf);
+    tracing::info!("DTMF committed: {}", digits);
+    do_turn(shared.clone(), format_dtmf_turn(&digits), false).await;
+}
+
+/// Phrase collected keypad digits as a caller turn the agent understands (covers both IVR-style
+/// "press 1" and code/PIN entry). Digits are spaced so TTS/read-back treats them one at a time.
+fn format_dtmf_turn(digits: &str) -> String {
+    let spaced: String = digits
+        .chars()
+        .map(|c| c.to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("[The caller pressed these keys on their phone keypad: {spaced}]")
 }
 
 /// Run one turn: supersede any in-flight response, call the backend, then speak the answer.
@@ -745,4 +830,21 @@ async fn run_response(shared: Shared, text: String, is_greeting: bool) {
     feeder.abort();
     tts_handle.abort();
     shared.speaking.store(false, Ordering::Relaxed);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_dtmf_turn;
+
+    #[test]
+    fn dtmf_turn_spaces_digits_for_readback() {
+        let out = format_dtmf_turn("1234");
+        assert!(out.contains("1 2 3 4"), "digits should be spaced: {out}");
+        assert!(out.to_lowercase().contains("keypad"));
+    }
+
+    #[test]
+    fn dtmf_turn_single_digit_menu_choice() {
+        assert!(format_dtmf_turn("2").contains(": 2]"));
+    }
 }
