@@ -478,10 +478,98 @@ async fn do_turn(shared: Shared, text: String, is_greeting: bool) {
     *shared.tts_task.lock().await = Some(handle);
 }
 
-/// Calm LLM text for TTS: ElevenLabs reads `!` and repeated punctuation louder, which came across
-/// as the agent suddenly yelling. Convert `!`→`.`, drop stray markdown, and collapse runs of
-/// sentence punctuation. (ALL-CAPS is handled by the reply prompt to avoid mangling acronyms.)
+/// Map a `/unit` suffix (e.g. "/mo") to spoken form. None = not a known time unit.
+fn spoken_period(word: &str) -> Option<&'static str> {
+    match word {
+        "mo" | "month" | "months" => Some("per month"),
+        "yr" | "yrs" | "year" | "years" => Some("per year"),
+        "wk" | "week" | "weeks" => Some("per week"),
+        "hr" | "hrs" | "hour" | "hours" => Some("per hour"),
+        "day" | "days" => Some("per day"),
+        "min" | "minute" | "minutes" => Some("per minute"),
+        _ => None,
+    }
+}
+
+/// Deterministic safety net so TTS never trips on raw money/number formatting even when the model
+/// ignores the "say it in words" prompt. Turns `$1,999` → `1999 dollars`, strips thousands commas
+/// (`1,999` → `1999`), and expands a `/unit` price suffix (`/mo` → ` per month`). Not a full
+/// number-to-words pass — it just removes the symbols/formatting that break pronunciation.
+fn normalize_numbers_for_tts(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len() + 8);
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '$' {
+            let mut j = i + 1;
+            while j < chars.len() && chars[j] == ' ' {
+                j += 1;
+            }
+            let mut num = String::new();
+            while j < chars.len() && (chars[j].is_ascii_digit() || chars[j] == ',') {
+                if chars[j].is_ascii_digit() {
+                    num.push(chars[j]);
+                }
+                j += 1;
+            }
+            if j + 1 < chars.len() && chars[j] == '.' && chars[j + 1].is_ascii_digit() {
+                num.push('.');
+                j += 1;
+                while j < chars.len() && chars[j].is_ascii_digit() {
+                    num.push(chars[j]);
+                    j += 1;
+                }
+            }
+            if num.is_empty() {
+                i += 1; // lone '$' → drop
+            } else {
+                out.push_str(&num);
+                out.push_str(" dollars");
+                i = j;
+            }
+            continue;
+        }
+        // Thousands comma between digits: "1,999" → "1999".
+        if c == ','
+            && i > 0
+            && i + 1 < chars.len()
+            && chars[i - 1].is_ascii_digit()
+            && chars[i + 1].is_ascii_digit()
+        {
+            i += 1;
+            continue;
+        }
+        // "/unit" price suffix → " per unit" (only for known time units; leaves "24/7", "km/h").
+        if c == '/' {
+            let start = i + 1;
+            let mut j = start;
+            while j < chars.len() && chars[j].is_ascii_alphabetic() {
+                j += 1;
+            }
+            if j > start {
+                let word: String = chars[start..j].iter().collect::<String>().to_lowercase();
+                if let Some(rep) = spoken_period(&word) {
+                    if !out.ends_with(' ') {
+                        out.push(' ');
+                    }
+                    out.push_str(rep);
+                    i = j;
+                    continue;
+                }
+            }
+        }
+        out.push(c);
+        i += 1;
+    }
+    out
+}
+
+/// Calm LLM text for TTS: normalize money/number formatting (see `normalize_numbers_for_tts`), then
+/// convert `!`→`.`, drop stray markdown, and collapse runs of sentence punctuation. (ALL-CAPS is
+/// handled by the reply prompt to avoid mangling acronyms.)
 fn sanitize_for_tts(s: &str) -> String {
+    let s = normalize_numbers_for_tts(s);
     let mut out = String::with_capacity(s.len());
     let mut prev_punct = false;
     for ch in s.chars() {
@@ -834,7 +922,7 @@ async fn run_response(shared: Shared, text: String, is_greeting: bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::format_dtmf_turn;
+    use super::{format_dtmf_turn, normalize_numbers_for_tts, sanitize_for_tts};
 
     #[test]
     fn dtmf_turn_spaces_digits_for_readback() {
@@ -846,5 +934,36 @@ mod tests {
     #[test]
     fn dtmf_turn_single_digit_menu_choice() {
         assert!(format_dtmf_turn("2").contains(": 2]"));
+    }
+
+    #[test]
+    fn normalizes_currency_and_period() {
+        assert_eq!(
+            normalize_numbers_for_tts("It's $1,999/mo for Scale."),
+            "It's 1999 dollars per month for Scale."
+        );
+        assert_eq!(
+            normalize_numbers_for_tts("$149 per seat"),
+            "149 dollars per seat"
+        );
+        assert_eq!(normalize_numbers_for_tts("$1,234.50"), "1234.50 dollars");
+    }
+
+    #[test]
+    fn strips_thousands_comma_but_keeps_other_slashes() {
+        assert_eq!(
+            normalize_numbers_for_tts("we handled 12,500 calls"),
+            "we handled 12500 calls"
+        );
+        // Not a price/time unit → left intact.
+        assert_eq!(normalize_numbers_for_tts("open 24/7"), "open 24/7");
+        assert_eq!(normalize_numbers_for_tts("60 km/h"), "60 km/h");
+    }
+
+    #[test]
+    fn sanitize_applies_number_normalization() {
+        let out = sanitize_for_tts("The Scale plan is $1,999/mo!");
+        assert!(out.contains("1999 dollars per month"), "got: {out}");
+        assert!(!out.contains('$') && !out.contains('!'));
     }
 }
