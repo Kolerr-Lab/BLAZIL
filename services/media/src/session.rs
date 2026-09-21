@@ -16,6 +16,7 @@ use crate::{
     codec,
     config::Config,
     error::MediaError,
+    speaker::{speaker_gate_loop, SpeakerEmbedder},
     stt::SttParams,
     tts::{ElevenLabsTts, Tts},
     turn::{TurnClient, TurnEvent, TurnRequest},
@@ -71,12 +72,23 @@ pub struct Session {
     /// Shared Smart Turn model (loaded once at startup, not per call). `None` when predictive
     /// endpointing is off or the model failed to load at boot → falls back to VAD endpointing.
     smart_turn: Option<Arc<SmartTurn>>,
+    /// Shared target-speaker embedder (once at startup). `None` = gate off → pure passthrough.
+    speaker: Option<Arc<SpeakerEmbedder>>,
+    /// Per-frame (pcm, is_speech) to the speaker gate loop. `Some` only when the gate is running.
+    speaker_tx: Option<mpsc::Sender<(Vec<i16>, bool)>>,
+    /// Published by the gate loop, read on the audio path: target enrolled? current speaker = target?
+    speaker_enrolled: Arc<AtomicBool>,
+    speaker_active: Arc<AtomicBool>,
     shared: Option<Shared>,
     tasks: Vec<JoinHandle<()>>,
 }
 
 impl Session {
-    pub fn new(config: Arc<Config>, smart_turn: Option<Arc<SmartTurn>>) -> Self {
+    pub fn new(
+        config: Arc<Config>,
+        smart_turn: Option<Arc<SmartTurn>>,
+        speaker: Option<Arc<SpeakerEmbedder>>,
+    ) -> Self {
         let vad = VadEngine::new(config.vad_aggressiveness);
         Self {
             config,
@@ -86,6 +98,10 @@ impl Session {
             endpoint_tx: None,
             dtmf_tx: None,
             smart_turn,
+            speaker,
+            speaker_tx: None,
+            speaker_enrolled: Arc::new(AtomicBool::new(false)),
+            speaker_active: Arc::new(AtomicBool::new(false)),
             shared: None,
             tasks: Vec::new(),
         }
@@ -193,6 +209,20 @@ impl Session {
                     self.config.dtmf_interdigit_ms,
                 )));
 
+                // Target-speaker gate (#3): enroll the caller's own voice, then filter background
+                // voices/TV out of the STT stream. Only spawned when the embedder loaded (flag on).
+                if let Some(emb) = &self.speaker {
+                    let (sp_tx, sp_rx) = mpsc::channel::<(Vec<i16>, bool)>(64);
+                    self.speaker_tx = Some(sp_tx);
+                    self.tasks.push(tokio::spawn(speaker_gate_loop(
+                        Arc::clone(emb),
+                        sp_rx,
+                        Arc::clone(&self.speaker_enrolled),
+                        Arc::clone(&self.speaker_active),
+                        self.config.speaker_threshold,
+                    )));
+                }
+
                 // Agent greets first (in its own persona) unless disabled.
                 if !self.config.greeting_prompt.trim().is_empty() {
                     let greet = shared.clone();
@@ -240,21 +270,40 @@ impl Session {
     }
 
     async fn process_frame(&mut self, frame: Vec<u8>) {
-        // Forward every inbound frame to STT; its server-side VAD decides utterance boundaries.
-        if let Some(tx) = &self.stt_tx {
-            let _ = tx.try_send(frame.clone());
-        }
+        let pcm = codec::decode_frame(&frame);
 
-        // Clone the (Arc-backed, cheap) shared handle so we can freely borrow self.vad below.
+        // Pre-Start (no shared yet): forward as-is + keep the VAD warm, then done.
         let Some(shared) = self.shared.clone() else {
-            let pcm = codec::decode_frame(&frame);
+            if let Some(tx) = &self.stt_tx {
+                let _ = tx.try_send(frame);
+            }
             let _ = self.vad.process_frame(&pcm);
             return;
         };
 
-        // Local VAD: barge-in while the assistant is speaking, plus (Bước 3) end-of-turn feed.
-        let pcm = codec::decode_frame(&frame);
         let state = self.vad.process_frame(&pcm);
+        let is_speech = state == VadState::Speech;
+
+        // Feed the target-speaker gate (runs off the audio path); it publishes enrolled/active.
+        if let Some(sp) = &self.speaker_tx {
+            let _ = sp.try_send((pcm.clone(), is_speech));
+        }
+
+        // Forward to STT — gated by the target-speaker decision when the gate is running. Before the
+        // caller is enrolled we pass everything; once enrolled, a non-target window feeds μ-law
+        // silence (0xFF) so a background voice / TV never reaches transcription.
+        if let Some(tx) = &self.stt_tx {
+            let pass = self.speaker_tx.is_none()
+                || !self.speaker_enrolled.load(Ordering::Relaxed)
+                || self.speaker_active.load(Ordering::Relaxed);
+            if pass {
+                let _ = tx.try_send(frame);
+            } else {
+                let _ = tx.try_send(vec![0xFFu8; frame.len()]);
+            }
+        }
+
+        // Local VAD: barge-in while the assistant is speaking.
         if shared.speaking.load(Ordering::Relaxed)
             && self.vad.is_barge_in(self.config.barge_in_ms, true)
         {
@@ -267,7 +316,6 @@ impl Session {
         // commits early). Only present when predictive endpointing is on. `try_send` drops the
         // frame if the loop is briefly busy running inference — harmless.
         if let Some(ep) = &self.endpoint_tx {
-            let is_speech = state == VadState::Speech;
             let _ = ep.try_send((pcm, is_speech, self.vad.consecutive_silence_ms()));
         }
     }
@@ -319,6 +367,11 @@ impl Session {
         // Consume committed transcripts → drive backend turns (one at a time).
         self.tasks.push(tokio::spawn(async move {
             while let Some(transcript) = transcript_rx.recv().await {
+                // Skip empty/whitespace commits (e.g. when the speaker gate fed STT silence for a
+                // background voice) so we never run a turn on nothing.
+                if transcript.trim().is_empty() {
+                    continue;
+                }
                 tracing::info!("Committed transcript: {}", transcript);
                 do_turn(shared.clone(), transcript, false).await;
             }

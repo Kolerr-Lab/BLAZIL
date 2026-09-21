@@ -6,6 +6,7 @@ mod deepgram;
 mod error;
 mod server;
 mod session;
+mod speaker;
 mod stt;
 mod stt_failover;
 mod tts;

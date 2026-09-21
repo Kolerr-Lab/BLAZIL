@@ -77,6 +77,16 @@ pub struct Config {
     /// new digit, then commit the collected digits as a turn. `#` commits immediately; `*` clears
     /// the current entry. Default 2500ms.
     pub dtmf_interdigit_ms: u64,
+
+    // ── Target-speaker isolation (noise robustness) — STAGED, off by default ─────────────────────
+    /// Enable the speaker-embedding gate: reject utterances whose voice differs from the enrolled
+    /// caller (background people / TV). Default off until validated against a reference.
+    pub speaker_gate_enabled: bool,
+    /// Path to the CAM++ speaker-embedding ONNX (fbank input [N,T,80]). Baked into the image like
+    /// the Smart Turn model.
+    pub speaker_model_path: String,
+    /// Cosine-similarity threshold: below this vs the enrolled embedding = a different speaker.
+    pub speaker_threshold: f32,
 }
 
 impl Config {
@@ -142,6 +152,12 @@ impl Config {
             deepgram_api_key: env::var("DEEPGRAM_API_KEY").unwrap_or_default(),
             deepgram_stt_model: env::var("DEEPGRAM_STT_MODEL").unwrap_or_else(|_| "nova-3".into()),
             dtmf_interdigit_ms: env_parse("DTMF_INTERDIGIT_MS", 2500u64),
+            speaker_gate_enabled: env::var("SPEAKER_GATE_ENABLED")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false),
+            speaker_model_path: env::var("SPEAKER_MODEL_PATH")
+                .unwrap_or_else(|_| "/opt/models/speaker/campplus.onnx".into()),
+            speaker_threshold: env_parse("SPEAKER_THRESHOLD", 0.55f32),
         })
     }
 }
