@@ -68,12 +68,15 @@ pub struct Session {
     /// Keypad digits from Twilio `dtmf` events → the DTMF collector loop, which buffers them and
     /// commits a turn on `#` or after an inter-digit timeout. `None` until the stream starts.
     dtmf_tx: Option<mpsc::Sender<char>>,
+    /// Shared Smart Turn model (loaded once at startup, not per call). `None` when predictive
+    /// endpointing is off or the model failed to load at boot → falls back to VAD endpointing.
+    smart_turn: Option<Arc<SmartTurn>>,
     shared: Option<Shared>,
     tasks: Vec<JoinHandle<()>>,
 }
 
 impl Session {
-    pub fn new(config: Arc<Config>) -> Self {
+    pub fn new(config: Arc<Config>, smart_turn: Option<Arc<SmartTurn>>) -> Self {
         let vad = VadEngine::new(config.vad_aggressiveness);
         Self {
             config,
@@ -82,6 +85,7 @@ impl Session {
             stt_tx: None,
             endpoint_tx: None,
             dtmf_tx: None,
+            smart_turn,
             shared: None,
             tasks: Vec::new(),
         }
@@ -161,29 +165,19 @@ impl Session {
                 // fall back to VAD (never break the call).
                 let (commit_tx, commit_rx) = mpsc::channel::<()>(8);
                 let mut commit_strategy = "vad".to_string();
-                if self.config.predictive_endpoint {
-                    match SmartTurn::load(
-                        &self.config.smart_turn_model_path,
-                        self.config.smart_turn_threshold,
-                    ) {
-                        Ok(st) => {
-                            commit_strategy = "manual".to_string();
-                            let (ep_tx, ep_rx) = mpsc::channel::<(Vec<i16>, bool, u64)>(256);
-                            self.endpoint_tx = Some(ep_tx);
-                            self.tasks.push(tokio::spawn(endpoint_loop(
-                                Arc::new(st),
-                                ep_rx,
-                                commit_tx.clone(),
-                                self.config.endpoint_short_silence_ms,
-                                self.config.endpoint_max_silence_ms,
-                            )));
-                        }
-                        Err(e) => {
-                            tracing::error!(
-                                "Smart Turn load failed, staying on VAD endpointing: {e}"
-                            );
-                        }
-                    }
+                // Reuse the process-wide Smart Turn (loaded once at startup) — no per-call ONNX load.
+                // `smart_turn` is Some only when predictive endpointing was on + the model loaded.
+                if let Some(st) = &self.smart_turn {
+                    commit_strategy = "manual".to_string();
+                    let (ep_tx, ep_rx) = mpsc::channel::<(Vec<i16>, bool, u64)>(256);
+                    self.endpoint_tx = Some(ep_tx);
+                    self.tasks.push(tokio::spawn(endpoint_loop(
+                        Arc::clone(st),
+                        ep_rx,
+                        commit_tx.clone(),
+                        self.config.endpoint_short_silence_ms,
+                        self.config.endpoint_max_silence_ms,
+                    )));
                 }
 
                 self.start_stt(shared.clone(), language, commit_rx, commit_strategy);
