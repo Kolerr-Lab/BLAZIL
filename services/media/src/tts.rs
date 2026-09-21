@@ -83,9 +83,17 @@ impl Tts for ElevenLabsTts {
         // expressiveness (turbo_v2_5 supports it). The old 0.7 was raised to avoid the voice yelling
         // on `!`/CAPS — now mitigated upstream (sanitize_for_tts maps `!`→`.` + the reply prompt
         // bans `!`/ALL-CAPS), so we can lower it safely. Same model (turbo) → zero latency change.
+        //
+        // generation_config.chunk_length_schedule: how many characters ElevenLabs buffers before it
+        // generates each chunk. Buffering gives the model LOOKAHEAD, so prosody (intonation/rhythm)
+        // flows across the phrase instead of resetting at every fragment — this is what makes ALL
+        // voices sound less robotic. Small first bucket (90) keeps time-to-first-audio ~unchanged;
+        // later buckets grow so full sentences render smoothly. Paired with dropping the per-chunk
+        // `flush` below (flush forces immediate per-fragment generation → prosody discontinuities).
         let bos = serde_json::json!({
             "text": " ",
-            "voice_settings": { "stability": 0.45, "style": 0.3, "similarity_boost": 0.8 }
+            "voice_settings": { "stability": 0.45, "style": 0.3, "similarity_boost": 0.8 },
+            "generation_config": { "chunk_length_schedule": [90, 160, 250, 290] }
         });
         write
             .send(Message::Text(bos.to_string()))
@@ -93,14 +101,17 @@ impl Tts for ElevenLabsTts {
             .map_err(|e| MediaError::TtsError(e.to_string()))?;
 
         // Writer: stream text chunks as they arrive, then EOS to flush.
+        // No per-chunk `flush`: we let ElevenLabs buffer per chunk_length_schedule so it has
+        // lookahead and prosody flows across fragments (less robotic). The final empty-text EOS
+        // flushes whatever is still buffered at end-of-turn, so nothing is left unspoken.
         let text_sender = tokio::spawn(async move {
             while let Some(text) = text_rx.recv().await {
-                let msg = serde_json::json!({ "text": text, "flush": true });
+                let msg = serde_json::json!({ "text": text });
                 if write.send(Message::Text(msg.to_string())).await.is_err() {
                     return;
                 }
             }
-            // EOS: empty text closes the generation.
+            // EOS: empty text closes the generation and flushes the buffered tail.
             let eos = serde_json::json!({ "text": "" });
             let _ = write.send(Message::Text(eos.to_string())).await;
         });
