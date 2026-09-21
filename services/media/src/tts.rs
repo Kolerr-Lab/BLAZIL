@@ -78,11 +78,14 @@ impl Tts for ElevenLabsTts {
         let (mut write, mut read) = ws_stream.split();
 
         // BOS: initialize the stream with voice settings.
-        // stability 0.7 (was 0.5): higher = steadier prosody, fewer loud/soft swings. Lower values
-        // let the voice get emphatic on `!`/CAPS, which callers heard as sudden yelling.
+        // stability 0.45 + style 0.3 (Bậc 0 human-voice pass): lower stability = more prosodic
+        // variation (varied pace/pitch → less monotone, more human), and a touch of style adds
+        // expressiveness (turbo_v2_5 supports it). The old 0.7 was raised to avoid the voice yelling
+        // on `!`/CAPS — now mitigated upstream (sanitize_for_tts maps `!`→`.` + the reply prompt
+        // bans `!`/ALL-CAPS), so we can lower it safely. Same model (turbo) → zero latency change.
         let bos = serde_json::json!({
             "text": " ",
-            "voice_settings": { "stability": 0.7, "similarity_boost": 0.8 }
+            "voice_settings": { "stability": 0.45, "style": 0.3, "similarity_boost": 0.8 }
         });
         write
             .send(Message::Text(bos.to_string()))
