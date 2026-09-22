@@ -32,6 +32,8 @@ pub struct SttParams {
     /// "vad" = server segments on silence (default). "manual" = the caller decides when to commit
     /// (predictive endpointing sends an explicit commit signal). See Stt::stream `commit_rx`.
     pub commit_strategy: String,
+    /// Custom vocabulary / keywords to bias STT accuracy (Lexicon Prompting).
+    pub lexicon: Option<String>,
 }
 
 #[async_trait]
@@ -87,6 +89,13 @@ impl ElevenLabsStt {
         if let Some(lang) = &self.params.language_code {
             if !lang.is_empty() {
                 url.push_str(&format!("&language_code={lang}"));
+            }
+        }
+        if let Some(lexicon) = &self.params.lexicon {
+            if !lexicon.is_empty() {
+                // ElevenLabs supports 'prompt' to bias the STT model
+                let encoded = lexicon.replace(" ", "%20");
+                url.push_str(&format!("&prompt={encoded}"));
             }
         }
         url

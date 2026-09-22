@@ -163,13 +163,16 @@ impl Session {
                 // Per-agent language from the TwiML <Parameter>; empty → auto-detect (falls
                 // back to the media plane's global STT_LANGUAGE_CODE / language detection).
                 let language = params.get("language").filter(|s| !s.is_empty()).cloned();
+                // Lexicon Prompting: Custom vocabulary to bias the STT model (comma-separated).
+                let lexicon = params.get("lexicon").filter(|s| !s.is_empty()).cloned();
                 tracing::info!(
-                    "Started stream {} for call {} (tenant={}, agent={}, language={})",
+                    "Started stream {} for call {} (tenant={}, agent={}, language={}, lexicon={:?})",
                     stream_sid,
                     start.call_sid,
                     tenant_id,
                     agent_id,
-                    language.as_deref().unwrap_or("auto")
+                    language.as_deref().unwrap_or("auto"),
+                    lexicon,
                 );
 
                 let shared = Shared {
@@ -207,7 +210,13 @@ impl Session {
                     )));
                 }
 
-                self.start_stt(shared.clone(), language, commit_rx, commit_strategy);
+                self.start_stt(
+                    shared.clone(),
+                    language,
+                    lexicon,
+                    commit_rx,
+                    commit_strategy,
+                );
 
                 // DTMF collector: buffers keypad digits and commits them as a turn (so the agent
                 // handles both "press 1 for…" menus and spoken/typed codes uniformly). Harmless when
@@ -335,6 +344,7 @@ impl Session {
         &mut self,
         shared: Shared,
         language: Option<String>,
+        lexicon: Option<String>,
         commit_rx: mpsc::Receiver<()>,
         commit_strategy: String,
     ) {
@@ -342,14 +352,14 @@ impl Session {
         let (transcript_tx, mut transcript_rx) = mpsc::channel::<String>(16);
         self.stt_tx = Some(ulaw_tx);
 
-        // Per-call language (from the agent) wins; otherwise the global default / auto-detect.
-        let language_code = language.or_else(|| self.config.stt_language_code.clone());
+        let cfg = Arc::clone(&self.config);
         let params = SttParams {
-            api_key: self.config.elevenlabs_api_key.clone(),
-            model_id: self.config.elevenlabs_stt_model.clone(),
-            language_code,
-            vad_silence_secs: self.config.silence_end_ms as f32 / 1000.0,
+            api_key: cfg.elevenlabs_api_key.clone(),
+            model_id: cfg.elevenlabs_stt_model.clone(),
+            language_code: language.or(cfg.stt_language_code.clone()),
+            vad_silence_secs: (cfg.silence_end_ms as f32) / 1000.0,
             commit_strategy,
+            lexicon,
         };
         let stt_shared = shared.clone();
         let cfg = Arc::clone(&self.config);

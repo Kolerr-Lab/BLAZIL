@@ -86,6 +86,7 @@ fn build(kind: SttProvider, cfg: &Config, params: &SttParams) -> Box<dyn Stt> {
             language: params.language_code.clone().filter(|s| !s.is_empty()),
             commit_strategy: params.commit_strategy.clone(),
             vad_silence_secs: params.vad_silence_secs,
+            lexicon: params.lexicon.clone(),
         })),
     }
 }

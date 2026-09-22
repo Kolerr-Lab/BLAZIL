@@ -50,6 +50,8 @@ pub struct DeepgramParams {
     pub commit_strategy: String,
     /// Silence (seconds) Deepgram treats as end-of-utterance — VAD strategy only.
     pub vad_silence_secs: f32,
+    /// Custom vocabulary / keywords to bias STT accuracy (Lexicon Prompting).
+    pub lexicon: Option<String>,
 }
 
 pub struct DeepgramStt {
@@ -90,6 +92,14 @@ impl DeepgramStt {
             .filter(|s| !s.is_empty())
             .unwrap_or("multi");
         url.push_str(&format!("&language={lang}"));
+        if let Some(lexicon) = &self.params.lexicon {
+            for term in lexicon.split(',') {
+                let term = term.trim().replace(" ", "%20");
+                if !term.is_empty() {
+                    url.push_str(&format!("&keywords={term}"));
+                }
+            }
+        }
         url
     }
 }
