@@ -423,8 +423,11 @@ async fn endpoint_loop(
     let mut buf: Vec<i16> = Vec::new();
     let mut in_utt = false;
     let mut checked = false;
+    let mut keepalive_frames = 0; // count frames (20ms each) of continuous silence
+
     while let Some((pcm, is_speech, silence_ms)) = rx.recv().await {
         if is_speech {
+            keepalive_frames = 0; // reset keepalive timer
             buf.extend_from_slice(&pcm);
             if buf.len() > MAX_BUF {
                 let drop = buf.len() - MAX_BUF;
@@ -433,6 +436,7 @@ async fn endpoint_loop(
             in_utt = true;
             checked = false;
         } else if in_utt {
+            keepalive_frames = 0; // reset keepalive timer while processing end of speech
             if !checked && silence_ms >= short_ms {
                 // One Smart Turn check per pause. If "complete" → commit now; else keep listening
                 // (a mid-sentence pause) until the caller resumes or the max-silence fallback hits.
@@ -455,6 +459,21 @@ async fn endpoint_loop(
                 buf.clear();
                 in_utt = false;
                 checked = false;
+            }
+        } else {
+            // Not in an utterance (pure silence / noise gated out).
+            // ElevenLabs STT has a ~36s hard limit for uncommitted segments when using
+            // manual commit. If the agent speaks a long sentence, we send 0xFF silence
+            // frames continuously. Smart Turn never triggers a commit because `in_utt` is false.
+            // ElevenLabs hits the limit and drops the socket. If the user barges in right as
+            // it drops, their audio is lost -> dead air.
+            // Fix: send an empty commit every 15 seconds (750 frames * 20ms) of silence
+            // to flush ElevenLabs' buffer and reset their segment timer.
+            keepalive_frames += 1;
+            if keepalive_frames >= 750 {
+                tracing::debug!("STT keepalive: flushing silence to prevent provider disconnect");
+                let _ = commit_tx.send(()).await;
+                keepalive_frames = 0;
             }
         }
     }
