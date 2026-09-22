@@ -123,7 +123,18 @@ impl Session {
                     break;
                 }
                 Err(e) => {
-                    tracing::error!("WS read error: {:?}", e);
+                    // Twilio commonly ends calls with a TCP RST rather than a proper WS
+                    // Close handshake, producing `ResetWithoutClosingHandshake`. This is
+                    // semantically identical to a normal peer-close (the call ended) and
+                    // must not be logged as ERROR — it floods logs and triggers false alerts.
+                    let msg = format!("{e:?}");
+                    if msg.contains("ResetWithoutClosingHandshake") {
+                        tracing::info!(
+                            "Twilio WS reset by peer (call ended without close handshake)"
+                        );
+                    } else {
+                        tracing::error!("WS read error: {:?}", e);
+                    }
                     break;
                 }
                 _ => {}
