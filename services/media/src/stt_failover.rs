@@ -12,8 +12,20 @@
 //! primary never opens a fallback socket.
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc;
+
+/// A provider that ran at least this long before its socket ended is considered to have been
+/// healthy — the close is a transient / vendor-cap event (e.g. ElevenLabs closing a realtime
+/// socket after its session window), so we reset the consecutive-failure counter and reconnect
+/// promptly. A provider that dies faster than this is counted as a failure toward the give-up cap.
+const HEALTHY_RUN: Duration = Duration::from_secs(10);
+
+/// Give up (return the last error → session applies its graceful-end behavior) only after this many
+/// reconnect attempts fail back-to-back without any healthy run in between. A long, healthy call
+/// that reconnects every so often never approaches this, because each healthy run resets the count.
+const MAX_CONSECUTIVE_FAILURES: u32 = 6;
 
 use crate::config::Config;
 use crate::deepgram::{DeepgramParams, DeepgramStt};
@@ -106,18 +118,38 @@ pub async fn run_stt_with_failover(
 
 /// Provider-agnostic supervisor. Owns the real audio + commit receivers for the whole call and
 /// bridges them into a fresh per-attempt inner channel for the active provider, so a provider can
-/// be swapped mid-call without losing the microphone. Injectable builders make this unit-testable.
+/// be swapped — or the SAME provider reconnected — mid-call without ever losing the microphone.
+/// Injectable builders make this unit-testable.
+///
+/// Reconnect model: a provider's `stream()` returns only when (a) the call really ends — detected
+/// here as the upstream audio channel closing, in which case we return `Ok(())` and never
+/// reconnect — or (b) the provider's socket ends on its own while the call is still live (vendor
+/// close such as ElevenLabs' realtime session window, or an error). Case (b) is transient by
+/// nature, so we cycle to the next provider and open a fresh socket, keeping the call alive. We
+/// only give up after `MAX_CONSECUTIVE_FAILURES` rapid failures with no healthy run in between.
 pub async fn run_failover_core<L: std::fmt::Debug>(
     builders: Vec<(L, SttBuilder)>,
     mut ulaw_rx: mpsc::Receiver<Vec<u8>>,
     transcript_tx: mpsc::Sender<String>,
     mut commit_rx: mpsc::Receiver<()>,
 ) -> Result<(), MediaError> {
-    let mut last_err = MediaError::SttError("no STT provider available".into());
     let total = builders.len();
+    if total == 0 {
+        return Err(MediaError::SttError("no STT provider available".into()));
+    }
 
-    for (idx, (label, make)) in builders.into_iter().enumerate() {
-        // Fresh inner channels for this provider attempt.
+    let mut last_err = MediaError::SttError("no STT provider available".into());
+    let mut attempt: usize = 0;
+    let mut consecutive_failures: u32 = 0;
+    // Predictive endpointing may report "no more commits" once; remember it so we don't reopen the
+    // commit bridge on a reconnect (the source is gone for the rest of the call).
+    let mut commit_open = true;
+
+    loop {
+        let (label, make) = &builders[attempt % total];
+        attempt += 1;
+
+        // Fresh inner channels for this provider attempt (a reconnect gets a clean socket).
         let (in_ulaw_tx, in_ulaw_rx) = mpsc::channel::<Vec<u8>>(256);
         let (in_commit_tx, in_commit_rx) = mpsc::channel::<()>(8);
 
@@ -126,11 +158,11 @@ pub async fn run_failover_core<L: std::fmt::Debug>(
         let mut handle =
             tokio::spawn(async move { provider.stream(in_ulaw_rx, ttx, in_commit_rx).await });
 
-        let mut commit_open = true;
+        let started = Instant::now();
         let mut upstream_closed = false;
-        // Bridge real audio/commit → the active provider until either the provider task ends (Err
-        // → failover) or the call ends. `handle` is only borrowed inside the select; it is joined
-        // AFTER the loop so there is no borrow/move conflict.
+        // Bridge real audio/commit → the active provider until either the provider task ends
+        // (→ reconnect) or the call ends (→ return). `handle` is only borrowed inside the select;
+        // it is joined AFTER the loop so there is no borrow/move conflict.
         let result: Result<(), MediaError> = loop {
             tokio::select! {
                 maybe_audio = ulaw_rx.recv() => match maybe_audio {
@@ -149,37 +181,55 @@ pub async fn run_failover_core<L: std::fmt::Debug>(
             }
         };
 
+        // Always release this attempt's inner senders so the provider task fully winds down.
+        drop(in_ulaw_tx);
+        drop(in_commit_tx);
+
         if upstream_closed {
-            // The call ended: close the inner channels so the provider wraps up, then we're done —
-            // no failover, regardless of the provider's exit status.
-            drop(in_ulaw_tx);
-            drop(in_commit_tx);
+            // The call ended: wrap up the provider and finish — no reconnect, regardless of exit.
             let _ = handle.await;
             return Ok(());
         }
 
+        // Provider ended on its own while the call is still live → reconnect.
+        let ran = started.elapsed();
         match result {
-            Ok(()) => return Ok(()),
+            Ok(()) => tracing::warn!(
+                "STT provider {:?} closed mid-call after {:?} (call still live); reconnecting",
+                label,
+                ran
+            ),
             Err(e) => {
                 last_err = e;
-                if idx + 1 < total {
-                    tracing::warn!(
-                        "STT provider {:?} failed ({}); failing over to next provider",
-                        label,
-                        last_err
-                    );
-                } else {
-                    tracing::error!(
-                        "STT provider {:?} failed ({}); no more providers to try",
-                        label,
-                        last_err
-                    );
-                }
+                tracing::warn!(
+                    "STT provider {:?} ended mid-call ({}) after {:?}; reconnecting",
+                    label,
+                    last_err,
+                    ran
+                );
             }
         }
-    }
 
-    Err(last_err)
+        // A healthy run (socket lived a while) resets the failure budget so long calls that
+        // reconnect periodically never exhaust it. Rapid, repeated failures do count and eventually
+        // stop us hot-looping when every provider is genuinely down.
+        if ran >= HEALTHY_RUN {
+            consecutive_failures = 0;
+        } else {
+            consecutive_failures += 1;
+            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
+                tracing::error!(
+                    "STT: {} reconnect attempts failed back-to-back; giving up",
+                    consecutive_failures
+                );
+                return Err(last_err);
+            }
+            // Brief backoff before the next attempt so we don't spin on an insta-failing provider.
+            // Zero after a healthy run (fast reconnect on the common vendor-close case).
+            let backoff = Duration::from_millis(100 * u64::from(consecutive_failures.min(5)));
+            tokio::time::sleep(backoff).await;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -230,6 +280,24 @@ mod tests {
         }
     }
 
+    /// Provider that emits `label` on its first frame, then returns `Ok(())` — simulating a vendor
+    /// closing the socket mid-call (e.g. ElevenLabs' realtime session window) while the call lives.
+    struct EmitThenClose(&'static str);
+    #[async_trait]
+    impl Stt for EmitThenClose {
+        async fn stream(
+            &self,
+            mut ulaw_rx: mpsc::Receiver<Vec<u8>>,
+            transcript_tx: mpsc::Sender<String>,
+            _commit_rx: mpsc::Receiver<()>,
+        ) -> Result<(), MediaError> {
+            if let Some(_frame) = ulaw_rx.recv().await {
+                let _ = transcript_tx.send(self.0.into()).await;
+            }
+            Ok(()) // socket "closed" — supervisor must reconnect, not treat this as call-end
+        }
+    }
+
     #[tokio::test]
     async fn fails_over_to_second_provider_and_keeps_transcribing() {
         let (ulaw_tx, ulaw_rx) = mpsc::channel::<Vec<u8>>(64);
@@ -272,6 +340,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn reconnects_same_provider_when_socket_closes_mid_call() {
+        // A single provider whose socket "closes" mid-call on the first attempt, then stays up on
+        // the reconnect. The supervisor must reconnect (not return Ok on the first close) and keep
+        // transcribing — this is the 90s-silence regression guard.
+        let (ulaw_tx, ulaw_rx) = mpsc::channel::<Vec<u8>>(64);
+        let (tx, mut rx) = mpsc::channel::<String>(4);
+        let (_commit_tx, commit_rx) = mpsc::channel::<()>(4);
+
+        let n = Arc::new(AtomicUsize::new(0));
+        let builders: Vec<(&str, SttBuilder)> = vec![(
+            "only",
+            Box::new(move || {
+                if n.fetch_add(1, Ordering::SeqCst) == 0 {
+                    Box::new(EmitThenClose("first turn")) as Box<dyn Stt>
+                } else {
+                    Box::new(EchoProvider) as Box<dyn Stt>
+                }
+            }),
+        )];
+
+        let sup = tokio::spawn(run_failover_core(builders, ulaw_rx, tx, commit_rx));
+
+        let feeder = tokio::spawn(async move {
+            for _ in 0..80 {
+                if ulaw_tx.send(vec![0u8; 160]).await.is_err() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        });
+
+        // First instance emits, then closes; the supervisor reconnects and the second instance
+        // keeps transcribing. We must observe BOTH — proving the mid-call close was recovered.
+        let first = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .expect("first transcript should arrive")
+            .expect("channel open");
+        assert_eq!(first, "first turn");
+        let second = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .expect("second transcript should arrive after reconnect")
+            .expect("channel open");
+        assert_eq!(second, "hello from fallback");
+
+        feeder.abort();
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), sup).await;
+    }
+
+    #[tokio::test]
     async fn returns_error_when_all_providers_fail() {
         let (_ulaw_tx, ulaw_rx) = mpsc::channel::<Vec<u8>>(16);
         let (tx, _rx) = mpsc::channel::<String>(4);
@@ -299,10 +416,13 @@ mod tests {
 
         let res = run_failover_core(builders, ulaw_rx, tx, commit_rx).await;
         assert!(res.is_err());
+        // Both providers fail instantly (< HEALTHY_RUN), so each reconnect counts toward the
+        // give-up budget; the supervisor tries MAX_CONSECUTIVE_FAILURES times (alternating the two
+        // providers) before returning the last error.
         assert_eq!(
             attempts.load(Ordering::SeqCst),
-            2,
-            "both providers attempted"
+            MAX_CONSECUTIVE_FAILURES as usize,
+            "supervisor retries up to the failure cap before giving up"
         );
     }
 

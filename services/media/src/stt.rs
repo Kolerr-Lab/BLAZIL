@@ -68,9 +68,13 @@ impl ElevenLabsStt {
     }
 
     fn ws_url(&self) -> String {
+        // inactivity_timeout=180 (the documented max): ElevenLabs closes a realtime socket after
+        // its inactivity window (default 20s). Continuous Twilio frames normally count as activity,
+        // but we set the ceiling to the max so the socket is never idle-closed prematurely. A
+        // mid-call close from any cause is still handled by the failover supervisor's reconnect.
         let mut url = format!(
             "wss://api.elevenlabs.io/v1/speech-to-text/realtime\
-             ?model_id={}&audio_format=ulaw_8000&commit_strategy={}",
+             ?model_id={}&audio_format=ulaw_8000&commit_strategy={}&inactivity_timeout=180",
             self.params.model_id, self.params.commit_strategy
         );
         // The silence threshold only applies to server-side VAD segmentation.
@@ -189,6 +193,14 @@ impl Stt for ElevenLabsStt {
         }
 
         audio_sender.abort();
-        Ok(())
+        // The read stream ended (vendor Close or stream end) WITHOUT the session tearing us down.
+        // While the call is still live this must be treated as a recoverable mid-call close, not a
+        // clean finish — otherwise the failover supervisor reads `Ok(())` as "call over" and the
+        // agent goes silent for the rest of the call. Returning Err makes the supervisor reconnect.
+        // On a genuine call-end the supervisor has already detected upstream-closed and ignores this
+        // result, so returning Err here is harmless in that path.
+        Err(MediaError::SttError(
+            "elevenlabs stream closed mid-call".into(),
+        ))
     }
 }
