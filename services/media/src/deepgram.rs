@@ -340,6 +340,7 @@ mod tests {
             language: None,
             commit_strategy: strategy.into(),
             vad_silence_secs: 0.3,
+            lexicon: None,
         }
     }
 
