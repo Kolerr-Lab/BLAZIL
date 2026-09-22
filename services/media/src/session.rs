@@ -367,11 +367,13 @@ impl Session {
             .await
             {
                 tracing::error!("STT stream error (all providers): {:?}", e);
-                // Account-level quota outage across providers: the caller can never be
-                // transcribed, so don't leave them in silence — play the fallback clip and end.
-                if e.is_quota() {
-                    fail_quota(&stt_shared, "stt").await;
-                }
+                // Any terminal STT failure — quota outage OR persistent reconnect failures —
+                // means the caller can never be transcribed again. Silently dropping the
+                // transcript channel leaves them in dead air with no hint that anything went
+                // wrong. Always end gracefully: play the fallback clip and close the WS so
+                // Twilio hangs up cleanly. `fail_quota` is idempotent and guards against
+                // double-invocation when both STT and TTS fail simultaneously.
+                fail_quota(&stt_shared, "stt").await;
             }
         }));
 
