@@ -164,6 +164,10 @@ impl Stt for ElevenLabsStt {
         });
 
         // Reader loop: surface committed (final, immutable) transcripts to the session.
+        // Capture WHY the socket ended so the mid-call close error carries ElevenLabs' real reason
+        // (close code + text) instead of a generic string — this is what tells us apart a session
+        // cap vs a rejected param vs a rate/quota close when diagnosing frequent reconnects.
+        let mut close_reason = "read stream ended (no close frame)".to_string();
         while let Some(msg) = read.next().await {
             match msg {
                 Ok(Message::Text(text)) => {
@@ -192,10 +196,17 @@ impl Stt for ElevenLabsStt {
                         _ => {}
                     }
                 }
-                Ok(Message::Close(_)) => break,
+                Ok(Message::Close(frame)) => {
+                    // Log ElevenLabs' actual close code + reason (e.g. 1000/1011/1013 + text) so a
+                    // premature/frequent close is diagnosable instead of opaque.
+                    close_reason = frame
+                        .map(|f| format!("{f:?}"))
+                        .unwrap_or_else(|| "close frame with no payload".to_string());
+                    break;
+                }
                 Err(e) => {
                     audio_sender.abort();
-                    return Err(MediaError::SttError(e.to_string()));
+                    return Err(MediaError::SttError(format!("ws read error: {e}")));
                 }
                 _ => {}
             }
@@ -207,9 +218,10 @@ impl Stt for ElevenLabsStt {
         // clean finish — otherwise the failover supervisor reads `Ok(())` as "call over" and the
         // agent goes silent for the rest of the call. Returning Err makes the supervisor reconnect.
         // On a genuine call-end the supervisor has already detected upstream-closed and ignores this
-        // result, so returning Err here is harmless in that path.
-        Err(MediaError::SttError(
-            "elevenlabs stream closed mid-call".into(),
-        ))
+        // result, so returning Err here is harmless in that path. The captured close reason rides
+        // along so the supervisor's "reconnecting" warn shows exactly why ElevenLabs dropped us.
+        Err(MediaError::SttError(format!(
+            "elevenlabs stream closed mid-call ({close_reason})"
+        )))
     }
 }
