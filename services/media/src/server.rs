@@ -45,7 +45,7 @@ pub async fn serve(config: Config) -> Result<()> {
         None
     };
 
-    let speaker = if config.speaker_gate_enabled {
+    let speaker = if config.speaker_gate_on() {
         match SpeakerEmbedder::load(&config.speaker_model_path) {
             Ok(sp) => {
                 tracing::info!("Target-speaker embedder loaded once at startup (shared)");

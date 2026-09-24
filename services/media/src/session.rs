@@ -309,11 +309,15 @@ impl Session {
             let _ = sp.try_send((pcm.clone(), is_speech));
         }
 
-        // Forward to STT — gated by the target-speaker decision when the gate is running. Before the
-        // caller is enrolled we pass everything; once enrolled, a non-target window feeds μ-law
-        // silence (0xFF) so a background voice / TV never reaches transcription.
+        // Forward to STT — gated by the target-speaker decision ONLY in "enforce" mode. In "shadow"
+        // mode the gate loop still runs and LOGS its would-mute decisions (to measure the real
+        // 8 kHz false-reject rate) but we NEVER feed silence — audio always passes, so shadow can
+        // never cause the dead-air we hit. When enforcing: before enroll we pass everything; once
+        // enrolled, a non-target window feeds μ-law silence (0xFF) so background voice/TV never
+        // reaches transcription.
         if let Some(tx) = &self.stt_tx {
             let pass = self.speaker_tx.is_none()
+                || !self.config.speaker_gate_enforcing()
                 || !self.speaker_enrolled.load(Ordering::Relaxed)
                 || self.speaker_active.load(Ordering::Relaxed);
             if pass {

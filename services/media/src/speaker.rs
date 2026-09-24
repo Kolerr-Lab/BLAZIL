@@ -266,12 +266,21 @@ pub async fn speaker_gate_loop(
                 .await
                 .unwrap_or(1.0);
                 if sim >= threshold {
+                    if miss_streak > 0 {
+                        tracing::debug!("speaker gate: target back (sim={sim:.3} >= {threshold})");
+                    }
                     miss_streak = 0;
                     active.store(true, Ordering::Relaxed);
                 } else {
                     miss_streak += 1;
                     if miss_streak >= MISS_STREAK_TO_MUTE {
                         active.store(false, Ordering::Relaxed);
+                        // Shadow-mode measurement signal: how often the gate WOULD cut the caller.
+                        // In enforce mode this window feeds STT silence; in shadow it only logs.
+                        tracing::info!(
+                            "speaker gate: WOULD-MUTE (sim={sim:.3} < thr={threshold}, \
+                             miss_streak={miss_streak}) — non-target/background"
+                        );
                     }
                 }
             }
