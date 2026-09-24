@@ -6,6 +6,7 @@
 //! the handshake (not an in-band field). Protocol: send a BOS message with voice settings,
 //! then the text, then an EOS empty-text message to flush generation.
 
+use crate::config::Config;
 use crate::error::MediaError;
 use async_trait::async_trait;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
@@ -25,6 +26,23 @@ pub trait Tts: Send + Sync {
         text_rx: mpsc::Receiver<String>,
         audio_tx: mpsc::Sender<Vec<u8>>,
     ) -> Result<(), MediaError>;
+}
+
+/// Pick the TTS provider from config (`TTS_PROVIDER`). Default ElevenLabs; "cartesia" = Sonic A/B.
+pub fn build_tts(config: &Config) -> Box<dyn Tts> {
+    if config.tts_provider == "cartesia" {
+        Box::new(crate::cartesia::CartesiaTts::new(
+            config.cartesia_api_key.clone(),
+            config.cartesia_model.clone(),
+            config.cartesia_version.clone(),
+            config.cartesia_voice_id.clone(),
+        ))
+    } else {
+        Box::new(ElevenLabsTts::new(
+            config.elevenlabs_api_key.clone(),
+            config.elevenlabs_tts_model.clone(),
+        ))
+    }
 }
 
 #[derive(Debug, Deserialize)]

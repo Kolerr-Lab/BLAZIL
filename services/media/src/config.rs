@@ -18,6 +18,17 @@ pub struct Config {
     pub elevenlabs_api_key: String,
     pub elevenlabs_tts_model: String,
     pub elevenlabs_stt_model: String,
+
+    // ── TTS provider (Cartesia A/B; default elevenlabs) ──────────────────────────────────────────
+    /// "elevenlabs" (default) or "cartesia". Cartesia Sonic is faster + more natural; A/B via env.
+    pub tts_provider: String,
+    pub cartesia_api_key: String,
+    /// Cartesia model id (default "sonic-2").
+    pub cartesia_model: String,
+    /// Cartesia API version date header (default "2024-11-13").
+    pub cartesia_version: String,
+    /// Phase A: one Cartesia voice for all agents (per-agent Cartesia voices = Phase B).
+    pub cartesia_voice_id: String,
     /// ISO-639 code to bias STT; empty/None = auto-detect.
     pub stt_language_code: Option<String>,
     /// Fallback TTS voice used only when the backend returns no per-agent voice.
@@ -101,6 +112,13 @@ impl Config {
                 .unwrap_or_else(|_| "eleven_turbo_v2_5".into()),
             elevenlabs_stt_model: env::var("ELEVENLABS_STT_MODEL")
                 .unwrap_or_else(|_| "scribe_v2_realtime".into()),
+            tts_provider: env::var("TTS_PROVIDER")
+                .map(|v| v.trim().to_lowercase())
+                .unwrap_or_else(|_| "elevenlabs".into()),
+            cartesia_api_key: env::var("CARTESIA_API_KEY").unwrap_or_default(),
+            cartesia_model: env::var("CARTESIA_MODEL").unwrap_or_else(|_| "sonic-2".into()),
+            cartesia_version: env::var("CARTESIA_VERSION").unwrap_or_else(|_| "2024-11-13".into()),
+            cartesia_voice_id: env::var("CARTESIA_VOICE_ID").unwrap_or_default(),
             stt_language_code: env::var("STT_LANGUAGE_CODE").ok().filter(|s| !s.is_empty()),
             default_voice_id: env::var("DEFAULT_VOICE_ID")
                 .unwrap_or_else(|_| "21m00Tcm4TlvDq8ikWAM".into()),

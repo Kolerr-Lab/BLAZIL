@@ -17,7 +17,7 @@ use crate::{
     config::Config,
     error::MediaError,
     stt::SttParams,
-    tts::{ElevenLabsTts, Tts},
+    tts::build_tts,
     turn::{TurnClient, TurnEvent, TurnRequest},
     turn_detector::SmartTurn,
     twilio::{InboundMessage, OutboundMessage},
@@ -709,10 +709,7 @@ async fn flush_sentences(
 
 /// Synthesize a single fixed line (used for connect/error fallbacks) and relay it to Twilio.
 async fn speak_once(shared: &Shared, voice_id: &str, line: &str) {
-    let tts = ElevenLabsTts::new(
-        shared.config.elevenlabs_api_key.clone(),
-        shared.config.elevenlabs_tts_model.clone(),
-    );
+    let tts = build_tts(&shared.config);
     let (text_tx, text_rx) = mpsc::channel::<String>(1);
     let (audio_tx, mut audio_rx) = mpsc::channel::<Vec<u8>>(256);
     let _ = text_tx.send(line.to_string()).await;
@@ -841,10 +838,7 @@ async fn run_response(shared: Shared, text: String, is_greeting: bool) {
     }
     tracing::info!("Turn streaming (voice={})", voice_id);
 
-    let tts = ElevenLabsTts::new(
-        shared.config.elevenlabs_api_key.clone(),
-        shared.config.elevenlabs_tts_model.clone(),
-    );
+    let tts = build_tts(&shared.config);
     let (text_tx, text_rx) = mpsc::channel::<String>(16);
     let (audio_tx, mut audio_rx) = mpsc::channel::<Vec<u8>>(256);
 

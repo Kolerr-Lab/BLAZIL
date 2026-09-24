@@ -1,5 +1,6 @@
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+mod cartesia;
 mod codec;
 mod config;
 mod deepgram;
