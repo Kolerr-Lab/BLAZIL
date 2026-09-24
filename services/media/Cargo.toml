@@ -34,6 +34,11 @@ ort = "2.0.0-rc.13"
 ndarray = "0.16"
 rustfft = "6"
 
+# Noise-robustness (supersedes the CAM++ speaker gate): RNNoise denoise, pure-Rust (weights baked
+# into the crate — NO external model file / ONNX). Only ATTENUATES background noise; never gates
+# speech, so it can never cause dead-air. Applied before STT when DENOISE_ENABLED is on.
+nnnoiseless = { version = "0.5", default-features = false }
+
 # In-process reuse
 blazil-transport = { path = "../../core/transport" }
 

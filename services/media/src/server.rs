@@ -10,7 +10,6 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 
 use crate::config::Config;
-use crate::speaker::SpeakerEmbedder;
 use crate::turn_detector::SmartTurn;
 
 #[derive(Clone)]
@@ -21,9 +20,6 @@ struct AppState {
     // loaded per call in the Session's Start handler — that per-call ONNX load blocked setup and
     // spiked media-plane CPU. None when predictive endpointing is off or the model failed to load.
     smart_turn: Option<Arc<SmartTurn>>,
-    // Target-speaker embedder, likewise loaded once and shared. None when SPEAKER_GATE_ENABLED is
-    // off or the model failed to load (→ the audio path never gates, pure passthrough).
-    speaker: Option<Arc<SpeakerEmbedder>>,
 }
 
 pub async fn serve(config: Config) -> Result<()> {
@@ -45,26 +41,7 @@ pub async fn serve(config: Config) -> Result<()> {
         None
     };
 
-    let speaker = if config.speaker_gate_on() {
-        match SpeakerEmbedder::load(&config.speaker_model_path) {
-            Ok(sp) => {
-                tracing::info!("Target-speaker embedder loaded once at startup (shared)");
-                Some(Arc::new(sp))
-            }
-            Err(e) => {
-                tracing::error!("Speaker embedder load failed, gate disabled: {e}");
-                None
-            }
-        }
-    } else {
-        None
-    };
-
-    let state = AppState {
-        config,
-        smart_turn,
-        speaker,
-    };
+    let state = AppState { config, smart_turn };
 
     let app = Router::new()
         .route("/health", get(health_check))
@@ -93,11 +70,7 @@ async fn twilio_ws_handler(
 ) -> impl IntoResponse {
     ws.on_upgrade(|socket| async move {
         tracing::info!("New Twilio WebSocket connection established");
-        let session = crate::session::Session::new(
-            state.config.clone(),
-            state.smart_turn.clone(),
-            state.speaker.clone(),
-        );
+        let session = crate::session::Session::new(state.config.clone(), state.smart_turn.clone());
         session.run(socket).await;
     })
 }

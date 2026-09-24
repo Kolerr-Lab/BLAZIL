@@ -37,14 +37,6 @@ RUN mkdir -p /opt/models/smart-turn-v3 \
     && curl -fsSL -o /opt/models/smart-turn-v3/model.onnx \
        https://huggingface.co/pipecat-ai/smart-turn-v3/resolve/main/smart-turn-v3.2-cpu.onnx
 
-# Target-speaker gate (Phase 3): bake the CAM++ speaker-embedding ONNX model so runtime never
-# downloads. CAM++ (3D-Speaker, zh-cn 16k-common) — ~20 MB, CPU ~5 ms/embed — is the model
-# validated by the speaker::tests suite (Kaldi-compatible fbank + cosine gate).
-RUN mkdir -p /opt/models/speaker \
-    && curl -fL \
-       -o /opt/models/speaker/campplus.onnx \
-       https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx
-
 # Quota-outage fallback clip (μ-law 8k raw). Optional: the dir may hold only .gitkeep, in which
 # case the runtime hangs up gracefully with no clip. Drop a quota.ulaw here to give callers a spoken
 # "we're having trouble, please call back" during an ElevenLabs quota outage.

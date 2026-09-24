@@ -78,29 +78,13 @@ pub struct Config {
     /// the current entry. Default 2500ms.
     pub dtmf_interdigit_ms: u64,
 
-    // ── Target-speaker isolation (noise robustness) — STAGED, off by default ─────────────────────
-    /// Path to the CAM++ speaker-embedding ONNX (fbank input [N,T,80]). Baked into the image like
-    /// the Smart Turn model.
-    pub speaker_model_path: String,
-    /// Cosine-similarity threshold: below this vs the enrolled embedding = a different speaker.
-    pub speaker_threshold: f32,
-    /// Gate mode: "off" (no gate), "shadow" (compute + LOG the decision but NEVER mute STT — used to
-    /// measure the real 8 kHz false-reject rate safely), or "enforce" (actually feed μ-law silence
-    /// for non-target windows). Defaults from the legacy `SPEAKER_GATE_ENABLED` (true→enforce).
-    pub speaker_gate_mode: String,
+    // ── Noise robustness ─────────────────────────────────────────────────────────────────────────
+    /// Background-noise suppression (RNNoise) on the STT input. Default off. Only attenuates noise
+    /// and never mutes speech, so it can't cause dead-air. A/B when on.
+    pub denoise_enabled: bool,
 }
 
 impl Config {
-    /// Gate should run (embedder loads, gate loop spawns) in shadow OR enforce.
-    pub fn speaker_gate_on(&self) -> bool {
-        matches!(self.speaker_gate_mode.as_str(), "shadow" | "enforce")
-    }
-
-    /// Only "enforce" actually mutes STT (feeds silence). "shadow" logs but always passes audio.
-    pub fn speaker_gate_enforcing(&self) -> bool {
-        self.speaker_gate_mode == "enforce"
-    }
-
     pub fn from_env() -> Result<Self> {
         Ok(Self {
             // Railway injects $PORT; honor it, then MEDIA_BIND_ADDR, then a local default.
@@ -163,26 +147,9 @@ impl Config {
             deepgram_api_key: env::var("DEEPGRAM_API_KEY").unwrap_or_default(),
             deepgram_stt_model: env::var("DEEPGRAM_STT_MODEL").unwrap_or_else(|_| "nova-3".into()),
             dtmf_interdigit_ms: env_parse("DTMF_INTERDIGIT_MS", 2500u64),
-            speaker_model_path: env::var("SPEAKER_MODEL_PATH")
-                .unwrap_or_else(|_| "/opt/models/speaker/campplus.onnx".into()),
-            speaker_threshold: env_parse("SPEAKER_THRESHOLD", 0.55f32),
-            speaker_gate_mode: {
-                // Explicit SPEAKER_GATE_MODE wins; else derive from the legacy on/off flag.
-                let legacy_on = env::var("SPEAKER_GATE_ENABLED")
-                    .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-                    .unwrap_or(false);
-                env::var("SPEAKER_GATE_MODE")
-                    .ok()
-                    .map(|v| v.trim().to_lowercase())
-                    .filter(|v| matches!(v.as_str(), "off" | "shadow" | "enforce"))
-                    .unwrap_or_else(|| {
-                        if legacy_on {
-                            "enforce".into()
-                        } else {
-                            "off".into()
-                        }
-                    })
-            },
+            denoise_enabled: env::var("DENOISE_ENABLED")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false),
         })
     }
 }

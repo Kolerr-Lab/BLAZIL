@@ -16,7 +16,6 @@ use crate::{
     codec,
     config::Config,
     error::MediaError,
-    speaker::{speaker_gate_loop, SpeakerEmbedder},
     stt::SttParams,
     tts::{ElevenLabsTts, Tts},
     turn::{TurnClient, TurnEvent, TurnRequest},
@@ -72,36 +71,30 @@ pub struct Session {
     /// Shared Smart Turn model (loaded once at startup, not per call). `None` when predictive
     /// endpointing is off or the model failed to load at boot → falls back to VAD endpointing.
     smart_turn: Option<Arc<SmartTurn>>,
-    /// Shared target-speaker embedder (once at startup). `None` = gate off → pure passthrough.
-    speaker: Option<Arc<SpeakerEmbedder>>,
-    /// Per-frame (pcm, is_speech) to the speaker gate loop. `Some` only when the gate is running.
-    speaker_tx: Option<mpsc::Sender<(Vec<i16>, bool)>>,
-    /// Published by the gate loop, read on the audio path: target enrolled? current speaker = target?
-    speaker_enrolled: Arc<AtomicBool>,
-    speaker_active: Arc<AtomicBool>,
+    /// RNNoise denoiser for the STT input (Some only when DENOISE_ENABLED). Attenuates background
+    /// noise; never mutes — cannot cause dead-air.
+    denoiser: Option<crate::denoise::Denoiser>,
     shared: Option<Shared>,
     tasks: Vec<JoinHandle<()>>,
 }
 
 impl Session {
-    pub fn new(
-        config: Arc<Config>,
-        smart_turn: Option<Arc<SmartTurn>>,
-        speaker: Option<Arc<SpeakerEmbedder>>,
-    ) -> Self {
+    pub fn new(config: Arc<Config>, smart_turn: Option<Arc<SmartTurn>>) -> Self {
         let vad = VadEngine::new(config.vad_aggressiveness);
+        let denoiser = if config.denoise_enabled {
+            Some(crate::denoise::Denoiser::new())
+        } else {
+            None
+        };
         Self {
             config,
             vad,
+            denoiser,
             audio_buffer: Vec::with_capacity(codec::SAMPLES_PER_FRAME * 4),
             stt_tx: None,
             endpoint_tx: None,
             dtmf_tx: None,
             smart_turn,
-            speaker,
-            speaker_tx: None,
-            speaker_enrolled: Arc::new(AtomicBool::new(false)),
-            speaker_active: Arc::new(AtomicBool::new(false)),
             shared: None,
             tasks: Vec::new(),
         }
@@ -229,20 +222,6 @@ impl Session {
                     self.config.dtmf_interdigit_ms,
                 )));
 
-                // Target-speaker gate (#3): enroll the caller's own voice, then filter background
-                // voices/TV out of the STT stream. Only spawned when the embedder loaded (flag on).
-                if let Some(emb) = &self.speaker {
-                    let (sp_tx, sp_rx) = mpsc::channel::<(Vec<i16>, bool)>(64);
-                    self.speaker_tx = Some(sp_tx);
-                    self.tasks.push(tokio::spawn(speaker_gate_loop(
-                        Arc::clone(emb),
-                        sp_rx,
-                        Arc::clone(&self.speaker_enrolled),
-                        Arc::clone(&self.speaker_active),
-                        self.config.speaker_threshold,
-                    )));
-                }
-
                 // Agent greets first (in its own persona) unless disabled.
                 if !self.config.greeting_prompt.trim().is_empty() {
                     let greet = shared.clone();
@@ -304,26 +283,18 @@ impl Session {
         let state = self.vad.process_frame(&pcm);
         let is_speech = state == VadState::Speech;
 
-        // Feed the target-speaker gate (runs off the audio path); it publishes enrolled/active.
-        if let Some(sp) = &self.speaker_tx {
-            let _ = sp.try_send((pcm.clone(), is_speech));
-        }
-
-        // Forward to STT — gated by the target-speaker decision ONLY in "enforce" mode. In "shadow"
-        // mode the gate loop still runs and LOGS its would-mute decisions (to measure the real
-        // 8 kHz false-reject rate) but we NEVER feed silence — audio always passes, so shadow can
-        // never cause the dead-air we hit. When enforcing: before enroll we pass everything; once
-        // enrolled, a non-target window feeds μ-law silence (0xFF) so background voice/TV never
-        // reaches transcription.
-        if let Some(tx) = &self.stt_tx {
-            let pass = self.speaker_tx.is_none()
-                || !self.config.speaker_gate_enforcing()
-                || !self.speaker_enrolled.load(Ordering::Relaxed)
-                || self.speaker_active.load(Ordering::Relaxed);
-            if pass {
-                let _ = tx.try_send(frame);
+        // Forward to STT. When DENOISE_ENABLED, clean background noise off the frame first
+        // (re-encode to μ-law); otherwise pass the original frame through untouched. Denoise only
+        // attenuates noise — it never mutes — so this path can never produce dead-air.
+        if self.stt_tx.is_some() {
+            // Compute the outbound frame BEFORE re-borrowing stt_tx (denoiser needs &mut self).
+            let out = if let Some(d) = self.denoiser.as_mut() {
+                codec::encode_frame(&d.process_8k(&pcm))
             } else {
-                let _ = tx.try_send(vec![0xFFu8; frame.len()]);
+                frame
+            };
+            if let Some(tx) = &self.stt_tx {
+                let _ = tx.try_send(out);
             }
         }
 
@@ -394,8 +365,7 @@ impl Session {
         // Consume committed transcripts → drive backend turns (one at a time).
         self.tasks.push(tokio::spawn(async move {
             while let Some(transcript) = transcript_rx.recv().await {
-                // Skip empty/whitespace commits (e.g. when the speaker gate fed STT silence for a
-                // background voice) so we never run a turn on nothing.
+                // Skip empty/whitespace commits so we never run a turn on nothing.
                 if transcript.trim().is_empty() {
                     continue;
                 }
