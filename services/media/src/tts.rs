@@ -28,6 +28,15 @@ pub trait Tts: Send + Sync {
     ) -> Result<(), MediaError>;
 }
 
+/// The fallback TTS engine (always ElevenLabs). Used to recover a turn when the primary provider
+/// (e.g. Cartesia) produced no audio, so a Cartesia outage never leaves the caller in silence.
+pub fn build_fallback_tts(config: &Config) -> ElevenLabsTts {
+    ElevenLabsTts::new(
+        config.elevenlabs_api_key.clone(),
+        config.elevenlabs_tts_model.clone(),
+    )
+}
+
 /// Pick the TTS provider from config (`TTS_PROVIDER`). Default ElevenLabs; "cartesia" = Sonic A/B.
 pub fn build_tts(config: &Config) -> Box<dyn Tts> {
     if config.tts_provider == "cartesia" {

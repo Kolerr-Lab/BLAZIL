@@ -55,13 +55,20 @@ impl CartesiaTts {
 impl Tts for CartesiaTts {
     async fn speak(
         &self,
-        _voice_id: &str, // Phase A: ignore the ElevenLabs id; use the configured Cartesia voice.
+        voice_id: &str,
         mut text_rx: mpsc::Receiver<String>,
         audio_tx: mpsc::Sender<Vec<u8>>,
     ) -> Result<(), MediaError> {
-        if self.api_key.is_empty() || self.voice_id.is_empty() {
+        // Use the agent's selected Cartesia voice (the picker now stores Cartesia IDs); fall back to
+        // the configured default when the agent has no/blank voice or a stale non-Cartesia id.
+        let voice = if voice_id.trim().is_empty() {
+            self.voice_id.clone()
+        } else {
+            voice_id.trim().to_string()
+        };
+        if self.api_key.is_empty() || voice.is_empty() {
             return Err(MediaError::TtsError(
-                "Cartesia not configured (CARTESIA_API_KEY / CARTESIA_VOICE_ID)".into(),
+                "Cartesia not configured (CARTESIA_API_KEY / voice)".into(),
             ));
         }
 
@@ -76,7 +83,6 @@ impl Tts for CartesiaTts {
 
         let context_id = uuid::Uuid::new_v4().to_string();
         let model = self.model.clone();
-        let voice = self.voice_id.clone();
         let ctx = context_id.clone();
 
         // Writer: one message per text chunk (continue:true), then a final flush (continue:false).

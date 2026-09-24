@@ -17,7 +17,7 @@ use crate::{
     config::Config,
     error::MediaError,
     stt::SttParams,
-    tts::build_tts,
+    tts::{build_fallback_tts, build_tts, Tts},
     turn::{TurnClient, TurnEvent, TurnRequest},
     turn_detector::SmartTurn,
     twilio::{InboundMessage, OutboundMessage},
@@ -707,9 +707,15 @@ async fn flush_sentences(
     }
 }
 
-/// Synthesize a single fixed line (used for connect/error fallbacks) and relay it to Twilio.
+/// Synthesize a single fixed line with the PRIMARY TTS (connect/greeting/error fallbacks).
 async fn speak_once(shared: &Shared, voice_id: &str, line: &str) {
-    let tts = build_tts(&shared.config);
+    speak_once_with(shared, build_tts(&shared.config), voice_id, line).await;
+}
+
+/// Synthesize a single fixed line with a SPECIFIC TTS engine and relay it to Twilio. Lets the
+/// zero-audio recovery re-speak through the ElevenLabs fallback when the primary (Cartesia) produced
+/// nothing — so a Cartesia outage never leaves the caller in silence.
+async fn speak_once_with(shared: &Shared, tts: Box<dyn Tts>, voice_id: &str, line: &str) {
     let (text_tx, text_rx) = mpsc::channel::<String>(1);
     let (audio_tx, mut audio_rx) = mpsc::channel::<Vec<u8>>(256);
     let _ = text_tx.send(line.to_string()).await;
@@ -950,16 +956,19 @@ async fn run_response(shared: Shared, text: String, is_greeting: bool) {
         let quota = matches!(tts_err_rx.await, Ok(Some(ref e)) if e.is_quota());
         if quota {
             fail_quota(&shared, "tts").await;
-        } else if voice_id != default_voice {
-            if let Ok(answer) = answer_rx.await {
-                let answer = answer.trim().to_string();
-                if !answer.is_empty() {
-                    tracing::warn!(
-                        "Primary TTS voice '{}' produced no audio; retrying with default voice",
-                        voice_id
-                    );
-                    speak_once(&shared, &default_voice, &answer).await;
-                }
+        } else if let Ok(answer) = answer_rx.await {
+            // Primary TTS produced no audio (a Cartesia outage/bad voice, or a stale ElevenLabs
+            // voice_id). Re-speak the full answer through the ElevenLabs FALLBACK engine with the
+            // known-good default voice, so the caller is never left in silence. (When ElevenLabs is
+            // already the primary, this is the same recover-with-default-voice behavior as before.)
+            let answer = answer.trim().to_string();
+            if !answer.is_empty() {
+                tracing::warn!(
+                    "Primary TTS voice '{}' produced no audio; retrying via ElevenLabs fallback",
+                    voice_id
+                );
+                let fallback = Box::new(build_fallback_tts(&shared.config));
+                speak_once_with(&shared, fallback, &default_voice, &answer).await;
             }
         }
     }
