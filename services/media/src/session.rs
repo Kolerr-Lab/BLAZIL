@@ -968,7 +968,15 @@ async fn run_response(shared: Shared, text: String, is_greeting: bool) {
                     voice_id
                 );
                 let fallback = Box::new(build_fallback_tts(&shared.config));
-                speak_once_with(&shared, fallback, &default_voice, &answer).await;
+                // The fallback is ElevenLabs, so it needs an ElevenLabs voice — NOT default_voice,
+                // which is a Cartesia ID under TTS_PROVIDER=cartesia. Fall back to default_voice only
+                // when no dedicated EL fallback voice is configured.
+                let el_voice = if shared.config.elevenlabs_fallback_voice_id.trim().is_empty() {
+                    default_voice.clone()
+                } else {
+                    shared.config.elevenlabs_fallback_voice_id.clone()
+                };
+                speak_once_with(&shared, fallback, &el_voice, &answer).await;
             }
         }
     }

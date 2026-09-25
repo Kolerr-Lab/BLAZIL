@@ -33,6 +33,10 @@ pub struct Config {
     pub stt_language_code: Option<String>,
     /// Fallback TTS voice used only when the backend returns no per-agent voice.
     pub default_voice_id: String,
+    /// Voice ID for the ElevenLabs *fallback* engine (used only when the primary — Cartesia —
+    /// produces no audio). Must be an ElevenLabs voice ID, since `default_voice_id` now holds a
+    /// Cartesia ID under TTS_PROVIDER=cartesia. Empty = reuse `default_voice_id`.
+    pub elevenlabs_fallback_voice_id: String,
     pub orch_base_url: String,
     /// gRPC endpoint of the backend Orchestrator (streaming turn). Private network, h2c.
     pub orch_grpc_url: String,
@@ -121,6 +125,10 @@ impl Config {
             cartesia_voice_id: env::var("CARTESIA_VOICE_ID").unwrap_or_default(),
             stt_language_code: env::var("STT_LANGUAGE_CODE").ok().filter(|s| !s.is_empty()),
             default_voice_id: env::var("DEFAULT_VOICE_ID")
+                .unwrap_or_else(|_| "21m00Tcm4TlvDq8ikWAM".into()),
+            // Keep a known-good ElevenLabs voice for the fallback engine, independent of
+            // default_voice_id (which is a Cartesia ID when Cartesia is primary).
+            elevenlabs_fallback_voice_id: env::var("ELEVENLABS_FALLBACK_VOICE_ID")
                 .unwrap_or_else(|_| "21m00Tcm4TlvDq8ikWAM".into()),
             orch_base_url: env::var("ORCH_BASE_URL")
                 .unwrap_or_else(|_| "http://localhost:8000".into()),
