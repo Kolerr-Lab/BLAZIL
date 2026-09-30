@@ -48,6 +48,21 @@ pub struct TurnRequest {
     pub call_id: String,
     pub text: String,
     pub trace_id: String,
+    /// What language the orchestrator should answer in for THIS turn, when it differs from the
+    /// agent's configured default (i.e. the caller switched and the policy followed).
+    ///
+    /// Carried as gRPC **metadata**, not as a proto field, on purpose: adding a field to
+    /// `voice.proto` would require regenerating the backend's checked-in Python stubs, which is a
+    /// build step in a different repo. Metadata is exactly the right shape for per-call context
+    /// like this, needs no schema change on either side, and an orchestrator that ignores the
+    /// header simply behaves as it does today.
+    pub answer_language: Option<String>,
+    /// What the recogniser reported hearing on THIS utterance, before any policy was applied.
+    ///
+    /// Sent purely so the dashboard can compare heard vs answered vs configured. Keeping it
+    /// separate from `answer_language` matters: they differ on every turn where the policy is still
+    /// accumulating evidence, and collapsing them would hide exactly the cases worth looking at.
+    pub detected_language: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -80,6 +95,8 @@ impl TurnClient {
         let channel = shared_channel(&self.grpc_url).await?;
         let mut client = OrchestratorClient::new(channel);
 
+        let answer_language = req.answer_language.clone();
+        let detected_language = req.detected_language.clone();
         let mut request = Request::new(pb::TurnRequest {
             tenant_id: req.tenant_id,
             agent_id: req.agent_id,
@@ -91,6 +108,19 @@ impl TurnClient {
             .parse()
             .map_err(|_| MediaError::TurnError("bad auth metadata".into()))?;
         request.metadata_mut().insert("authorization", meta);
+        // Per-turn reply language. Dropped silently if it somehow isn't a valid header value —
+        // a bad locale string must never fail the turn; the orchestrator just uses its default.
+        if let Some(lang) = answer_language.filter(|l| !l.is_empty()) {
+            if let Ok(v) = MetadataValue::try_from(lang.as_str()) {
+                request.metadata_mut().insert("x-answer-language", v);
+            }
+        }
+        // Observability only — the orchestrator stores it and never acts on it.
+        if let Some(lang) = detected_language.filter(|l| !l.is_empty()) {
+            if let Ok(v) = MetadataValue::try_from(lang.as_str()) {
+                request.metadata_mut().insert("x-detected-language", v);
+            }
+        }
 
         let mut streaming = client
             .run_turn_stream(request)

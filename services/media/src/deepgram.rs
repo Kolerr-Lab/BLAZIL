@@ -17,7 +17,7 @@
 //! a socket when it is the active provider (see `stt_failover`), so a healthy primary pays nothing.
 
 use crate::error::MediaError;
-use crate::stt::Stt;
+use crate::stt::{Stt, Transcript};
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
@@ -125,6 +125,10 @@ struct DgEvent {
 struct DgChannel {
     #[serde(default)]
     alternatives: Vec<DgAlt>,
+    /// BCP-47 tags for every language heard in this channel, ordered by word count. Only populated
+    /// under `language=multi` (Deepgram has no separate language-detection feature for streaming).
+    #[serde(default)]
+    languages: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -143,20 +147,47 @@ impl DgEvent {
             .trim()
             .to_string()
     }
+
+    /// The dominant language of this segment, if Deepgram reported any.
+    ///
+    /// Under `language=multi` Deepgram returns a `languages` ARRAY — every language it heard in the
+    /// channel, ordered by word count — rather than a single label, because code-switching within
+    /// one utterance is the case the multilingual model exists for. We take the first entry (the
+    /// most-spoken) and strip any region suffix, so `en-US` and `en-GB` both become `en`: the
+    /// session decides which language to *answer* in, and that decision has no use for a region.
+    fn language(&self) -> Option<String> {
+        let raw = self
+            .channel
+            .as_ref()
+            .and_then(|c| c.languages.first())
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())?;
+        Some(raw.split(['-', '_']).next().unwrap_or(raw).to_lowercase())
+    }
 }
 
 /// Join and emit the buffered utterance to the session. Returns false if the receiver was dropped
 /// (session gone / barge-in) so the caller can stop cleanly.
-async fn emit(buffer: &mut Vec<String>, tx: &mpsc::Sender<String>) -> bool {
+async fn emit(
+    buffer: &mut Vec<String>,
+    language: &mut Option<String>,
+    tx: &mpsc::Sender<Transcript>,
+) -> bool {
     if buffer.is_empty() {
         return true;
     }
     let text = buffer.join(" ").trim().to_string();
     buffer.clear();
+    let lang = language.take();
     if text.is_empty() {
         return true;
     }
-    tx.send(text).await.is_ok()
+    tx.send(Transcript {
+        text,
+        language: lang,
+    })
+    .await
+    .is_ok()
 }
 
 /// Map a Deepgram close/error into a `MediaError`. Quota/limit/auth reasons carry keywords so
@@ -170,7 +201,7 @@ impl Stt for DeepgramStt {
     async fn stream(
         &self,
         mut ulaw_rx: mpsc::Receiver<Vec<u8>>,
-        transcript_tx: mpsc::Sender<String>,
+        transcript_tx: mpsc::Sender<Transcript>,
         mut commit_rx: mpsc::Receiver<()>,
     ) -> Result<(), MediaError> {
         let manual = self.is_manual();
@@ -245,6 +276,9 @@ impl Stt for DeepgramStt {
 
         // Reader loop: accumulate finalized segments; emit one committed transcript per utterance.
         let mut buffer: Vec<String> = Vec::new();
+        // Language of the utterance being accumulated. Last non-empty report wins: segments arrive
+        // piecemeal and early ones can be too short to classify.
+        let mut seg_language: Option<String> = None;
         let mut pending_since: Option<Instant> = None;
         let mut ticker = tokio::time::interval(Duration::from_millis(100));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -258,7 +292,7 @@ impl Stt for DeepgramStt {
                         match pending_since {
                             None => pending_since = Some(Instant::now()),
                             Some(t) if t.elapsed() >= FLUSH_GRACE => {
-                                if !emit(&mut buffer, &transcript_tx).await {
+                                if !emit(&mut buffer, &mut seg_language, &transcript_tx).await {
                                     break Ok(());
                                 }
                                 pending.store(false, Ordering::Release);
@@ -282,22 +316,33 @@ impl Stt for DeepgramStt {
                                     let speech_final = ev.speech_final.unwrap_or(false);
                                     if is_final && !transcript.is_empty() {
                                         buffer.push(transcript);
+                                        if let Some(l) = ev.language() {
+                                            seg_language = Some(l);
+                                        }
                                     }
                                     if manual {
                                         if pending.load(Ordering::Acquire) && is_final {
-                                            if !emit(&mut buffer, &transcript_tx).await {
+                                            if !emit(&mut buffer, &mut seg_language, &transcript_tx)
+                                                .await
+                                            {
                                                 break Ok(());
                                             }
                                             pending.store(false, Ordering::Release);
                                             pending_since = None;
                                         }
-                                    } else if speech_final && !emit(&mut buffer, &transcript_tx).await {
+                                    } else if speech_final
+                                        && !emit(&mut buffer, &mut seg_language, &transcript_tx)
+                                            .await
+                                    {
                                         break Ok(());
                                     }
                                 }
                                 Some("UtteranceEnd") => {
                                     // VAD strategy belt-and-suspenders: flush if speech_final was missed.
-                                    if !manual && !emit(&mut buffer, &transcript_tx).await {
+                                    if !manual
+                                        && !emit(&mut buffer, &mut seg_language, &transcript_tx)
+                                            .await
+                                    {
                                         break Ok(());
                                     }
                                 }
@@ -391,12 +436,35 @@ mod tests {
 
     #[tokio::test]
     async fn emit_joins_and_clears_buffer() {
-        let (tx, mut rx) = mpsc::channel::<String>(4);
+        let (tx, mut rx) = mpsc::channel::<Transcript>(4);
         let mut buf = vec!["hello".to_string(), "world".to_string()];
-        assert!(emit(&mut buf, &tx).await);
-        assert_eq!(rx.recv().await.unwrap(), "hello world");
+        let mut lang = Some("vi".to_string());
+        assert!(emit(&mut buf, &mut lang, &tx).await);
+        let got = rx.recv().await.unwrap();
+        assert_eq!(got.text, "hello world");
+        assert_eq!(got.language.as_deref(), Some("vi"));
         assert!(buf.is_empty());
+        // The language is consumed with the utterance — it must not leak into the next one.
+        assert!(lang.is_none());
         // Empty buffer is a no-op that still reports the channel open.
-        assert!(emit(&mut buf, &tx).await);
+        assert!(emit(&mut buf, &mut lang, &tx).await);
+    }
+
+    #[test]
+    fn language_takes_the_dominant_tag_and_drops_the_region() {
+        let ev: DgEvent = serde_json::from_str(
+            r#"{"channel":{"alternatives":[{"transcript":"hi"}],"languages":["en-US","vi"]}}"#,
+        )
+        .unwrap();
+        // First entry wins (Deepgram orders by word count) and `en-US` narrows to `en`: we choose a
+        // reply language, which has no use for a region.
+        assert_eq!(ev.language().as_deref(), Some("en"));
+    }
+
+    #[test]
+    fn language_is_none_when_deepgram_reports_nothing() {
+        let ev: DgEvent =
+            serde_json::from_str(r#"{"channel":{"alternatives":[{"transcript":"hi"}]}}"#).unwrap();
+        assert!(ev.language().is_none());
     }
 }

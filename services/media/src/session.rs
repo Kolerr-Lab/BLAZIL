@@ -16,8 +16,9 @@ use crate::{
     codec,
     config::Config,
     error::MediaError,
-    stt::SttParams,
-    tts::{build_fallback_tts, build_tts, Tts},
+    lang_policy::LanguagePolicy,
+    stt::{SttParams, Transcript},
+    tts::{build_fallback_tts, build_tts, build_tts_for, Tts},
     turn::{TurnClient, TurnEvent, TurnRequest},
     turn_detector::SmartTurn,
     twilio::{InboundMessage, OutboundMessage},
@@ -26,6 +27,7 @@ use crate::{
 use axum::extract::ws::{Message, WebSocket};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use futures_util::{stream::SplitSink, SinkExt, StreamExt};
+use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -55,6 +57,14 @@ struct Shared {
     /// quota fallback idempotent — STT and TTS can both trip it, but the clip plays / socket closes
     /// exactly once.
     ended: Arc<AtomicBool>,
+    /// Decides what language to answer in as the call goes on. Shared because the transcript loop
+    /// feeds it and the turn path reads it. See `lang_policy` for why a single foreign-sounding
+    /// utterance must not flip the conversation.
+    lang: Arc<Mutex<LanguagePolicy>>,
+    /// Per-language voice overrides from the agent's config, as `lang -> voice_id`. Answering in
+    /// English with a voice tuned for Vietnamese is audibly wrong even when the words are right, so
+    /// the language decision and the voice decision have to move together.
+    voice_by_language: Arc<HashMap<String, String>>,
 }
 
 pub struct Session {
@@ -158,15 +168,30 @@ impl Session {
                 let language = params.get("language").filter(|s| !s.is_empty()).cloned();
                 // Lexicon Prompting: Custom vocabulary to bias the STT model (comma-separated).
                 let lexicon = params.get("lexicon").filter(|s| !s.is_empty()).cloned();
+                // "1"/"true" → this agent answers in whatever language the caller speaks. Default
+                // off, so every existing agent keeps its current behaviour exactly.
+                let follow_caller = params
+                    .get("follow_caller_language")
+                    .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                    .unwrap_or(false);
+                // `vi:<voice>,en:<voice>` — which voice to use once we answer in a given language.
+                let voice_by_language = parse_voice_map(params.get("voice_by_language"));
                 tracing::info!(
-                    "Started stream {} for call {} (tenant={}, agent={}, language={}, lexicon={:?})",
+                    "Started stream {} for call {} (tenant={}, agent={}, language={}, follow_caller={}, voices={}, lexicon={:?})",
                     stream_sid,
                     start.call_sid,
                     tenant_id,
                     agent_id,
                     language.as_deref().unwrap_or("auto"),
+                    follow_caller,
+                    voice_by_language.len(),
                     lexicon,
                 );
+
+                // Detection runs whenever the agent follows the caller, OR whenever it has no fixed
+                // language — the second case is how we measure what callers actually speak without
+                // changing any behaviour.
+                let detect_language = follow_caller || language.is_none();
 
                 let shared = Shared {
                     config: Arc::clone(&self.config),
@@ -179,6 +204,11 @@ impl Session {
                     play_cancel: Arc::new(AtomicBool::new(false)),
                     tts_task: Arc::new(Mutex::new(None)),
                     ended: Arc::new(AtomicBool::new(false)),
+                    lang: Arc::new(Mutex::new(LanguagePolicy::new(
+                        language.clone(),
+                        follow_caller,
+                    ))),
+                    voice_by_language: Arc::new(voice_by_language),
                 };
                 self.shared = Some(shared.clone());
 
@@ -203,12 +233,18 @@ impl Session {
                     )));
                 }
 
+                // NOTE: `language` is still passed to STT as a recognition bias, and it never
+                // changes for the life of the call. Re-constraining the recogniser mid-call would
+                // mean reconnecting its socket mid-conversation, and a failed reconnect is dead air
+                // — the failure mode that got the speaker gate deleted. Only the REPLY language and
+                // the voice follow the caller.
                 self.start_stt(
                     shared.clone(),
                     language,
                     lexicon,
                     commit_rx,
                     commit_strategy,
+                    detect_language,
                 );
 
                 // DTMF collector: buffers keypad digits and commits them as a turn (so the agent
@@ -227,7 +263,8 @@ impl Session {
                     let greet = shared.clone();
                     let prompt = self.config.greeting_prompt.clone();
                     self.tasks.push(tokio::spawn(
-                        async move { do_turn(greet, prompt, true).await },
+                        // No detected language: the greeting precedes any caller audio.
+                        async move { do_turn(greet, prompt, true, None).await },
                     ));
                 }
             }
@@ -322,9 +359,10 @@ impl Session {
         lexicon: Option<String>,
         commit_rx: mpsc::Receiver<()>,
         commit_strategy: String,
+        detect_language: bool,
     ) {
         let (ulaw_tx, ulaw_rx) = mpsc::channel::<Vec<u8>>(256);
-        let (transcript_tx, mut transcript_rx) = mpsc::channel::<String>(16);
+        let (transcript_tx, mut transcript_rx) = mpsc::channel::<Transcript>(16);
         self.stt_tx = Some(ulaw_tx);
 
         let cfg = Arc::clone(&self.config);
@@ -335,6 +373,7 @@ impl Session {
             vad_silence_secs: (cfg.silence_end_ms as f32) / 1000.0,
             commit_strategy,
             lexicon,
+            detect_language,
         };
         let stt_shared = shared.clone();
         let cfg = Arc::clone(&self.config);
@@ -364,16 +403,54 @@ impl Session {
 
         // Consume committed transcripts → drive backend turns (one at a time).
         self.tasks.push(tokio::spawn(async move {
-            while let Some(transcript) = transcript_rx.recv().await {
+            while let Some(item) = transcript_rx.recv().await {
                 // Skip empty/whitespace commits so we never run a turn on nothing.
-                if transcript.trim().is_empty() {
+                if item.text.trim().is_empty() {
                     continue;
                 }
-                tracing::info!("Committed transcript: {}", transcript);
-                do_turn(shared.clone(), transcript, false).await;
+                // Feed the detection to the policy BEFORE the turn, so this turn is already answered
+                // in the right language rather than one turn late.
+                let decision = {
+                    let mut policy = shared.lang.lock().await;
+                    policy.observe(item.language.as_deref())
+                };
+                if decision.changed {
+                    tracing::info!(
+                        "Answer language switched to {} (caller language detected consistently)",
+                        decision.answer_language.as_deref().unwrap_or("auto"),
+                    );
+                }
+                tracing::info!(
+                    "Committed transcript (heard={}, answering={}): {}",
+                    item.language.as_deref().unwrap_or("?"),
+                    decision.answer_language.as_deref().unwrap_or("auto"),
+                    item.text,
+                );
+                do_turn(shared.clone(), item.text, false, item.language.clone()).await;
             }
         }));
     }
+}
+
+/// Parse the `voice_by_language` TwiML parameter: `vi:<voice_id>,en:<voice_id>`.
+///
+/// Flat string rather than JSON because Twilio custom parameters are plain strings and this list is
+/// short. Malformed entries are skipped rather than rejected — a typo in one mapping must not cost
+/// the tenant every other language on a live call.
+fn parse_voice_map(raw: Option<&String>) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    let Some(raw) = raw else { return map };
+    for entry in raw.split(',') {
+        let Some((lang, voice)) = entry.split_once(':') else {
+            continue;
+        };
+        let lang = lang.trim().to_lowercase();
+        let voice = voice.trim();
+        if !lang.is_empty() && !voice.is_empty() {
+            map.insert(lang, voice.to_string());
+        }
+    }
+    map
 }
 
 /// Stop the current assistant response: abort the TTS task, cancel the play loop, mark the
@@ -511,7 +588,8 @@ async fn dtmf_flush(shared: &Shared, buf: &mut String) {
     }
     let digits = std::mem::take(buf);
     tracing::info!("DTMF committed: {}", digits);
-    do_turn(shared.clone(), format_dtmf_turn(&digits), false).await;
+    // Keypad digits carry no speech, so there is nothing to have detected.
+    do_turn(shared.clone(), format_dtmf_turn(&digits), false, None).await;
 }
 
 /// Phrase collected keypad digits as a caller turn the agent understands (covers both IVR-style
@@ -527,7 +605,12 @@ fn format_dtmf_turn(digits: &str) -> String {
 
 /// Run one turn: supersede any in-flight response, call the backend, then speak the answer.
 /// `is_greeting` suppresses the thinking-filler for the opening greeting turn.
-async fn do_turn(shared: Shared, text: String, is_greeting: bool) {
+async fn do_turn(
+    shared: Shared,
+    text: String,
+    is_greeting: bool,
+    detected_language: Option<String>,
+) {
     // A new user utterance (or greeting) supersedes whatever we were saying.
     stop_playback(&shared, true).await;
     shared.play_cancel.store(false, Ordering::Relaxed);
@@ -537,7 +620,10 @@ async fn do_turn(shared: Shared, text: String, is_greeting: bool) {
     // — would abort a reply before it ever starts, leaving the agent mute after the greeting.
 
     let worker = shared.clone();
-    let handle = tokio::spawn(async move { run_response(worker, text, is_greeting).await });
+    let handle =
+        tokio::spawn(
+            async move { run_response(worker, text, is_greeting, detected_language).await },
+        );
     *shared.tts_task.lock().await = Some(handle);
 }
 
@@ -792,17 +878,35 @@ async fn play_ulaw_file(shared: &Shared, path: &str) {
 
 /// Streaming turn: open the backend gRPC stream, feed answer tokens into TTS sentence-by-
 /// sentence, and relay audio to Twilio. Honors `play_cancel` for prompt barge-in.
-async fn run_response(shared: Shared, text: String, is_greeting: bool) {
+async fn run_response(
+    shared: Shared,
+    text: String,
+    is_greeting: bool,
+    detected_language: Option<String>,
+) {
     let turn_client = TurnClient::new(
         shared.config.orch_grpc_url.clone(),
         shared.config.orch_service_token.clone(),
     );
+    // The greeting happens before the caller has said anything, so there is nothing to detect —
+    // it always uses the agent's configured default. Every later turn uses whatever the policy has
+    // settled on.
+    let answer_language = {
+        let policy = shared.lang.lock().await;
+        if is_greeting {
+            policy.greeting_language()
+        } else {
+            policy.current()
+        }
+    };
     let req = TurnRequest {
         tenant_id: shared.tenant_id.clone(),
         agent_id: shared.agent_id.clone(),
         call_id: shared.call_id.clone(),
         text,
         trace_id: uuid::Uuid::new_v4().to_string(),
+        answer_language: answer_language.clone(),
+        detected_language,
     };
     tracing::info!(
         "Turn → backend gRPC (agent={}, {} chars)",
@@ -842,9 +946,25 @@ async fn run_response(shared: Shared, text: String, is_greeting: bool) {
             }
         }
     }
-    tracing::info!("Turn streaming (voice={})", voice_id);
 
-    let tts = build_tts(&shared.config);
+    // A reply in the caller's language read by a voice tuned for another one is the audible half of
+    // getting this wrong — the words are right and it still sounds broken. So the language decision
+    // overrides the agent's persona voice whenever the tenant has mapped one for that language.
+    if let Some(lang) = answer_language.as_deref() {
+        if let Some(v) = shared.voice_by_language.get(lang) {
+            if !v.is_empty() && v != &voice_id {
+                tracing::info!("Voice switched to the {} voice for this answer", lang);
+                voice_id = v.clone();
+            }
+        }
+    }
+    tracing::info!(
+        "Turn streaming (voice={}, language={})",
+        voice_id,
+        answer_language.as_deref().unwrap_or("auto")
+    );
+
+    let tts = build_tts_for(&shared.config, answer_language.clone());
     let (text_tx, text_rx) = mpsc::channel::<String>(16);
     let (audio_tx, mut audio_rx) = mpsc::channel::<Vec<u8>>(256);
 

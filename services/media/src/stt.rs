@@ -34,6 +34,30 @@ pub struct SttParams {
     pub commit_strategy: String,
     /// Custom vocabulary / keywords to bias STT accuracy (Lexicon Prompting).
     pub lexicon: Option<String>,
+    /// Ask the provider to report which language it heard. Off by default because it costs an extra
+    /// message per commit and only matters for agents that follow the caller's language.
+    pub detect_language: bool,
+}
+
+/// One committed utterance, plus what language the provider thinks it was in.
+///
+/// `language` is the provider's own detection, NOT our configuration — it is `None` when detection
+/// is off, unsupported, or the provider simply did not say. The session treats it as evidence to
+/// accumulate, never as an instruction: one label is not enough to change how a call behaves.
+#[derive(Debug, Clone)]
+pub struct Transcript {
+    pub text: String,
+    pub language: Option<String>,
+}
+
+impl Transcript {
+    #[allow(dead_code)]
+    pub fn new(text: String) -> Self {
+        Self {
+            text,
+            language: None,
+        }
+    }
 }
 
 #[async_trait]
@@ -44,7 +68,7 @@ pub trait Stt: Send + Sync {
     async fn stream(
         &self,
         ulaw_rx: mpsc::Receiver<Vec<u8>>,
-        transcript_tx: mpsc::Sender<String>,
+        transcript_tx: mpsc::Sender<Transcript>,
         commit_rx: mpsc::Receiver<()>,
     ) -> Result<(), MediaError>;
 }
@@ -58,6 +82,13 @@ struct SttEvent {
     text: Option<String>,
     #[serde(default)]
     error: Option<String>,
+    /// Present when `include_language_detection=true`: Scribe emits the detected language after
+    /// each commit. It may arrive on the `committed_transcript` event or as its own message, so we
+    /// accept it on any event and remember the most recent one.
+    #[serde(default)]
+    language_code: Option<String>,
+    #[serde(default)]
+    language_probability: Option<f32>,
 }
 
 pub struct ElevenLabsStt {
@@ -91,6 +122,12 @@ impl ElevenLabsStt {
                 url.push_str(&format!("&language_code={lang}"));
             }
         }
+        // Scribe defaults this to false, which is why we previously had no idea what language a
+        // caller was speaking even though the model knew. With it on, a `language_code` arrives
+        // after each commit.
+        if self.params.detect_language {
+            url.push_str("&include_language_detection=true");
+        }
         if let Some(lexicon) = &self.params.lexicon {
             if !lexicon.is_empty() {
                 // ElevenLabs supports 'prompt' to bias the STT model
@@ -107,7 +144,7 @@ impl Stt for ElevenLabsStt {
     async fn stream(
         &self,
         mut ulaw_rx: mpsc::Receiver<Vec<u8>>,
-        transcript_tx: mpsc::Sender<String>,
+        transcript_tx: mpsc::Sender<Transcript>,
         mut commit_rx: mpsc::Receiver<()>,
     ) -> Result<(), MediaError> {
         let url = self.ws_url();
@@ -168,17 +205,38 @@ impl Stt for ElevenLabsStt {
         // (close code + text) instead of a generic string — this is what tells us apart a session
         // cap vs a rejected param vs a rate/quota close when diagnosing frequent reconnects.
         let mut close_reason = "read stream ended (no close frame)".to_string();
+        // Scribe may deliver the detected language on its own message rather than on the transcript
+        // event, and ordering is not guaranteed, so we carry the most recent label forward and
+        // attach it to the next commit. A slightly stale label is fine — the session needs several
+        // consistent ones before it acts anyway.
+        let mut last_language: Option<String> = None;
         while let Some(msg) = read.next().await {
             match msg {
                 Ok(Message::Text(text)) => {
                     let Ok(event) = serde_json::from_str::<SttEvent>(&text) else {
                         continue;
                     };
+                    if let Some(lang) = event.language_code.clone() {
+                        if !lang.trim().is_empty() {
+                            // Ignore a confident-but-wrong label: below ~0.5 the model is guessing,
+                            // and a guess that reaches the session is indistinguishable from
+                            // evidence. Absent probability = trust it (older/other shapes).
+                            if event.language_probability.unwrap_or(1.0) >= 0.5 {
+                                last_language = Some(lang.trim().to_lowercase());
+                            }
+                        }
+                    }
                     match event.message_type.as_str() {
                         "committed_transcript" => {
                             if let Some(t) = event.text {
-                                if !t.trim().is_empty() && transcript_tx.send(t).await.is_err() {
-                                    break; // session dropped the receiver
+                                if !t.trim().is_empty() {
+                                    let item = Transcript {
+                                        text: t,
+                                        language: last_language.clone(),
+                                    };
+                                    if transcript_tx.send(item).await.is_err() {
+                                        break; // session dropped the receiver
+                                    }
                                 }
                             }
                         }

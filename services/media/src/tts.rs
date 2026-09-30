@@ -39,13 +39,26 @@ pub fn build_fallback_tts(config: &Config) -> ElevenLabsTts {
 
 /// Pick the TTS provider from config (`TTS_PROVIDER`). Default ElevenLabs; "cartesia" = Sonic A/B.
 pub fn build_tts(config: &Config) -> Box<dyn Tts> {
+    build_tts_for(config, None)
+}
+
+/// Same, but tell the engine which language it is about to speak.
+///
+/// Cartesia infers language from the text when you say nothing, which mostly works and occasionally
+/// does not — a short reply, a proper noun, or a number-heavy sentence gives it little to go on.
+/// Passing the language we already decided on removes that guess. Note `language` and `locale` are
+/// mutually exclusive in Cartesia's API (sending both is a 400), so we send only `language`.
+pub fn build_tts_for(config: &Config, language: Option<String>) -> Box<dyn Tts> {
     if config.tts_provider == "cartesia" {
-        Box::new(crate::cartesia::CartesiaTts::new(
-            config.cartesia_api_key.clone(),
-            config.cartesia_model.clone(),
-            config.cartesia_version.clone(),
-            config.cartesia_voice_id.clone(),
-        ))
+        Box::new(
+            crate::cartesia::CartesiaTts::new(
+                config.cartesia_api_key.clone(),
+                config.cartesia_model.clone(),
+                config.cartesia_version.clone(),
+                config.cartesia_voice_id.clone(),
+            )
+            .with_language(language),
+        )
     } else {
         Box::new(ElevenLabsTts::new(
             config.elevenlabs_api_key.clone(),

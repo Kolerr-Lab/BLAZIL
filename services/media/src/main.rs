@@ -6,6 +6,7 @@ mod config;
 mod deepgram;
 mod denoise;
 mod error;
+mod lang_policy;
 mod server;
 mod session;
 mod stt;

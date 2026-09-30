@@ -38,6 +38,9 @@ pub struct CartesiaTts {
     model: String,
     version: String,
     voice_id: String,
+    /// ISO-639-1 code for the text we are about to speak. `None` = let Sonic infer it, which is the
+    /// long-standing behaviour and still correct for single-language agents.
+    language: Option<String>,
 }
 
 impl CartesiaTts {
@@ -47,7 +50,18 @@ impl CartesiaTts {
             model,
             version,
             voice_id,
+            language: None,
         }
+    }
+
+    /// State the language explicitly instead of letting the model infer it from the text.
+    ///
+    /// Cartesia treats `language` and `locale` as mutually exclusive — sending both returns 400 —
+    /// so this sets only `language`. Empty strings are normalised away so an unset config value can
+    /// never turn into `"language": ""`.
+    pub fn with_language(mut self, language: Option<String>) -> Self {
+        self.language = language.filter(|l| !l.trim().is_empty());
+        self
     }
 }
 
@@ -84,11 +98,12 @@ impl Tts for CartesiaTts {
         let context_id = uuid::Uuid::new_v4().to_string();
         let model = self.model.clone();
         let ctx = context_id.clone();
+        let language = self.language.clone();
 
         // Writer: one message per text chunk (continue:true), then a final flush (continue:false).
         let text_sender = tokio::spawn(async move {
             while let Some(text) = text_rx.recv().await {
-                let msg = serde_json::json!({
+                let mut msg = serde_json::json!({
                     "model_id": model,
                     "transcript": text,
                     "voice": { "mode": "id", "id": voice },
@@ -96,12 +111,15 @@ impl Tts for CartesiaTts {
                     "context_id": ctx,
                     "continue": true,
                 });
+                if let Some(lang) = &language {
+                    msg["language"] = serde_json::Value::String(lang.clone());
+                }
                 if write.send(Message::Text(msg.to_string())).await.is_err() {
                     return;
                 }
             }
             // Flush: empty transcript with continue:false closes the context.
-            let eos = serde_json::json!({
+            let mut eos = serde_json::json!({
                 "model_id": model,
                 "transcript": "",
                 "voice": { "mode": "id", "id": voice },
@@ -109,6 +127,9 @@ impl Tts for CartesiaTts {
                 "context_id": ctx,
                 "continue": false,
             });
+            if let Some(lang) = &language {
+                eos["language"] = serde_json::Value::String(lang.clone());
+            }
             let _ = write.send(Message::Text(eos.to_string())).await;
         });
 

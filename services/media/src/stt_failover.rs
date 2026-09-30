@@ -30,6 +30,7 @@ const MAX_CONSECUTIVE_FAILURES: u32 = 6;
 use crate::config::Config;
 use crate::deepgram::{DeepgramParams, DeepgramStt};
 use crate::error::MediaError;
+use crate::stt::Transcript;
 use crate::stt::{ElevenLabsStt, Stt, SttParams};
 
 /// A zero-arg factory that builds a fresh provider instance for one failover attempt. Boxed so the
@@ -87,6 +88,9 @@ fn build(kind: SttProvider, cfg: &Config, params: &SttParams) -> Box<dyn Stt> {
             commit_strategy: params.commit_strategy.clone(),
             vad_silence_secs: params.vad_silence_secs,
             lexicon: params.lexicon.clone(),
+            // No `detect_language` here on purpose: Deepgram has no such flag. It reports the
+            // `languages` array whenever it runs the multilingual model, which is exactly when
+            // `language` is None — so the intent is already expressed by the line above.
         })),
     }
 }
@@ -96,7 +100,7 @@ pub async fn run_stt_with_failover(
     cfg: Arc<Config>,
     params: SttParams,
     ulaw_rx: mpsc::Receiver<Vec<u8>>,
-    transcript_tx: mpsc::Sender<String>,
+    transcript_tx: mpsc::Sender<Transcript>,
     commit_rx: mpsc::Receiver<()>,
 ) -> Result<(), MediaError> {
     let order = provider_order(&cfg);
@@ -131,7 +135,7 @@ pub async fn run_stt_with_failover(
 pub async fn run_failover_core<L: std::fmt::Debug>(
     builders: Vec<(L, SttBuilder)>,
     mut ulaw_rx: mpsc::Receiver<Vec<u8>>,
-    transcript_tx: mpsc::Sender<String>,
+    transcript_tx: mpsc::Sender<Transcript>,
     mut commit_rx: mpsc::Receiver<()>,
 ) -> Result<(), MediaError> {
     let total = builders.len();
@@ -246,7 +250,7 @@ mod tests {
         async fn stream(
             &self,
             _ulaw_rx: mpsc::Receiver<Vec<u8>>,
-            _transcript_tx: mpsc::Sender<String>,
+            _transcript_tx: mpsc::Sender<Transcript>,
             _commit_rx: mpsc::Receiver<()>,
         ) -> Result<(), MediaError> {
             Err(MediaError::SttError(format!("{} down", self.0)))
@@ -261,7 +265,7 @@ mod tests {
         async fn stream(
             &self,
             mut ulaw_rx: mpsc::Receiver<Vec<u8>>,
-            transcript_tx: mpsc::Sender<String>,
+            transcript_tx: mpsc::Sender<Transcript>,
             _commit_rx: mpsc::Receiver<()>,
         ) -> Result<(), MediaError> {
             let mut said = false;
@@ -269,7 +273,7 @@ mod tests {
                 if !said {
                     said = true;
                     if transcript_tx
-                        .send("hello from fallback".into())
+                        .send(Transcript::new("hello from fallback".into()))
                         .await
                         .is_err()
                     {
@@ -289,11 +293,11 @@ mod tests {
         async fn stream(
             &self,
             mut ulaw_rx: mpsc::Receiver<Vec<u8>>,
-            transcript_tx: mpsc::Sender<String>,
+            transcript_tx: mpsc::Sender<Transcript>,
             _commit_rx: mpsc::Receiver<()>,
         ) -> Result<(), MediaError> {
             if let Some(_frame) = ulaw_rx.recv().await {
-                let _ = transcript_tx.send(self.0.into()).await;
+                let _ = transcript_tx.send(Transcript::new(self.0.into())).await;
             }
             Ok(()) // socket "closed" — supervisor must reconnect, not treat this as call-end
         }
@@ -302,7 +306,7 @@ mod tests {
     #[tokio::test]
     async fn fails_over_to_second_provider_and_keeps_transcribing() {
         let (ulaw_tx, ulaw_rx) = mpsc::channel::<Vec<u8>>(64);
-        let (tx, mut rx) = mpsc::channel::<String>(4);
+        let (tx, mut rx) = mpsc::channel::<Transcript>(4);
         let (_commit_tx, commit_rx) = mpsc::channel::<()>(4);
 
         let builders: Vec<(&str, SttBuilder)> = vec![
@@ -334,7 +338,7 @@ mod tests {
             .await
             .expect("transcript should arrive via fallback")
             .expect("channel open");
-        assert_eq!(got, "hello from fallback");
+        assert_eq!(got.text, "hello from fallback");
 
         feeder.abort(); // dropping ulaw_tx ends the call → supervisor returns
         let _ = tokio::time::timeout(std::time::Duration::from_secs(2), sup).await;
@@ -346,7 +350,7 @@ mod tests {
         // the reconnect. The supervisor must reconnect (not return Ok on the first close) and keep
         // transcribing — this is the 90s-silence regression guard.
         let (ulaw_tx, ulaw_rx) = mpsc::channel::<Vec<u8>>(64);
-        let (tx, mut rx) = mpsc::channel::<String>(4);
+        let (tx, mut rx) = mpsc::channel::<Transcript>(4);
         let (_commit_tx, commit_rx) = mpsc::channel::<()>(4);
 
         let n = Arc::new(AtomicUsize::new(0));
@@ -378,12 +382,12 @@ mod tests {
             .await
             .expect("first transcript should arrive")
             .expect("channel open");
-        assert_eq!(first, "first turn");
+        assert_eq!(first.text, "first turn");
         let second = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
             .await
             .expect("second transcript should arrive after reconnect")
             .expect("channel open");
-        assert_eq!(second, "hello from fallback");
+        assert_eq!(second.text, "hello from fallback");
 
         feeder.abort();
         let _ = tokio::time::timeout(std::time::Duration::from_secs(2), sup).await;
@@ -392,7 +396,7 @@ mod tests {
     #[tokio::test]
     async fn returns_error_when_all_providers_fail() {
         let (_ulaw_tx, ulaw_rx) = mpsc::channel::<Vec<u8>>(16);
-        let (tx, _rx) = mpsc::channel::<String>(4);
+        let (tx, _rx) = mpsc::channel::<Transcript>(4);
         let (_commit_tx, commit_rx) = mpsc::channel::<()>(4);
 
         let attempts = Arc::new(AtomicUsize::new(0));
