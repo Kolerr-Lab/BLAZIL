@@ -66,7 +66,9 @@ pub use error::{Error, Result};
 pub use model::{InferenceModel, Prediction};
 pub use onnx::OnnxModel;
 pub use pipeline::{InferenceBatch, InferencePipeline};
-pub use text::{TextClassifier, TextConfig};
+pub use text::{
+    plan_windows, TextClassifier, TextConfig, TokenWindows, WindowOptions, WindowedScore,
+};
 
 // Re-export kernel functions for convenience
 pub use kernels::{
