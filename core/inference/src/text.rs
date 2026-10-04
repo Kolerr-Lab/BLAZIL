@@ -404,6 +404,310 @@ fn class_prob(pred: &Prediction, class_idx: usize) -> f32 {
         .unwrap_or(0.0)
 }
 
+// ── Sentence embeddings ─────────────────────────────────────────────────────────
+
+/// Configuration for loading a sentence-embedding encoder (E5 / MiniLM / BGE family).
+#[derive(Debug, Clone)]
+pub struct EncoderConfig {
+    /// ONNX export with a `last_hidden_state` (`[batch, seq, dim]`) or already pooled
+    /// (`[batch, dim]`) first output (`optimum-cli export onnx --task feature-extraction`).
+    pub model_path: PathBuf,
+    pub tokenizer_path: PathBuf,
+    /// Model position limit (E5: 512).
+    pub max_len: usize,
+    /// 2 = `input_ids`,`attention_mask`; 3 additionally feeds zero `token_type_ids` (BERT).
+    pub num_inputs: usize,
+    /// Text prepended to queries (E5 expects `"query: "`). Empty for none.
+    pub query_prefix: String,
+    /// Text prepended to indexed passages (E5 expects `"passage: "`). Empty for none.
+    pub passage_prefix: String,
+}
+
+/// Which instruction prefix an input gets (E5-style asymmetric retrieval).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmbedKind {
+    Query,
+    Passage,
+}
+
+/// A Tract-backed sentence encoder: mean-pooled, L2-normalised embeddings, so the cosine
+/// similarity of two embeddings is their dot product. Thread-safe; batches run in parallel.
+pub struct TextEncoder {
+    model: Runnable,
+    raw_tokenizer: Tokenizer,
+    special_prefix: Vec<i64>,
+    special_suffix: Vec<i64>,
+    query_prefix: Vec<i64>,
+    passage_prefix: Vec<i64>,
+    max_len: usize,
+    num_inputs: usize,
+    dim: usize,
+}
+
+impl TextEncoder {
+    /// Load the encoder, then probe it once to learn the embedding dimension.
+    pub fn load(cfg: &EncoderConfig) -> Result<Self> {
+        let model = load_runnable(&cfg.model_path)?;
+        let mut raw_tokenizer =
+            Tokenizer::from_file(&cfg.tokenizer_path).map_err(|e| Error::ModelLoadFailed {
+                reason: format!("tokenizer '{}': {e}", cfg.tokenizer_path.display()),
+            })?;
+        raw_tokenizer
+            .with_truncation(None)
+            .map_err(|e| Error::ModelLoadFailed {
+                reason: format!("tokenizer truncation: {e}"),
+            })?;
+        raw_tokenizer.with_padding(None);
+
+        let (special_prefix, special_suffix) = detect_special_tokens(&raw_tokenizer)?;
+        let prefix_ids = |p: &str| -> Result<Vec<i64>> {
+            if p.trim().is_empty() {
+                return Ok(Vec::new());
+            }
+            Ok(raw_tokenizer
+                .encode(p.trim_end(), false)
+                .map_err(|e| Error::ModelLoadFailed {
+                    reason: format!("prefix tokenize: {e}"),
+                })?
+                .get_ids()
+                .iter()
+                .map(|&x| x as i64)
+                .collect())
+        };
+        let query_prefix = prefix_ids(&cfg.query_prefix)?;
+        let passage_prefix = prefix_ids(&cfg.passage_prefix)?;
+
+        let mut enc = Self {
+            model,
+            raw_tokenizer,
+            special_prefix,
+            special_suffix,
+            query_prefix,
+            passage_prefix,
+            max_len: cfg.max_len.max(8),
+            num_inputs: cfg.num_inputs.max(2),
+            dim: 0,
+        };
+        let probe = enc.embed("dimension probe", EmbedKind::Query)?;
+        enc.dim = probe.len();
+        if enc.dim == 0 {
+            return Err(Error::ModelLoadFailed {
+                reason: "encoder produced an empty embedding".to_string(),
+            });
+        }
+        tracing::info!(
+            model = %cfg.model_path.display(),
+            dim = enc.dim,
+            max_len = enc.max_len,
+            num_inputs = enc.num_inputs,
+            "Loaded text encoder via Tract"
+        );
+        Ok(enc)
+    }
+
+    /// Embedding dimension.
+    pub fn dim(&self) -> usize {
+        self.dim
+    }
+
+    fn kind_prefix(&self, kind: EmbedKind) -> &[i64] {
+        match kind {
+            EmbedKind::Query => &self.query_prefix,
+            EmbedKind::Passage => &self.passage_prefix,
+        }
+    }
+
+    fn wrap(&self, kind: EmbedKind, content: &[i64]) -> Vec<i64> {
+        let p = self.kind_prefix(kind);
+        let mut ids = Vec::with_capacity(
+            self.special_prefix.len() + p.len() + content.len() + self.special_suffix.len(),
+        );
+        ids.extend_from_slice(&self.special_prefix);
+        ids.extend_from_slice(p);
+        ids.extend_from_slice(content);
+        ids.extend_from_slice(&self.special_suffix);
+        ids
+    }
+
+    fn content_ids(&self, text: &str) -> Result<Vec<i64>> {
+        Ok(self
+            .raw_tokenizer
+            .encode(text, false)
+            .map_err(|e| Error::InferenceFailed {
+                reason: format!("tokenize: {e}"),
+            })?
+            .get_ids()
+            .iter()
+            .map(|&x| x as i64)
+            .collect())
+    }
+
+    /// Embed one text, truncated to the model limit (use for short passages / exemplars).
+    pub fn embed(&self, text: &str, kind: EmbedKind) -> Result<Vec<f32>> {
+        let mut content = self.content_ids(text)?;
+        let room = self.max_len.saturating_sub(
+            self.special_prefix.len() + self.special_suffix.len() + self.kind_prefix(kind).len(),
+        );
+        content.truncate(room.max(1));
+        self.run_pooled(self.wrap(kind, &content))
+    }
+
+    /// Split `text` into overlapping model-ready windows (same planner as the classifier).
+    /// The instruction prefix is repeated in every window.
+    pub fn encode_windows(
+        &self,
+        text: &str,
+        kind: EmbedKind,
+        opts: &WindowOptions,
+    ) -> Result<TokenWindows> {
+        let content = self.content_ids(text)?;
+        let n = content.len();
+        let fixed =
+            self.special_prefix.len() + self.special_suffix.len() + self.kind_prefix(kind).len();
+        let window = opts.window.min(self.max_len).max(fixed + 1);
+        let content_len = window - fixed;
+        let total_windows = plan_windows(n, content_len, opts.overlap, usize::MAX)
+            .len()
+            .max(1);
+        let planned = plan_windows(n, content_len, opts.overlap, opts.max_windows);
+        let windows = if planned.is_empty() {
+            vec![self.wrap(kind, &[])]
+        } else {
+            planned
+                .iter()
+                .map(|&(s, e)| self.wrap(kind, &content[s..e]))
+                .collect()
+        };
+        Ok(TokenWindows {
+            windows,
+            total_tokens: n,
+            total_windows,
+        })
+    }
+
+    /// Embed many prepared windows in parallel (input order preserved).
+    pub fn embed_ids_batch(&self, windows: &[Vec<i64>]) -> Result<Vec<Vec<f32>>> {
+        use rayon::prelude::*;
+        windows
+            .par_iter()
+            .map(|ids| self.run_pooled(ids.clone()))
+            .collect()
+    }
+
+    /// Embed many short texts in parallel (each truncated to the model limit).
+    pub fn embed_batch(&self, texts: &[String], kind: EmbedKind) -> Result<Vec<Vec<f32>>> {
+        use rayon::prelude::*;
+        texts.par_iter().map(|t| self.embed(t, kind)).collect()
+    }
+
+    fn run_pooled(&self, ids: Vec<i64>) -> Result<Vec<f32>> {
+        let seq = ids.len();
+        if seq == 0 {
+            return Err(Error::InferenceFailed {
+                reason: "empty token sequence".to_string(),
+            });
+        }
+        let mask = vec![1i64; seq];
+        let inputs = build_inputs(self.num_inputs, ids, mask)?;
+        let outputs = self.model.run(inputs).map_err(|e| Error::InferenceFailed {
+            reason: format!("tract run: {e}"),
+        })?;
+        let out = outputs
+            .first()
+            .ok_or_else(|| Error::InferenceFailed {
+                reason: "model produced no outputs".to_string(),
+            })?
+            .to_array_view::<f32>()
+            .map_err(|e| Error::InferenceFailed {
+                reason: format!("extract hidden states: {e}"),
+            })?;
+
+        let shape = out.shape().to_vec();
+        let mut pooled = match shape.len() {
+            // [1, seq, dim]: mean over tokens (no padding, so every position counts).
+            3 => {
+                let (tokens, dim) = (shape[1].max(1), shape[2]);
+                let mut acc = vec![0f32; dim];
+                for (i, v) in out.iter().enumerate() {
+                    acc[i % dim] += *v;
+                }
+                for a in &mut acc {
+                    *a /= tokens as f32;
+                }
+                acc
+            }
+            // [1, dim]: already pooled by the export.
+            2 => out.iter().copied().collect(),
+            _ => {
+                return Err(Error::InferenceFailed {
+                    reason: format!("unexpected encoder output shape {shape:?}"),
+                })
+            }
+        };
+        l2_normalize(&mut pooled);
+        Ok(pooled)
+    }
+}
+
+/// Scale `v` to unit length (no-op for the zero vector).
+pub fn l2_normalize(v: &mut [f32]) {
+    let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm > 0.0 {
+        for x in v.iter_mut() {
+            *x /= norm;
+        }
+    }
+}
+
+/// Dot product of two equal-length vectors (cosine similarity for normalised embeddings).
+pub fn dot(a: &[f32], b: &[f32]) -> f32 {
+    a.iter().zip(b).map(|(x, y)| x * y).sum()
+}
+
+fn load_runnable(path: &std::path::Path) -> Result<Runnable> {
+    let model = tract_onnx::onnx()
+        .model_for_path(path)
+        .map_err(|e| Error::ModelLoadFailed {
+            reason: format!("tract load '{}': {e}", path.display()),
+        })?
+        .into_typed()
+        .map_err(|e| Error::ModelLoadFailed {
+            reason: format!("type inference: {e}"),
+        })?
+        .into_optimized()
+        .map_err(|e| Error::ModelLoadFailed {
+            reason: format!("optimize: {e}"),
+        })?
+        .into_runnable()
+        .map_err(|e| Error::ModelLoadFailed {
+            reason: format!("compile: {e}"),
+        })?;
+    Ok(Arc::new(model))
+}
+
+/// `[1, seq]` int64 inputs fed by position: input_ids, attention_mask, token_type_ids?.
+fn build_inputs(num_inputs: usize, ids: Vec<i64>, mask: Vec<i64>) -> Result<TVec<TValue>> {
+    let seq = ids.len();
+    let ids_t: Tensor = Array2::from_shape_vec((1, seq), ids)
+        .map_err(|e| Error::InferenceFailed {
+            reason: format!("input_ids shape: {e}"),
+        })?
+        .into_dyn()
+        .into();
+    let mask_t: Tensor = Array2::from_shape_vec((1, seq), mask)
+        .map_err(|e| Error::InferenceFailed {
+            reason: format!("attention_mask shape: {e}"),
+        })?
+        .into_dyn()
+        .into();
+    Ok(if num_inputs >= 3 {
+        let token_type: Tensor = Array2::<i64>::zeros((1, seq)).into_dyn().into();
+        tvec![ids_t.into(), mask_t.into(), token_type.into()]
+    } else {
+        tvec![ids_t.into(), mask_t.into()]
+    })
+}
+
 /// Find the special tokens the tokenizer wraps around a single sequence by comparing a
 /// probe encoded with and without them. Model-agnostic (BERT `[CLS]…[SEP]`, RoBERTa
 /// `<s>…</s>`, DeBERTa, …).
@@ -439,7 +743,18 @@ fn detect_special_tokens(tok: &Tokenizer) -> Result<(Vec<i64>, Vec<i64>)> {
 
 #[cfg(test)]
 mod tests {
-    use super::plan_windows;
+    use super::{dot, l2_normalize, plan_windows};
+
+    #[test]
+    fn normalised_vectors_dot_is_cosine() {
+        let mut a = vec![3.0, 4.0];
+        l2_normalize(&mut a);
+        assert!((a[0] - 0.6).abs() < 1e-6 && (a[1] - 0.8).abs() < 1e-6);
+        assert!((dot(&a, &a) - 1.0).abs() < 1e-6);
+        let mut z = vec![0.0, 0.0];
+        l2_normalize(&mut z);
+        assert_eq!(z, vec![0.0, 0.0]);
+    }
 
     #[test]
     fn short_text_is_one_window() {
