@@ -5,7 +5,7 @@ edition = "2021"
 authors = ["Blazil Team <lab.kolerr@kolerr.com>"]
 license = "BSL-1.1"
 repository = "https://github.com/Kolerr-Lab/BLAZIL"
-rust-version = "1.88"
+rust-version = "1.91"
 
 [dependencies]
 # Blazil core
@@ -13,19 +13,20 @@ blazil-common = { path = "../common" }
 blazil-dataloader = { path = "../dataloader" }
 
 # Inference engine - tract (pure Rust, production-stable)
-# 0.22.1: replaced paste (archived, RUSTSEC-2024-0436) with pastey (maintained fork)
-tract-onnx = "0.22"
-tract-core = "0.22"
+# 0.23: runs ModernBERT-family encoders (RoPE / alternating attention) once the input shape
+# is pinned to [1, S]; also carries the tract-onnx 0.23.2 security fix (CVE-2026-55832).
+tract-onnx = "0.23"
+tract-core = "0.23"
 
-# Tensor operations
-ndarray = "0.16"
+# Tensor operations (must match the ndarray version tract re-exports, for Tensor::from)
+ndarray = "0.17"
 
 # Tokenization for transformer text classifiers (sequence classification path).
 # Pinned to the SAME version already used by `services/inference` so the workspace
 # resolves a single tokenizers build (that crate proves it compiles here).
 tokenizers = "=0.21.4"
 
-# Thread-pool control — Tract 0.22 uses Rayon for intra-op parallelism.
+# Thread-pool control — Tract uses Rayon for intra-op parallelism.
 # Explicit dep lets us call ThreadPoolBuilder::build_global() to pre-size
 # the pool before the first model load.
 rayon = "1.10"

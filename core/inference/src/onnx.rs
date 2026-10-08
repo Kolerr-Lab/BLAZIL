@@ -23,12 +23,12 @@ use std::sync::Arc;
 use tract_onnx::prelude::*;
 
 // Type alias to simplify complex Tract types
-type RunnableModel = Arc<TypedRunnableModel<TypedModel>>;
+type RunnableModel = Arc<TypedRunnableModel>;
 type ModelMetadata = ((usize, usize, usize, usize), Option<usize>);
 
 /// ONNX inference model using Tract.
 ///
-/// Thread-safe: uses `Arc<TypedRunnableModel<TypedModel>>` for thread-safe sharing.
+/// Thread-safe: uses `Arc<TypedRunnableModel>` for thread-safe sharing.
 pub struct OnnxModel {
     model: RunnableModel,
     config: InferenceConfig,
@@ -101,11 +101,12 @@ impl OnnxModel {
                 reason: format!("compile: {e}"),
             })?;
 
-        Ok(Arc::new(runnable))
+        // tract 0.23: `into_runnable` already returns an `Arc`.
+        Ok(runnable)
     }
 
     /// Infer input shape and output classes from the runnable model metadata.
-    fn infer_metadata(model: &TypedRunnableModel<TypedModel>) -> Result<ModelMetadata> {
+    fn infer_metadata(model: &TypedRunnableModel) -> Result<ModelMetadata> {
         // Get input shape from the runnable model's underlying TypedModel
         let typed_model = model.model();
 
@@ -213,11 +214,12 @@ impl OnnxModel {
             reason: "model produced no outputs".to_string(),
         })?;
 
-        let output_tensor = output
-            .to_array_view::<f32>()
-            .map_err(|e| Error::InferenceFailed {
-                reason: format!("extract output as f32: {e}"),
-            })?;
+        let output_tensor =
+            output
+                .to_plain_array_view::<f32>()
+                .map_err(|e| Error::InferenceFailed {
+                    reason: format!("extract output as f32: {e}"),
+                })?;
 
         // Convert to predictions
         // Assume shape [B, num_classes] for classification

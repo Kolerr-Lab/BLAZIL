@@ -36,7 +36,7 @@ use std::sync::Arc;
 use tokenizers::Tokenizer;
 use tract_onnx::prelude::*;
 
-type Runnable = Arc<TypedRunnableModel<TypedModel>>;
+type Runnable = Arc<TypedRunnableModel>;
 
 /// Configuration for loading a text sequence classifier.
 #[derive(Debug, Clone)]
@@ -175,23 +175,7 @@ pub struct TextClassifier {
 impl TextClassifier {
     /// Load and optimize the ONNX model and its tokenizer.
     pub fn load(cfg: &TextConfig) -> Result<Self> {
-        let model = tract_onnx::onnx()
-            .model_for_path(&cfg.model_path)
-            .map_err(|e| Error::ModelLoadFailed {
-                reason: format!("tract load '{}': {e}", cfg.model_path.display()),
-            })?
-            .into_typed()
-            .map_err(|e| Error::ModelLoadFailed {
-                reason: format!("type inference: {e}"),
-            })?
-            .into_optimized()
-            .map_err(|e| Error::ModelLoadFailed {
-                reason: format!("optimize: {e}"),
-            })?
-            .into_runnable()
-            .map_err(|e| Error::ModelLoadFailed {
-                reason: format!("compile: {e}"),
-            })?;
+        let model = load_runnable(&cfg.model_path)?;
 
         let tokenizer =
             Tokenizer::from_file(&cfg.tokenizer_path).map_err(|e| Error::ModelLoadFailed {
@@ -219,7 +203,7 @@ impl TextClassifier {
         );
 
         Ok(Self {
-            model: Arc::new(model),
+            model,
             tokenizer,
             raw_tokenizer,
             special_prefix,
@@ -380,7 +364,7 @@ impl TextClassifier {
             .ok_or_else(|| Error::InferenceFailed {
                 reason: "model produced no outputs".to_string(),
             })?
-            .to_array_view::<f32>()
+            .to_plain_array_view::<f32>()
             .map_err(|e| Error::InferenceFailed {
                 reason: format!("extract logits: {e}"),
             })?;
@@ -617,7 +601,7 @@ impl TextEncoder {
             .ok_or_else(|| Error::InferenceFailed {
                 reason: "model produced no outputs".to_string(),
             })?
-            .to_array_view::<f32>()
+            .to_plain_array_view::<f32>()
             .map_err(|e| Error::InferenceFailed {
                 reason: format!("extract hidden states: {e}"),
             })?;
@@ -664,25 +648,53 @@ pub fn dot(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b).map(|(x, y)| x * y).sum()
 }
 
+/// Load, optimise and compile a text model.
+///
+/// Every input is first pinned to `[1, S]` int64: we always feed one sequence, and
+/// ModernBERT-style graphs (RoPE, alternating local/global attention) only type-check when
+/// the batch axis is concrete. If a model rejects the pin, the graph is retried as exported.
 fn load_runnable(path: &std::path::Path) -> Result<Runnable> {
-    let model = tract_onnx::onnx()
-        .model_for_path(path)
-        .map_err(|e| Error::ModelLoadFailed {
-            reason: format!("tract load '{}': {e}", path.display()),
-        })?
-        .into_typed()
-        .map_err(|e| Error::ModelLoadFailed {
-            reason: format!("type inference: {e}"),
-        })?
-        .into_optimized()
-        .map_err(|e| Error::ModelLoadFailed {
-            reason: format!("optimize: {e}"),
-        })?
-        .into_runnable()
-        .map_err(|e| Error::ModelLoadFailed {
-            reason: format!("compile: {e}"),
-        })?;
-    Ok(Arc::new(model))
+    let load = || {
+        tract_onnx::onnx()
+            .model_for_path(path)
+            .map_err(|e| Error::ModelLoadFailed {
+                reason: format!("tract load '{}': {e}", path.display()),
+            })
+    };
+    let compile = |model: InferenceModel| -> std::result::Result<Runnable, String> {
+        model
+            .into_optimized()
+            .map_err(|e| format!("optimize: {e}"))?
+            .into_runnable()
+            .map_err(|e| format!("compile: {e}"))
+    };
+
+    let mut pinned = load()?;
+    let seq = pinned.sym("S");
+    let fact: InferenceFact = i64::fact([TDim::from(1usize), TDim::from(seq)]).into();
+    let mut pin_ok = true;
+    for i in 0..pinned.inputs.len() {
+        if pinned.set_input_fact(i, fact.clone()).is_err() {
+            pin_ok = false;
+            break;
+        }
+    }
+    let pinned_err = if pin_ok {
+        match compile(pinned) {
+            Ok(r) => return Ok(r),
+            Err(e) => e,
+        }
+    } else {
+        "could not pin input shape".to_string()
+    };
+
+    tracing::warn!(
+        model = %path.display(),
+        "pinned [1,S] load failed ({pinned_err}); retrying with the exported input shapes"
+    );
+    compile(load()?).map_err(|e| Error::ModelLoadFailed {
+        reason: format!("{e} (with [1,S] inputs: {pinned_err})"),
+    })
 }
 
 /// `[1, seq]` int64 inputs fed by position: input_ids, attention_mask, token_type_ids?.
