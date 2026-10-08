@@ -20,7 +20,9 @@ COPY . .
 
 # Build only the media crate in release mode.
 RUN cargo build -p blazil-media --release --locked \
-    && cp target/release/blazil-media /blazil-media
+    && cp target/release/blazil-media /blazil-media \
+    && mkdir -p /ort-libs \
+    && find target/release/build -name "libonnxruntime.so*" -exec cp {} /ort-libs/ \;
 
 # ---- runtime ----------------------------------------------------------------
 FROM debian:trixie-slim AS runtime
@@ -44,7 +46,7 @@ COPY services/media/assets/ /opt/assets/
 
 COPY --from=builder /blazil-media /usr/local/bin/blazil-media
 # Ensure libonnxruntime.so downloaded by ort is available at runtime.
-COPY --from=builder /build/target/release/libonnxruntime.so* /usr/lib/
+COPY --from=builder /ort-libs/libonnxruntime.so* /usr/lib/
 # Railway injects $PORT; the binary reads it (falls back to 8080).
 ENV RUST_LOG=blazil_media=info,tower_http=info
 CMD ["/usr/local/bin/blazil-media"]
