@@ -80,6 +80,12 @@ impl Tts for CartesiaTts {
         } else {
             voice_id.trim().to_string()
         };
+        if crate::vieneu::is_legacy_cartesia_vietnamese(&voice) || voice.starts_with("vn_") {
+            return Err(MediaError::TtsError(
+                "Cartesia Vietnamese voices have been removed. Use VieNeu preset voices.".into(),
+            ));
+        }
+
         if self.api_key.is_empty() || voice.is_empty() {
             return Err(MediaError::TtsError(
                 "Cartesia not configured (CARTESIA_API_KEY / voice)".into(),

@@ -8,6 +8,7 @@
 
 use crate::config::Config;
 use crate::error::MediaError;
+use crate::vieneu::{is_legacy_cartesia_vietnamese, VieneuTts};
 use async_trait::async_trait;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use futures_util::{SinkExt, StreamExt};
@@ -37,34 +38,97 @@ pub fn build_fallback_tts(config: &Config) -> ElevenLabsTts {
     )
 }
 
-/// Pick the TTS provider from config (`TTS_PROVIDER`). Default ElevenLabs; "cartesia" = Sonic A/B.
+/// Unified TTS engine that seamlessly routes Vietnamese speech to VieNeu-TTS v3 Turbo,
+/// while respecting provider configuration (Cartesia / ElevenLabs) for other languages.
+/// Cartesia's 4 legacy Vietnamese voices are completely eradicated and routed to VieNeu.
+pub struct UnifiedTts {
+    vieneu: VieneuTts,
+    cartesia: Option<crate::cartesia::CartesiaTts>,
+    elevenlabs: ElevenLabsTts,
+    provider: String,
+    is_vietnamese: bool,
+}
+
+impl UnifiedTts {
+    pub fn new(config: &Config, language: Option<String>) -> Self {
+        let lang = language.as_deref().unwrap_or("").trim().to_lowercase();
+        let is_vietnamese = lang == "vi" || lang.starts_with("vi-") || lang.starts_with("vi_");
+
+        let vieneu = VieneuTts::new(
+            config.orch_base_url.clone(),
+            config.orch_service_token.clone(),
+            config.default_voice_id.clone(),
+        );
+
+        let cartesia = if config.tts_provider == "cartesia" {
+            Some(
+                crate::cartesia::CartesiaTts::new(
+                    config.cartesia_api_key.clone(),
+                    config.cartesia_model.clone(),
+                    config.cartesia_version.clone(),
+                    config.cartesia_voice_id.clone(),
+                )
+                .with_language(language),
+            )
+        } else {
+            None
+        };
+
+        let elevenlabs = ElevenLabsTts::new(
+            config.elevenlabs_api_key.clone(),
+            config.elevenlabs_tts_model.clone(),
+        );
+
+        Self {
+            vieneu,
+            cartesia,
+            elevenlabs,
+            provider: config.tts_provider.clone(),
+            is_vietnamese,
+        }
+    }
+}
+
+#[async_trait]
+impl Tts for UnifiedTts {
+    async fn speak(
+        &self,
+        voice_id: &str,
+        text_rx: mpsc::Receiver<String>,
+        audio_tx: mpsc::Sender<Vec<u8>>,
+    ) -> Result<(), MediaError> {
+        let clean = voice_id.trim();
+        // 1. If voice_id is a VieNeu voice, legacy Cartesia Vietnamese voice,
+        // or turn language was Vietnamese, or TTS_PROVIDER=vieneu:
+        // VieNeu always handles it with lowest latency and highest quality.
+        if clean.starts_with("vn_")
+            || is_legacy_cartesia_vietnamese(clean)
+            || self.is_vietnamese
+            || self.provider == "vieneu"
+        {
+            return self.vieneu.speak(voice_id, text_rx, audio_tx).await;
+        }
+
+        // 2. Otherwise route to Cartesia if configured
+        if self.provider == "cartesia" {
+            if let Some(ref c) = self.cartesia {
+                return c.speak(voice_id, text_rx, audio_tx).await;
+            }
+        }
+
+        // 3. Fallback to ElevenLabs
+        self.elevenlabs.speak(voice_id, text_rx, audio_tx).await
+    }
+}
+
+/// Pick the TTS provider from config (`TTS_PROVIDER`). Default VieNeu.
 pub fn build_tts(config: &Config) -> Box<dyn Tts> {
     build_tts_for(config, None)
 }
 
 /// Same, but tell the engine which language it is about to speak.
-///
-/// Cartesia infers language from the text when you say nothing, which mostly works and occasionally
-/// does not — a short reply, a proper noun, or a number-heavy sentence gives it little to go on.
-/// Passing the language we already decided on removes that guess. Note `language` and `locale` are
-/// mutually exclusive in Cartesia's API (sending both is a 400), so we send only `language`.
 pub fn build_tts_for(config: &Config, language: Option<String>) -> Box<dyn Tts> {
-    if config.tts_provider == "cartesia" {
-        Box::new(
-            crate::cartesia::CartesiaTts::new(
-                config.cartesia_api_key.clone(),
-                config.cartesia_model.clone(),
-                config.cartesia_version.clone(),
-                config.cartesia_voice_id.clone(),
-            )
-            .with_language(language),
-        )
-    } else {
-        Box::new(ElevenLabsTts::new(
-            config.elevenlabs_api_key.clone(),
-            config.elevenlabs_tts_model.clone(),
-        ))
-    }
+    Box::new(UnifiedTts::new(config, language))
 }
 
 #[derive(Debug, Deserialize)]
@@ -190,5 +254,43 @@ impl Tts for ElevenLabsTts {
 
         text_sender.abort();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_unified_tts_routing_vietnamese() {
+        let cases: [(Option<String>, bool); 6] = [
+            (Some("vi".to_string()), true),
+            (Some("vi-VN".to_string()), true),
+            (Some("vi_vn".to_string()), true),
+            (Some("en".to_string()), false),
+            (Some("en-US".to_string()), false),
+            (None, false),
+        ];
+        for (lang, expected) in cases {
+            let s = lang.as_deref().unwrap_or("").trim().to_lowercase();
+            let is_vn = s == "vi" || s.starts_with("vi-") || s.starts_with("vi_");
+            assert_eq!(is_vn, expected, "Failed for {:?}", lang);
+        }
+    }
+
+    #[test]
+    fn test_legacy_cartesia_vietnamese_eradicated() {
+        assert!(is_legacy_cartesia_vietnamese(
+            "0e58d60a-d8c3-4d44-93e1-7e8c37466cf8"
+        ));
+        assert!(is_legacy_cartesia_vietnamese(
+            "8e8f222d-60a6-427c-9b88-12ee4999f7d0"
+        ));
+        assert!(is_legacy_cartesia_vietnamese(
+            "935a9060-ad68-45ec-9f5b-6ec217c91723"
+        ));
+        assert!(is_legacy_cartesia_vietnamese(
+            "b8cd71e3-c215-4676-9289-498c464fa7e2"
+        ));
     }
 }

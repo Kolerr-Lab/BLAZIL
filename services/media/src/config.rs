@@ -19,8 +19,8 @@ pub struct Config {
     pub elevenlabs_tts_model: String,
     pub elevenlabs_stt_model: String,
 
-    // ── TTS provider (Cartesia A/B; default elevenlabs) ──────────────────────────────────────────
-    /// "elevenlabs" (default) or "cartesia". Cartesia Sonic is faster + more natural; A/B via env.
+    // ── TTS provider (VieNeu primary; Cartesia / ElevenLabs alternative) ──────────────────────────
+    /// "vieneu" (default), "cartesia", or "elevenlabs". VieNeu v3 Turbo is on-host native 8kHz μ-law.
     pub tts_provider: String,
     pub cartesia_api_key: String,
     /// Cartesia model id (default "sonic-2").
@@ -118,14 +118,14 @@ impl Config {
                 .unwrap_or_else(|_| "scribe_v2_realtime".into()),
             tts_provider: env::var("TTS_PROVIDER")
                 .map(|v| v.trim().to_lowercase())
-                .unwrap_or_else(|_| "elevenlabs".into()),
+                .unwrap_or_else(|_| "vieneu".into()),
             cartesia_api_key: env::var("CARTESIA_API_KEY").unwrap_or_default(),
             cartesia_model: env::var("CARTESIA_MODEL").unwrap_or_else(|_| "sonic-2".into()),
             cartesia_version: env::var("CARTESIA_VERSION").unwrap_or_else(|_| "2024-11-13".into()),
             cartesia_voice_id: env::var("CARTESIA_VOICE_ID").unwrap_or_default(),
             stt_language_code: env::var("STT_LANGUAGE_CODE").ok().filter(|s| !s.is_empty()),
             default_voice_id: env::var("DEFAULT_VOICE_ID")
-                .unwrap_or_else(|_| "21m00Tcm4TlvDq8ikWAM".into()),
+                .unwrap_or_else(|_| "vn_north_hai_dang".into()),
             // Keep a known-good ElevenLabs voice for the fallback engine, independent of
             // default_voice_id (which is a Cartesia ID when Cartesia is primary).
             elevenlabs_fallback_voice_id: env::var("ELEVENLABS_FALLBACK_VOICE_ID")
