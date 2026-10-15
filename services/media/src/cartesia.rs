@@ -80,11 +80,15 @@ impl Tts for CartesiaTts {
         } else {
             voice_id.trim().to_string()
         };
-        if crate::vieneu::is_legacy_cartesia_vietnamese(&voice) || voice.starts_with("vn_") {
-            return Err(MediaError::TtsError(
-                "Cartesia Vietnamese voices have been removed. Use VieNeu preset voices.".into(),
-            ));
-        }
+        // A stale VieNeu preset id (`vn_*`) can still be sitting on an agent row that was saved
+        // before 2026-10-15. It is not a Cartesia voice, so don't hand it to the API — substitute
+        // the configured default. Erroring here (the old behaviour, which pointed at VieNeu) would
+        // now just drop the turn into silence.
+        let voice = if voice.starts_with("vn_") {
+            self.voice_id.clone()
+        } else {
+            voice
+        };
 
         if self.api_key.is_empty() || voice.is_empty() {
             return Err(MediaError::TtsError(

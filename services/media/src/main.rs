@@ -16,7 +16,6 @@ mod turn;
 mod turn_detector;
 mod twilio;
 mod vad;
-mod vieneu;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

@@ -19,11 +19,11 @@ pub struct Config {
     pub elevenlabs_tts_model: String,
     pub elevenlabs_stt_model: String,
 
-    // ── TTS provider (VieNeu primary; Cartesia / ElevenLabs alternative) ──────────────────────────
-    /// "vieneu" (default), "cartesia", or "elevenlabs". VieNeu v3 Turbo is on-host native 8kHz μ-law.
+    // ── TTS provider (Cartesia primary, ElevenLabs fallback + all non-English) ───────────────────
+    /// "cartesia" (default) or "elevenlabs". The on-host "vieneu" option was removed 2026-10-15.
     pub tts_provider: String,
     pub cartesia_api_key: String,
-    /// Cartesia model id (default "sonic-2").
+    /// Cartesia model id (default "sonic-3.6").
     pub cartesia_model: String,
     /// Cartesia API version date header (default "2024-11-13").
     pub cartesia_version: String,
@@ -37,6 +37,10 @@ pub struct Config {
     /// produces no audio). Must be an ElevenLabs voice ID, since `default_voice_id` now holds a
     /// Cartesia ID under TTS_PROVIDER=cartesia. Empty = reuse `default_voice_id`.
     pub elevenlabs_fallback_voice_id: String,
+    /// ElevenLabs voice used for Vietnamese turns. Vietnamese cannot go to Cartesia (its Vietnamese
+    /// voices were withdrawn) and cannot use the agent's own voice id (that is a Cartesia id), so
+    /// it needs its own ElevenLabs voice. Empty = reuse `elevenlabs_fallback_voice_id`.
+    pub elevenlabs_vietnamese_voice_id: String,
     pub orch_base_url: String,
     /// gRPC endpoint of the backend Orchestrator (streaming turn). Private network, h2c.
     pub orch_grpc_url: String,
@@ -116,20 +120,27 @@ impl Config {
                 .unwrap_or_else(|_| "eleven_turbo_v2_5".into()),
             elevenlabs_stt_model: env::var("ELEVENLABS_STT_MODEL")
                 .unwrap_or_else(|_| "scribe_v2_realtime".into()),
+            // Was "vieneu" until 2026-10-15. That default was a loaded gun: a box without an
+            // explicit TTS_PROVIDER routed every single turn into the on-host VieNeu engine.
             tts_provider: env::var("TTS_PROVIDER")
                 .map(|v| v.trim().to_lowercase())
-                .unwrap_or_else(|_| "vieneu".into()),
+                .unwrap_or_else(|_| "cartesia".into()),
             cartesia_api_key: env::var("CARTESIA_API_KEY").unwrap_or_default(),
-            cartesia_model: env::var("CARTESIA_MODEL").unwrap_or_else(|_| "sonic-2".into()),
+            cartesia_model: env::var("CARTESIA_MODEL").unwrap_or_else(|_| "sonic-3.6".into()),
             cartesia_version: env::var("CARTESIA_VERSION").unwrap_or_else(|_| "2024-11-13".into()),
             cartesia_voice_id: env::var("CARTESIA_VOICE_ID").unwrap_or_default(),
             stt_language_code: env::var("STT_LANGUAGE_CODE").ok().filter(|s| !s.is_empty()),
-            default_voice_id: env::var("DEFAULT_VOICE_ID")
-                .unwrap_or_else(|_| "vn_north_hai_dang".into()),
+            // Deliberately empty, not a hardcoded id. It used to default to the VieNeu preset
+            // "vn_north_hai_dang", which no engine can speak any more. An empty value lets
+            // CartesiaTts fall through to CARTESIA_VOICE_ID instead of trying to synthesize with a
+            // voice that does not exist.
+            default_voice_id: env::var("DEFAULT_VOICE_ID").unwrap_or_default(),
             // Keep a known-good ElevenLabs voice for the fallback engine, independent of
             // default_voice_id (which is a Cartesia ID when Cartesia is primary).
             elevenlabs_fallback_voice_id: env::var("ELEVENLABS_FALLBACK_VOICE_ID")
                 .unwrap_or_else(|_| "21m00Tcm4TlvDq8ikWAM".into()),
+            elevenlabs_vietnamese_voice_id: env::var("ELEVENLABS_VIETNAMESE_VOICE_ID")
+                .unwrap_or_default(),
             orch_base_url: env::var("ORCH_BASE_URL")
                 .unwrap_or_else(|_| "http://localhost:8000".into()),
             orch_grpc_url: env::var("ORCH_GRPC_URL")
@@ -177,5 +188,15 @@ impl Config {
                 .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                 .unwrap_or(false),
         })
+    }
+
+    /// The ElevenLabs voice that speaks Vietnamese, falling back to the general ElevenLabs
+    /// fallback voice when `ELEVENLABS_VIETNAMESE_VOICE_ID` is unset. Never returns a Cartesia id.
+    pub fn vietnamese_voice_id(&self) -> String {
+        let dedicated = self.elevenlabs_vietnamese_voice_id.trim();
+        if !dedicated.is_empty() {
+            return dedicated.to_string();
+        }
+        self.elevenlabs_fallback_voice_id.trim().to_string()
     }
 }
