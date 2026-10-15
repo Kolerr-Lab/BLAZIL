@@ -397,6 +397,7 @@ impl<C: LedgerClient + Send + Sync + 'static> LedgerClient for FaultInjectingLed
         use std::sync::atomic::Ordering;
 
         // Saturating decrement: if remaining_faults > 0, inject a fault.
+        #[allow(deprecated)]
         let prev = self
             .remaining_faults
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| {
