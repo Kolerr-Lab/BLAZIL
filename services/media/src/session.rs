@@ -165,15 +165,27 @@ impl Session {
                 let call_id = params.get("call_id").cloned().unwrap_or_default();
                 // Per-agent language from the TwiML <Parameter>; empty → auto-detect (falls
                 // back to the media plane's global STT_LANGUAGE_CODE / language detection).
+                // Used for the greeting and as the reply fallback. It reaches the recogniser ONLY
+                // when the agent does not follow the caller — see the note at start_stt below.
                 let language = params.get("language").filter(|s| !s.is_empty()).cloned();
                 // Lexicon Prompting: Custom vocabulary to bias the STT model (comma-separated).
                 let lexicon = params.get("lexicon").filter(|s| !s.is_empty()).cloned();
-                // "1"/"true" → this agent answers in whatever language the caller speaks. Default
-                // off, so every existing agent keeps its current behaviour exactly.
+                // Does this agent answer in whatever language the caller speaks?
+                //
+                // ABSENT → true. The backend defaults this on now, so a parameter that never
+                // arrives means "old backend", and the new behaviour is the better guess.
+                //
+                // EMPTY STRING → false, and this case matters: the backend expresses "off" as `""`
+                // (`"1" if agent.follow_caller_language else ""`), not as `"0"`. Treating empty as
+                // "absent, so default on" would silently switch on every agent that was explicitly
+                // turned off. Anything else present and non-empty → true.
                 let follow_caller = params
                     .get("follow_caller_language")
-                    .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-                    .unwrap_or(false);
+                    .map(|v| {
+                        let v = v.trim();
+                        !(v.is_empty() || v == "0" || v.eq_ignore_ascii_case("false"))
+                    })
+                    .unwrap_or(true);
                 // `vi:<voice>,en:<voice>` — which voice to use once we answer in a given language.
                 let voice_by_language = parse_voice_map(params.get("voice_by_language"));
                 tracing::info!(
@@ -233,14 +245,26 @@ impl Session {
                     )));
                 }
 
-                // NOTE: `language` is still passed to STT as a recognition bias, and it never
-                // changes for the life of the call. Re-constraining the recogniser mid-call would
-                // mean reconnecting its socket mid-conversation, and a failed reconnect is dead air
-                // — the failure mode that got the speaker gate deleted. Only the REPLY language and
-                // the voice follow the caller.
+                // An agent that follows the caller must NOT constrain the recogniser.
+                //
+                // The previous note here claimed `language` was only a harmless "recognition bias"
+                // and that letting it ride was fine because "only the REPLY language follows the
+                // caller". That was wrong, and it is why multilingual never worked: a recogniser
+                // pinned to `en` does not merely prefer English, it transcribes Vietnamese audio
+                // AS English. The transcript itself comes back wrong, so `observe()` never sees a
+                // Vietnamese utterance and the reply language has nothing to switch on.
+                //
+                // The note's underlying worry was real but aimed at the wrong thing: we still never
+                // re-constrain the recogniser mid-call (that would mean reconnecting its socket,
+                // and a failed reconnect is dead air). We simply never constrain it in the first
+                // place for these agents — decided once at Start, unchanged for the call.
+                //
+                // Agents with a fixed language keep sending it, which is what they want: a
+                // constrained recogniser is more accurate, and they are not expecting a switch.
+                let stt_language = if follow_caller { None } else { language };
                 self.start_stt(
                     shared.clone(),
-                    language,
+                    stt_language,
                     lexicon,
                     commit_rx,
                     commit_strategy,
@@ -412,7 +436,9 @@ impl Session {
                 // in the right language rather than one turn late.
                 let decision = {
                     let mut policy = shared.lang.lock().await;
-                    policy.observe(item.language.as_deref())
+                    // The text goes in too: the policy weighs a full sentence more heavily than a
+                    // fragment, since a two-word utterance is easy for the detector to mislabel.
+                    policy.observe(item.language.as_deref(), &item.text)
                 };
                 if decision.changed {
                     tracing::info!(
