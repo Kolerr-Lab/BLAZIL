@@ -973,14 +973,30 @@ async fn run_response(
         }
     }
 
-    // A reply in the caller's language read by a voice tuned for another one is the audible half of
-    // getting this wrong — the words are right and it still sounds broken. So the language decision
-    // overrides the agent's persona voice whenever the tenant has mapped one for that language.
+    // Picking the voice for this answer. This is the ONLY place that decides it — `tts.rs` takes
+    // whatever it is handed. An earlier version also chose a voice inside the TTS layer, and the
+    // two disagreed: the dashboard's Vietnamese voice was resolved here and then silently replaced
+    // downstream, so the agent spoke Vietnamese in an English accent.
+    //
+    // Order, most specific first:
+    //   1. the tenant's own voice for this language (`voice_by_language`)
+    //   2. the ElevenLabs fallback, when the language is one Cartesia does not serve — the agent's
+    //      configured voice is a Cartesia id and ElevenLabs would reject it
+    //   3. the agent's configured voice, unchanged
     if let Some(lang) = answer_language.as_deref() {
-        if let Some(v) = shared.voice_by_language.get(lang) {
-            if !v.is_empty() && v != &voice_id {
+        if let Some(v) = shared.voice_by_language.get(lang).filter(|v| !v.is_empty()) {
+            if v != &voice_id {
                 tracing::info!("Voice switched to the {} voice for this answer", lang);
                 voice_id = v.clone();
+            }
+        } else if !shared.config.cartesia_speaks(Some(lang)) {
+            let fallback = shared.config.elevenlabs_fallback_voice_id.trim();
+            if !fallback.is_empty() && fallback != voice_id {
+                tracing::info!(
+                    "No {} voice configured; using the ElevenLabs fallback voice for this answer",
+                    lang
+                );
+                voice_id = fallback.to_string();
             }
         }
     }

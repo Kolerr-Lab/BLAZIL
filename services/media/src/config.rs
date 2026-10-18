@@ -36,11 +36,19 @@ pub struct Config {
     /// Voice ID for the ElevenLabs *fallback* engine (used only when the primary — Cartesia —
     /// produces no audio). Must be an ElevenLabs voice ID, since `default_voice_id` now holds a
     /// Cartesia ID under TTS_PROVIDER=cartesia. Empty = reuse `default_voice_id`.
+    ///
+    /// Also the voice used for any language Cartesia does not serve: the agent's configured voice
+    /// is a Cartesia id, which ElevenLabs would reject, so a language outside `cartesia_languages`
+    /// needs a voice that belongs to the engine actually speaking it.
     pub elevenlabs_fallback_voice_id: String,
-    /// ElevenLabs voice used for Vietnamese turns. Vietnamese cannot go to Cartesia (its Vietnamese
-    /// voices were withdrawn) and cannot use the agent's own voice id (that is a Cartesia id), so
-    /// it needs its own ElevenLabs voice. Empty = reuse `elevenlabs_fallback_voice_id`.
-    pub elevenlabs_vietnamese_voice_id: String,
+    /// Languages Cartesia handles. Everything else goes to ElevenLabs.
+    ///
+    /// This is configuration rather than a branch in the code because it is a commercial judgement
+    /// that will move: today Cartesia has good curated English AND Vietnamese voices and is the
+    /// faster engine, while ElevenLabs covers the long tail of ~32 languages. An earlier version
+    /// hardcoded "Vietnamese means ElevenLabs", which was both wrong and invisible — the agent
+    /// spoke Vietnamese in an English accent and nothing in the config hinted why.
+    pub cartesia_languages: std::collections::HashSet<String>,
     pub orch_base_url: String,
     /// gRPC endpoint of the backend Orchestrator (streaming turn). Private network, h2c.
     pub orch_grpc_url: String,
@@ -116,8 +124,18 @@ impl Config {
                 .unwrap_or_else(|_| "ws://localhost:8080/media/twilio".into()),
             elevenlabs_api_key: env::var("ELEVENLABS_API_KEY")
                 .context("ELEVENLABS_API_KEY is required")?,
+            // Matches what production actually runs. The default said "eleven_turbo_v2_5" until
+            // 2026-10-17 while Railway had been set to flash_v2_5 for a long time — so the code
+            // described a system nobody was running, and any environment that forgot the env var
+            // (a new region, a staging box, a local run) silently got a model ElevenLabs documents
+            // at ~250-300ms instead of ~75ms. Same shape of trap as TTS_PROVIDER="vieneu".
+            //
+            // flash_v2_5 over the newer eleven_v4_turbo on purpose: v4 Turbo is ~100ms and sold on
+            // expressiveness, while ElevenLabs' own model guide points at flash_v2_5 for languages
+            // other than English — which is the case that matters here, since Vietnamese is the
+            // traffic that now routes to ElevenLabs at all.
             elevenlabs_tts_model: env::var("ELEVENLABS_TTS_MODEL")
-                .unwrap_or_else(|_| "eleven_turbo_v2_5".into()),
+                .unwrap_or_else(|_| "eleven_flash_v2_5".into()),
             elevenlabs_stt_model: env::var("ELEVENLABS_STT_MODEL")
                 .unwrap_or_else(|_| "scribe_v2_realtime".into()),
             // Was "vieneu" until 2026-10-15. That default was a loaded gun: a box without an
@@ -139,8 +157,12 @@ impl Config {
             // default_voice_id (which is a Cartesia ID when Cartesia is primary).
             elevenlabs_fallback_voice_id: env::var("ELEVENLABS_FALLBACK_VOICE_ID")
                 .unwrap_or_else(|_| "21m00Tcm4TlvDq8ikWAM".into()),
-            elevenlabs_vietnamese_voice_id: env::var("ELEVENLABS_VIETNAMESE_VOICE_ID")
-                .unwrap_or_default(),
+            cartesia_languages: env::var("CARTESIA_LANGUAGES")
+                .unwrap_or_else(|_| "en,vi".into())
+                .split(',')
+                .map(|s| s.trim().to_lowercase())
+                .filter(|s| !s.is_empty())
+                .collect(),
             orch_base_url: env::var("ORCH_BASE_URL")
                 .unwrap_or_else(|_| "http://localhost:8000".into()),
             orch_grpc_url: env::var("ORCH_GRPC_URL")
@@ -190,13 +212,20 @@ impl Config {
         })
     }
 
-    /// The ElevenLabs voice that speaks Vietnamese, falling back to the general ElevenLabs
-    /// fallback voice when `ELEVENLABS_VIETNAMESE_VOICE_ID` is unset. Never returns a Cartesia id.
-    pub fn vietnamese_voice_id(&self) -> String {
-        let dedicated = self.elevenlabs_vietnamese_voice_id.trim();
-        if !dedicated.is_empty() {
-            return dedicated.to_string();
-        }
-        self.elevenlabs_fallback_voice_id.trim().to_string()
+    /// Does Cartesia speak this language, or does it belong to ElevenLabs?
+    ///
+    /// `None` (no detected language) counts as Cartesia's: it means the agent is running on its
+    /// configured default, whose voice is a Cartesia id.
+    pub fn cartesia_speaks(&self, language: Option<&str>) -> bool {
+        let Some(lang) = language else { return true };
+        // Compare on the base code: the policy decides in languages ("vi"), but a provider or a
+        // tenant may still hand us a locale ("vi-VN").
+        let base = lang
+            .trim()
+            .split(['-', '_'])
+            .next()
+            .unwrap_or("")
+            .to_lowercase();
+        base.is_empty() || self.cartesia_languages.contains(&base)
     }
 }

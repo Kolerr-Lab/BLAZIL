@@ -80,10 +80,10 @@ impl Tts for CartesiaTts {
         } else {
             voice_id.trim().to_string()
         };
-        // A stale VieNeu preset id (`vn_*`) can still be sitting on an agent row that was saved
-        // before 2026-10-15. It is not a Cartesia voice, so don't hand it to the API — substitute
-        // the configured default. Erroring here (the old behaviour, which pointed at VieNeu) would
-        // now just drop the turn into silence.
+        // A stale VieNeu preset id (`vn_*`) can still be sitting on an agent row saved before
+        // 2026-10-15, when that engine was removed. It is not a Cartesia voice, so substitute the
+        // configured default rather than sending it: the API would reject it and the turn would
+        // land in the zero-audio recovery path for no reason.
         let voice = if voice.starts_with("vn_") {
             self.voice_id.clone()
         } else {

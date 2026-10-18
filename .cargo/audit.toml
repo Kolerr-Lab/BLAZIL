@@ -27,4 +27,12 @@ ignore = [
 	# This is warning-only and currently upstream-controlled.
 	# Re-evaluate by 2026-08-01.
 	"RUSTSEC-2024-0436",
+
+	# candle-core pulls zip transitively for model weights extraction.
+	# Zip extraction vulnerabilities (RUSTSEC-2026-0367/0368/0369) require zip >=9.0.0,
+	# which candle-core has not yet adopted upstream. Blazil never invokes zip extraction APIs.
+	# Re-evaluate when HuggingFace candle updates to zip >=9.
+	"RUSTSEC-2026-0367",
+	"RUSTSEC-2026-0368",
+	"RUSTSEC-2026-0369",
 ]

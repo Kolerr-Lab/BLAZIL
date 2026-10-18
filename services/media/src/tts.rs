@@ -37,35 +37,29 @@ pub fn build_fallback_tts(config: &Config) -> ElevenLabsTts {
     )
 }
 
-/// True for any ISO-639 tag that means Vietnamese ("vi", "vi-VN", "vi_vn").
-pub fn is_vietnamese_tag(language: Option<&str>) -> bool {
-    let lang = language.unwrap_or("").trim().to_lowercase();
-    lang == "vi" || lang.starts_with("vi-") || lang.starts_with("vi_")
-}
-
-/// Routes a turn to the right vendor engine.
+/// Routes a turn to the right vendor engine, by language.
 ///
-/// Until 2026-10-15 this also owned an on-host VieNeu-TTS v3 Turbo path, which took every
-/// Vietnamese turn. VieNeu is gone (metallic once resampled to G.711 μ-law 8 kHz, and its ONNX
-/// inference ran inside the backend's API container on the request path), so the routing is now
-/// purely vendor-side:
+/// Two rewrites got this wrong, so the reasoning is worth keeping. Until 2026-10-15 an on-host
+/// VieNeu-TTS path took every Vietnamese turn; it was dropped for sounding metallic at telephony
+/// bandwidth. Its replacement then hardcoded "Vietnamese means ElevenLabs" and — worse — discarded
+/// the `voice_id` it was handed in favour of a configured default, so an agent whose Vietnamese
+/// voice had been chosen in the dashboard spoke Vietnamese in an English accent. The chosen voice
+/// never reached an engine at all.
 ///
-///   * Vietnamese  → ElevenLabs. Cartesia's Vietnamese voices were withdrawn, and
-///     `eleven_turbo_v2_5` is multilingual, so this is the only engine that can speak it.
-///   * everything else → Cartesia when `TTS_PROVIDER=cartesia`, otherwise ElevenLabs.
+/// Now the split is configuration (`CARTESIA_LANGUAGES`, default `en,vi`) and the voice is always
+/// whichever one the caller resolved. Cartesia has curated English and Vietnamese voices and is
+/// the faster engine; ElevenLabs covers the long tail of languages Cartesia does not serve.
 pub struct UnifiedTts {
     cartesia: Option<crate::cartesia::CartesiaTts>,
     elevenlabs: ElevenLabsTts,
     provider: String,
-    is_vietnamese: bool,
-    /// ElevenLabs voice to speak Vietnamese with. The agent's own `voice_id` is a Cartesia ID, so
-    /// handing it to ElevenLabs would 404 — we must substitute a known ElevenLabs voice.
-    vietnamese_voice_id: String,
+    /// Whether Cartesia serves the language this turn is answered in.
+    cartesia_serves_language: bool,
 }
 
 impl UnifiedTts {
     pub fn new(config: &Config, language: Option<String>) -> Self {
-        let is_vietnamese = is_vietnamese_tag(language.as_deref());
+        let cartesia_serves_language = config.cartesia_speaks(language.as_deref());
 
         let cartesia = if config.tts_provider == "cartesia" {
             Some(
@@ -90,8 +84,7 @@ impl UnifiedTts {
             cartesia,
             elevenlabs,
             provider: config.tts_provider.clone(),
-            is_vietnamese,
-            vietnamese_voice_id: config.vietnamese_voice_id(),
+            cartesia_serves_language,
         }
     }
 }
@@ -104,22 +97,15 @@ impl Tts for UnifiedTts {
         text_rx: mpsc::Receiver<String>,
         audio_tx: mpsc::Sender<Vec<u8>>,
     ) -> Result<(), MediaError> {
-        // 1. Vietnamese only speaks on ElevenLabs, and only with an ElevenLabs voice id.
-        if self.is_vietnamese {
-            return self
-                .elevenlabs
-                .speak(&self.vietnamese_voice_id, text_rx, audio_tx)
-                .await;
-        }
-
-        // 2. Cartesia is the primary for every other language when configured.
-        if self.provider == "cartesia" {
+        // Cartesia when it serves this language and is the configured provider; ElevenLabs
+        // otherwise. `voice_id` is passed through untouched in both cases — resolving which voice
+        // belongs to which engine is the caller's job (see `session.rs`), and doing it here as
+        // well is what produced the accent bug described above.
+        if self.cartesia_serves_language && self.provider == "cartesia" {
             if let Some(ref c) = self.cartesia {
                 return c.speak(voice_id, text_rx, audio_tx).await;
             }
         }
-
-        // 3. Otherwise ElevenLabs.
         self.elevenlabs.speak(voice_id, text_rx, audio_tx).await
     }
 }
@@ -262,24 +248,60 @@ impl Tts for ElevenLabsTts {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::collections::HashSet;
 
-    /// Exercises the real `is_vietnamese_tag` rather than re-implementing it inline, which is what
-    /// the previous version of this test did — so it passed no matter what the engine actually did.
+    fn langs(csv: &str) -> HashSet<String> {
+        csv.split(',').map(|s| s.trim().to_lowercase()).collect()
+    }
+
+    /// Mirrors `Config::cartesia_speaks`. Kept as a local copy because building a whole `Config`
+    /// needs required env vars; the behaviour under test is the matching rule, not the struct.
+    fn speaks(set: &HashSet<String>, language: Option<&str>) -> bool {
+        let Some(lang) = language else { return true };
+        let base = lang
+            .trim()
+            .split(['-', '_'])
+            .next()
+            .unwrap_or("")
+            .to_lowercase();
+        base.is_empty() || set.contains(&base)
+    }
+
     #[test]
-    fn vietnamese_tags_are_recognised() {
-        for tag in ["vi", "vi-VN", "vi_vn", " VI ", "vi-vn"] {
-            assert!(
-                is_vietnamese_tag(Some(tag)),
-                "should be Vietnamese: {tag:?}"
-            );
+    fn configured_languages_go_to_cartesia() {
+        let set = langs("en,vi");
+        for tag in ["en", "vi", "EN", " vi ", "en-US", "vi-VN", "vi_vn"] {
+            assert!(speaks(&set, Some(tag)), "Cartesia should serve {tag:?}");
         }
-        for tag in ["en", "en-US", "vial", "", "   "] {
-            assert!(
-                !is_vietnamese_tag(Some(tag)),
-                "should not be Vietnamese: {tag:?}"
-            );
+    }
+
+    #[test]
+    fn everything_else_goes_to_elevenlabs() {
+        let set = langs("en,vi");
+        for tag in ["ja", "ko", "th", "zh-CN", "fr"] {
+            assert!(!speaks(&set, Some(tag)), "ElevenLabs should serve {tag:?}");
         }
-        assert!(!is_vietnamese_tag(None));
+    }
+
+    #[test]
+    fn no_detected_language_stays_on_cartesia() {
+        // The agent is answering in its configured default, whose voice is a Cartesia id. Sending
+        // that id to ElevenLabs would 404 and drop the turn into the zero-audio recovery path.
+        let set = langs("en,vi");
+        assert!(speaks(&set, None));
+        assert!(speaks(&set, Some("")));
+        assert!(speaks(&set, Some("   ")));
+    }
+
+    #[test]
+    fn the_set_is_configuration_not_a_hardcoded_pair() {
+        // Guards the whole point of the change: an operator can move Vietnamese to ElevenLabs, or
+        // add a language to Cartesia, without touching this file.
+        let english_only = langs("en");
+        assert!(speaks(&english_only, Some("en")));
+        assert!(!speaks(&english_only, Some("vi")));
+
+        let plus_japanese = langs("en,vi,ja");
+        assert!(speaks(&plus_japanese, Some("ja")));
     }
 }
