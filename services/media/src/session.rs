@@ -954,12 +954,17 @@ async fn run_response(
 
     // Resolve the voice from the first event; stash a non-voice first event to feed later.
     let mut voice_id = default_voice.clone();
+    // Whether the orchestrator picked a voice for THIS turn. It only does so for the agent the
+    // supervisor routed to, so this flag is what tells a routed specialist's voice apart from the
+    // session-level default — see the resolution order below.
+    let mut voice_from_turn = false;
     let mut pending: Option<TurnEvent> = None;
     if let Some(ev) = rx.recv().await {
         match ev {
             TurnEvent::VoiceId(v) => {
                 if !v.is_empty() && v != "eleven_labs_default" {
                     voice_id = v;
+                    voice_from_turn = true;
                 }
             }
             TurnEvent::Error(e) => {
@@ -979,21 +984,40 @@ async fn run_response(
     // downstream, so the agent spoke Vietnamese in an English accent.
     //
     // Order, most specific first:
-    //   1. the tenant's own voice for this language (`voice_by_language`)
-    //   2. the ElevenLabs fallback, when the language is one Cartesia does not serve — the agent's
+    //   1. the voice the orchestrator picked for THIS turn — the routed specialist's own voice
+    //   2. the tenant's voice for this language (`voice_by_language`), only when there was none
+    //   3. the ElevenLabs fallback, when the language is one Cartesia does not serve — the agent's
     //      configured voice is a Cartesia id and ElevenLabs would reject it
-    //   3. the agent's configured voice, unchanged
+    //   4. the agent's configured voice, unchanged
+    //
+    // `voice_by_language` is gated on `!voice_from_turn`, and that gate is the whole point. The map
+    // is read ONCE, from the TwiML parameters at call start, and it belongs to the agent the number
+    // points at — the entry agent. Applying it unconditionally overwrote the per-turn voice on every
+    // single turn, so when the supervisor handed the caller to a specialist the prompt and the
+    // knowledge changed but the voice never did. The whole swarm sounded like one agent, which is
+    // indistinguishable from the swarm not working at all.
     if let Some(lang) = answer_language.as_deref() {
-        if let Some(v) = shared.voice_by_language.get(lang).filter(|v| !v.is_empty()) {
-            if v != &voice_id {
-                tracing::info!("Voice switched to the {} voice for this answer", lang);
-                voice_id = v.clone();
+        // (2) Preference. Skipped entirely when the orchestrator already chose a voice for this
+        // turn, because that choice belongs to the routed specialist and this map does not.
+        if !voice_from_turn {
+            if let Some(v) = shared.voice_by_language.get(lang).filter(|v| !v.is_empty()) {
+                if v != &voice_id {
+                    tracing::info!("Voice switched to the {} voice for this answer", lang);
+                    voice_id = v.clone();
+                }
             }
-        } else if !shared.config.cartesia_speaks(Some(lang)) {
+        }
+
+        // (3) Capability, and it stays unconditional on purpose. Whatever voice we hold, if
+        // Cartesia does not serve this language the turn is synthesised by ElevenLabs — and a
+        // Cartesia voice id handed to ElevenLabs is rejected (the crash commit f8438ab fixed).
+        // Gating this on `voice_from_turn` would hand a routed specialist's Cartesia voice to
+        // ElevenLabs and break the call outright, which is strictly worse than losing the voice.
+        if !shared.config.cartesia_speaks(Some(lang)) {
             let fallback = shared.config.elevenlabs_fallback_voice_id.trim();
             if !fallback.is_empty() && fallback != voice_id {
                 tracing::info!(
-                    "No {} voice configured; using the ElevenLabs fallback voice for this answer",
+                    "Cartesia does not serve {}; using the ElevenLabs fallback voice",
                     lang
                 );
                 voice_id = fallback.to_string();
